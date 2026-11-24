@@ -32,7 +32,7 @@
 // stored; the credential lives only for the call.
 
 import { lookupPrice, lookupTier, type PriceAnswer } from "../prices/lookup";
-import { addAlert } from "../prices/store";
+import { addAlertOncePerDay } from "../prices/store";
 import type { Provider, TokenKind } from "../prices/types";
 import { readBudget } from "./budgets";
 import { readConnection } from "./connections";
@@ -194,15 +194,11 @@ async function attempt(
     costUsd: cost.usd,
     costedConservatively: cost.conservative,
   });
-  const substituted = Object.entries(cost.conservative);
-  if (substituted.length) {
-    const tier = usage.longPrompt ? "long-prompt " : "";
+  for (const tokenKind of Object.keys(cost.conservative)) {
     const detail =
-      `${model} at ${PROVIDER_NAMES[provider]} (${location}) has no ${tier}list price for ` +
-      substituted.map(([kind, rate]) => `${kind} (a call was costed at $${rate} per million tokens instead)`).join(", ") +
-      ". Add the missing rows to the price table.";
-    console.warn(`price missing: ${detail}`);
-    await addAlert(db, startedAt, "price_missing", detail);
+      `${model} at ${PROVIDER_NAMES[provider]} (${location}) has no ${usage.longPrompt ? "long-prompt " : ""}list price for ${tokenKind}; ` +
+      "its calls are costed above it, each ledger row naming the rate, until the price table has the row.";
+    if (await addAlertOncePerDay(db, startedAt, "price_missing", detail)) console.warn(`price missing: ${detail}`);
   }
 
   const kind = status >= 200 && status < 300 ? "answered" : "provider_error";

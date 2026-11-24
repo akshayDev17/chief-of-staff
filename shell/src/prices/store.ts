@@ -136,6 +136,20 @@ export async function addAlert(db: D1Database, now: Date, kind: AlertKind, detai
   await db.prepare("INSERT INTO price_alerts (created_at, kind, detail) VALUES (?, ?, ?)").bind(now.toISOString(), kind, detail).run();
 }
 
+// The same alert at most once per UTC day, for alerts raised per call rather
+// than per run. True when it was raised now.
+export async function addAlertOncePerDay(db: D1Database, now: Date, kind: AlertKind, detail: string): Promise<boolean> {
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const { meta } = await db
+    .prepare(
+      `INSERT INTO price_alerts (created_at, kind, detail) SELECT ?1, ?2, ?3
+       WHERE NOT EXISTS (SELECT 1 FROM price_alerts WHERE kind = ?2 AND detail = ?3 AND created_at >= ?4)`,
+    )
+    .bind(now.toISOString(), kind, detail, dayStart)
+    .run();
+  return meta.changes > 0;
+}
+
 export async function recentAlerts(db: D1Database, limit = 10): Promise<Array<{ createdAt: string; kind: AlertKind; detail: string }>> {
   const { results } = await db
     .prepare("SELECT created_at, kind, detail FROM price_alerts ORDER BY id DESC LIMIT ?")

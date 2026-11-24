@@ -35,7 +35,8 @@ registered until then, so every call is refused `no_plugin`.
    rate the table lists for the model at its location (input, output and cache
    writes, at either prompt tier). The ledger row names each such kind and the
    rate used (`costed_conservatively`), and the maintainers get a
-   `price_missing` alert on Admin · Price table.
+   `price_missing` alert on Admin · Price table, at most one a UTC day for
+   each model, location and token kind.
 2. Enforces the provider's monthly budget: none set is refused (`no_budget`);
    the user's spend at that provider since 00:00 UTC on the 1st reaching it is
    refused (`budget_spent`) until the 1st, with the date it resumes. The call

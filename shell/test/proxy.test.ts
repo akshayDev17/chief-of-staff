@@ -104,6 +104,25 @@ describe("one ledger row per call", () => {
     expect(bedrock.calls).toHaveLength(2);
   });
 
+  it("raises one price_missing alert per model, location and token kind a UTC day, however many calls", async () => {
+    const gemini = call({ main: call().fallback!, fallback: undefined });
+    const kinds = async () => (await recentAlerts(env.DB)).map((a) => /for (\w+);/.exec(a.detail)?.[1]).sort();
+    for (let i = 0; i < 3; i++) {
+      vertex.replies.push(ok({ input: 800, cachedInput: 300, output: 50 }));
+      await callModel(env.DB, { bedrock, vertex }, gemini, clock);
+    }
+    expect(await kinds()).toEqual(["cached_input"]);
+
+    vertex.replies.push(ok({ input: 800, cachedInput: 300, cacheWrite: 200, output: 50 }));
+    await callModel(env.DB, { bedrock, vertex }, gemini, clock);
+    expect(await kinds()).toEqual(["cache_write", "cached_input"]);
+
+    vertex.replies.push(ok({ input: 800, cachedInput: 300, output: 50 }));
+    await callModel(env.DB, { bedrock, vertex }, gemini, () => new Date("2026-11-26T00:00:01Z"));
+    expect(await kinds()).toEqual(["cache_write", "cached_input", "cached_input"]);
+    expect(await ledger()).toHaveLength(5);
+  });
+
   it("costs cache tokens a model lists no price for conservatively, and counts them in the budget", async () => {
     // test-gemini lists only input ($0.25) and output ($1).
     vertex.replies.push(ok({ input: 800, cachedInput: 300, cacheWrite: 200, output: 50 }));
