@@ -1,0 +1,19 @@
+{
+  "name": "chief-of-staff-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The chief-of-staff shell: one Cloudflare Worker.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.9.2",
+    "@cloudflare/workers-types": "5.20261124.1",
+    "typescript": "7.0.2",
+    "vitest": "5.1.1",
+    "wrangler": "4.168.0"
+  },
+  "packageManager": "npm@11.21.3"
+}

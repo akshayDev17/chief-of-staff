@@ -1,0 +1,14 @@
+{
+  "name": "Morgan Sample",
+  "email": "morgan.sample@example.com",
+  "phone": "+1-555-0142",
+  "location": "Springfield, Exampleland",
+  "headline": "Senior backend engineer",
+  "years_of_experience": 9,
+  "target_roles": ["Staff software engineer", "Senior backend engineer"],
+  "target_locations": ["Remote", "Springfield, Exampleland"],
+  "minimum_base_salary_usd": 180000,
+  "work_authorization": "Authorized to work in Exampleland",
+  "notice_period_weeks": 4,
+  "skills": ["Python", "TypeScript", "PostgreSQL", "Distributed systems", "Kubernetes"]
+}

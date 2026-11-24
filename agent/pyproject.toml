@@ -1,0 +1,20 @@
+[project]
+name = "chief-of-staff-agent"
+version = "0.1.0"
+description = "The chief-of-staff agent: one container served by ADK's HTTP server."
+requires-python = "==3.13.*"
+dependencies = [
+    "google-adk==2.15.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.11.29"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
