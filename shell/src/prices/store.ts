@@ -1,7 +1,7 @@
 // The price table in D1: dated snapshots kept beside each other. The current
 // table is the newest snapshot not rolled back.
 
-import { ROLL_BACK_STATEMENTS } from "./rollback";
+import { ROLL_BACK_REFUSED, ROLL_BACK_STATEMENTS } from "./rollback";
 import type { PriceRow, SourceResult } from "./types";
 
 export interface Snapshot {
@@ -120,9 +120,11 @@ export async function readRow(
 }
 
 // A bad refresh rolls back to the snapshot before it (rollback.ts). Returns
-// the snapshot now current.
+// the snapshot now current; throws, changing nothing, when no earlier
+// snapshot would stay current.
 export async function rollBackLatestSnapshot(db: D1Database): Promise<Snapshot | undefined> {
-  await db.batch(ROLL_BACK_STATEMENTS.map((sql) => db.prepare(sql)));
+  const results = await db.batch<{ rolled_back: number }>(ROLL_BACK_STATEMENTS.map((sql) => db.prepare(sql)));
+  if (!results.at(-1)?.results[0]?.rolled_back) throw new Error(ROLL_BACK_REFUSED);
   return currentSnapshot(db);
 }
 

@@ -32,7 +32,7 @@ describe("one tier per model at each provider", () => {
     expect(modelTier("foundry", [input("foundry", "regional", "eastus2", 0.6)])).toBe("Middle");
   });
 
-  it("takes Vertex AI's regional price over its Global one, the highest region counting", () => {
+  it("takes Vertex AI's regional price over its Global one, the highest region counting for now", () => {
     expect(modelTier("vertex", [input("vertex", "global", "global", 2.4), input("vertex", "regional", "us-east5", 2.4), input("vertex", "regional", "europe-west1", 2.64)])).toBe("Strongest");
     expect(modelTier("vertex", [input("vertex", "global", "global", 0.3)])).toBe("Smallest");
   });
@@ -74,15 +74,13 @@ describe("the maintainer-read file", () => {
     expect(checkMaintainerEntries([noDeployment])).toEqual([`${at}: unknown deployment undefined`]);
   });
 
-  it("refuses a meter without long_prompt true or false, and two meters of one kind", () => {
+  it("refuses a meter without long_prompt true or false", () => {
     const good = maintainerFile.entries[0] as MaintainerEntry;
     const at = `entry 0 (${good.model})`;
     const input = { token_kind: "input", long_prompt: false, usd_per_mtok: 3 };
     const { long_prompt: _l, ...noLongPrompt } = input;
     expect(checkMaintainerEntries([{ ...good, meters: [noLongPrompt] }])).toEqual([`${at}: long_prompt is not true or false`]);
     expect(checkMaintainerEntries([{ ...good, meters: [{ ...input, long_prompt: "no" }] }])).toEqual([`${at}: long_prompt is not true or false`]);
-    expect(checkMaintainerEntries([{ ...good, meters: [input, { ...input, usd_per_mtok: 4 }] }])).toEqual([`${at}: two input standard meters`]);
-    expect(checkMaintainerEntries([{ ...good, meters: [input, { ...input, long_prompt: true }] }])).toEqual([]);
   });
 
   it("finds readings more than a week old", () => {

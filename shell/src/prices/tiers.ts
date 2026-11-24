@@ -7,6 +7,10 @@
 // deployment type below that prices the model gives its input price; within
 // it, the highest price, so the tier never rests on a price lower than the
 // vendor can charge there. Every other row of the model carries that tier.
+//
+// On Vertex AI that highest regional price is an interim, conservative rule:
+// the app has no default Vertex AI region yet. T16 names it and replaces the
+// rule with that region's price.
 
 import type { Deployment, PriceRow, Provider } from "./types";
 

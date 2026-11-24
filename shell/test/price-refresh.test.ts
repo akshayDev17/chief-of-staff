@@ -110,9 +110,18 @@ describe("the daily refresh", () => {
     expect(alert!.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
-  it("rolls back nothing, and records nothing, when no snapshot is current", async () => {
-    expect(await rollBackLatestSnapshot(env.DB)).toBeUndefined();
+  it("refuses a rollback, changing and recording nothing, when no earlier snapshot would stay current", async () => {
+    await expect(rollBackLatestSnapshot(env.DB)).rejects.toThrow(/nothing rolled back/);
+    const only = await refresh("2026-11-23");
+    await expect(rollBackLatestSnapshot(env.DB)).rejects.toThrow(/nothing rolled back/);
+    expect((await currentSnapshot(env.DB))?.id).toBe(only.snapshotId);
     expect(await recentAlerts(env.DB)).toEqual([]);
+
+    await refresh("2026-11-24");
+    expect((await rollBackLatestSnapshot(env.DB))?.id).toBe(only.snapshotId);
+    await expect(rollBackLatestSnapshot(env.DB)).rejects.toThrow(/nothing rolled back/);
+    expect((await currentSnapshot(env.DB))?.id).toBe(only.snapshotId);
+    expect((await recentAlerts(env.DB)).map((a) => a.kind)).toEqual(["rolled_back"]);
   });
 
   it("answers one tier per model at each provider", async () => {

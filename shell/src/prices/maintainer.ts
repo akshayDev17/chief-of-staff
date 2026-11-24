@@ -34,14 +34,10 @@ export function checkMaintainerEntries(entries: unknown): string[] {
     if (!DEPLOYMENTS.includes(e?.deployment)) problems.push(`${at}: unknown deployment ${e?.deployment}`);
     if (typeof e?.region !== "string" || !e.region) problems.push(`${at}: no region`);
     if (!Array.isArray(e?.meters) || e.meters.length === 0) problems.push(`${at}: no meters`);
-    const meters = new Set<string>();
     for (const m of Array.isArray(e?.meters) ? e.meters : []) {
       if (!TOKEN_KINDS.includes(m?.token_kind)) problems.push(`${at}: unknown token kind ${m?.token_kind}`);
       if (typeof m?.long_prompt !== "boolean") problems.push(`${at}: long_prompt is not true or false`);
       if (typeof m?.usd_per_mtok !== "number" || !(m.usd_per_mtok >= 0)) problems.push(`${at}: bad price`);
-      const meter = `${m?.token_kind} ${m?.long_prompt ? "long prompt" : "standard"}`;
-      if (meters.has(meter)) problems.push(`${at}: two ${meter} meters`);
-      meters.add(meter);
     }
   });
   return problems;

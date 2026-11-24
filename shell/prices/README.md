@@ -21,7 +21,9 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
   (`scripts/roll-back-prices.mjs --remote`, through Wrangler; it needs T10's
   Cloudflare token in `CLOUDFLARE_API_TOKEN`). It marks the newest snapshot
   rolled back, so the one before it is current again, records a rolled-back
-  alert, and prints the snapshot now current. Its SQL is
+  alert, and prints the snapshot now current. When no earlier snapshot would
+  stay current it refuses: it changes nothing, records nothing, says so and
+  exits non-zero, so a repeated or mistaken run never empties the table. Its SQL is
   `src/prices/rollback.ts`, the same statements `rollBackLatestSnapshot` runs
   in the Worker. `make rollback-check` (part of `make test`) runs the script
   against a fresh local D1.
@@ -35,7 +37,9 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
   default: Global on Foundry and Bedrock where offered (then data zone or
   cross-region, then a region), a region on Vertex AI (then Global). Within
   that deployment type the highest price counts. Every row of the model shows
-  that tier, whatever its own price.
+  that tier, whatever its own price. On Vertex AI the highest regional price is
+  an interim, conservative rule until T16 names the app's default Vertex AI
+  region; that region's price then replaces it.
 - **Admin · Price table** is at `GET /admin/price-table`. It is owner only: like
   every request to the Worker, it is behind the Cloudflare Access check
   (`src/access.ts`, T15).
@@ -89,8 +93,8 @@ The only family sold just through a marketplace listing is Foundry's Claude.
 entry needs `listing` (the listing address) and `date_read`, and
 `checkMaintainerEntries` refuses an entry without either. It also refuses an
 entry without a region, with a deployment other than `global`, `data-zone` or
-`regional`, or with a meter whose `long_prompt` is not `true` or `false`, and
-two meters of one kind and prompt length in one entry. The tests run it, so
+`regional`, or with a meter whose `long_prompt` is not `true` or `false`. The
+tests run it, so
 CI does too. The prices were read on 2026-11-24 through the Marketplace catalog
 API that backs each listing (`read_via`). Cron `0 7 * * 1` raises the weekly
 reminder to read every listing again.
