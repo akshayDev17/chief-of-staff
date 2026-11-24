@@ -6,7 +6,7 @@
 NPM := npx --yes npm@11.21.3
 INSTALLED := node_modules/.package-lock.json
 
-.PHONY: test check migrations
+.PHONY: test check migrations rollback-check roll-back-prices
 
 $(INSTALLED): package.json package-lock.json
 	$(NPM) ci
@@ -15,7 +15,7 @@ $(INSTALLED): package.json package-lock.json
 check: $(INSTALLED)
 	$(NPM) run typecheck
 
-test: $(INSTALLED) migrations
+test: $(INSTALLED) migrations rollback-check
 	$(NPM) test
 
 # Apply every migration, in order, to a fresh local D1 database with
@@ -24,3 +24,16 @@ MIGRATIONS_CHECK_DB := .wrangler/migrations-check
 migrations: $(INSTALLED)
 	rm -rf $(MIGRATIONS_CHECK_DB)
 	CI=1 npx wrangler d1 migrations apply chief-of-staff --local --persist-to $(MIGRATIONS_CHECK_DB) < /dev/null
+
+# Run the price-table rollback script against a fresh local D1 and check
+# what it changed (scripts/check-price-rollback.mjs).
+ROLLBACK_CHECK_DB := .wrangler/rollback-check
+rollback-check: $(INSTALLED)
+	rm -rf $(ROLLBACK_CHECK_DB)
+	CI=1 npx wrangler d1 migrations apply chief-of-staff --local --persist-to $(ROLLBACK_CHECK_DB) < /dev/null
+	node scripts/check-price-rollback.mjs $(ROLLBACK_CHECK_DB)
+
+# A maintainer's rollback of the deployed price table to the snapshot before
+# the newest one (prices/README.md). Needs CLOUDFLARE_API_TOKEN (T10).
+roll-back-prices: $(INSTALLED)
+	node scripts/roll-back-prices.mjs --remote

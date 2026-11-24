@@ -1,14 +1,33 @@
-import { SELF, env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { env } from "cloudflare:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import maintainerFile from "../prices/maintainer-read.json";
+import worker from "../src/index";
 import type { MaintainerEntry } from "../src/prices/maintainer";
 import { displayRows, sortRows } from "../src/prices/page";
 import { refreshPrices } from "../src/prices/refresh";
-import { readSnapshotRows } from "../src/prices/store";
+import { readSnapshotRows, writeSnapshot } from "../src/prices/store";
+import type { PriceRow } from "../src/prices/types";
+import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
 import { fakeFetch } from "./fake-sources";
+import azure from "./fixtures/azure-retail-eastus2.json";
 
+let key: TestKey;
+let stranger: TestKey;
+
+beforeAll(async () => {
+  key = await generateKey("kid-price-page");
+  stranger = await generateKey("kid-price-page-stranger");
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+const PAGE = "https://shell.test/admin/price-table";
+
+// Every request passes the Access check first, as in health.test.ts.
 const page = async (query = "") => {
-  const response = await SELF.fetch(`https://shell.test/admin/price-table${query}`);
+  serveCerts(() => [key]);
+  const headers = { "cf-access-jwt-assertion": await signToken(key) };
+  const response = await worker.fetch(new Request(`${PAGE}${query}`, { headers }), { ...ENV, DB: env.DB });
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
   return response.text();
@@ -18,6 +37,28 @@ const fill = async (googleApiKey: string | null = "test-key") =>
     db: env.DB, fetcher: fakeFetch(), googleApiKey: googleApiKey ?? undefined,
     maintainerEntries: maintainerFile.entries as MaintainerEntry[], now: new Date("2026-11-24T06:00:00Z"),
   });
+
+describe("Admin · Price table behind the Access check", () => {
+  // A D1 that fails the test if the route touches it.
+  const untouchedDb = new Proxy({}, {
+    get() {
+      throw new Error("the price table was read before the Access check passed");
+    },
+  }) as D1Database;
+
+  it("answers 403 without a token, and reads nothing", async () => {
+    serveCerts(() => [key]);
+    const response = await worker.fetch(new Request(PAGE), { ...ENV, DB: untouchedDb });
+    expect(response.status).toBe(403);
+  });
+
+  it("answers 403 for a token Access did not sign, and reads nothing", async () => {
+    serveCerts(() => [key]);
+    const headers = { "cf-access-jwt-assertion": await signToken(stranger) };
+    const response = await worker.fetch(new Request(PAGE, { headers }), { ...ENV, DB: untouchedDb });
+    expect(response.status).toBe(403);
+  });
+});
 
 describe("Admin · Price table", () => {
   it("says so before the first refresh", async () => {
@@ -34,6 +75,36 @@ describe("Admin · Price table", () => {
     expect(html).toContain("2026&#8209;11&#8209;24");
     expect(html).toContain(">Middle<");
     expect(html).toContain("Quotas, beside the table");
+  });
+
+  it("shows how many rows each source added and dropped against the previous snapshot", async () => {
+    await fill();
+    const withoutLuna = () => Response.json({ ...azure, Items: azure.Items.filter((i) => !i.meterName.startsWith("6-luna")) });
+    const { results } = await refreshPrices({
+      db: env.DB, fetcher: fakeFetch({ azure: withoutLuna }), googleApiKey: "test-key",
+      maintainerEntries: maintainerFile.entries as MaintainerEntry[], now: new Date("2026-11-25T06:00:00Z"),
+    });
+    const read = results.find((r) => r.source === "azure-retail")!;
+    expect(read).toMatchObject({ ok: true, added: 0 });
+    expect(read.dropped).toBeGreaterThan(0);
+    const html = await page();
+    expect(html).toContain(`Azure Retail Prices API, service Foundry Models: ok (${read.rows} rows, 0 added and ${read.dropped} dropped against the previous snapshot`);
+  });
+
+  it("gives every row of a model the model's one tier, from its Global input price", async () => {
+    const row = (deployment: PriceRow["deployment"], region: string, usdPerMTok: number): PriceRow => ({
+      provider: "bedrock", model: "Claude Test 1", deployment, region, tokenKind: "input", longPrompt: false, batch: false,
+      usdPerMTok, source: "aws-price-list", dateRead: "2026-11-24", stale: false, disagreement: false,
+    });
+    // Bedrock's in-region price sits 10% above Global: $2.40 is Middle, $2.64 would be Strongest.
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T06:00:00.000Z", status: "good", results: [],
+      rows: [row("global", "us-east-1", 2.4), row("regional", "us-east-1", 2.64)],
+    });
+    const html = await page();
+    const tiers = [...html.matchAll(/<td data-l="Strength \(from the input price\)">([^<]+)<\/td>/g)].map((m) => m[1]);
+    expect(tiers).toEqual(["Middle", "Middle"]);
+    expect(html).toContain("$2.64");
   });
 
   it("sorts by provider, then model, by default, with the arrow on Provider", async () => {
@@ -56,6 +127,16 @@ describe("Admin · Price table", () => {
     // Region, strength, source and date do not sort.
     expect(html).toContain("<th>Region or deployment type</th>");
     expect(html).toContain("<th>Source</th>");
+  });
+
+  it("offers every header order in the Sort by list, with the active one selected", async () => {
+    const orders = ["provider", "model", "input", "output"].flatMap((c) => [`${c}:asc`, `${c}:desc`]);
+    for (const order of orders) {
+      const html = await page(`?sort=${order}`);
+      const options = [...html.matchAll(/<option value="([^"]+)"( selected)?>/g)];
+      expect(options.map((m) => m[1])).toEqual(expect.arrayContaining(orders));
+      expect(options.filter((m) => m[2]).map((m) => m[1])).toEqual([order]);
+    }
   });
 
   it("shows no price yet for a row without an input price, sorted last", async () => {

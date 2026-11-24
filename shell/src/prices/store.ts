@@ -1,6 +1,7 @@
 // The price table in D1: dated snapshots kept beside each other. The current
 // table is the newest snapshot not rolled back.
 
+import { ROLL_BACK_STATEMENTS } from "./rollback";
 import type { PriceRow, SourceResult } from "./types";
 
 export interface Snapshot {
@@ -38,37 +39,39 @@ export async function listSnapshots(db: D1Database): Promise<Snapshot[]> {
   return results.map(toSnapshot);
 }
 
+// The header, its rows and the pruning go in one batch, which D1 runs as one
+// transaction: a write that fails leaves the previous snapshot current.
 export async function writeSnapshot(
   db: D1Database,
   s: { takenAt: string; status: "good" | "partial"; results: SourceResult[]; rows: PriceRow[] },
 ): Promise<number> {
-  const created = await db
+  const header = db
     .prepare("INSERT INTO price_snapshots (taken_at, status, results) VALUES (?, ?, ?) RETURNING id")
-    .bind(s.takenAt, s.status, JSON.stringify(s.results))
-    .first<{ id: number }>();
-  if (!created) throw new Error("could not create a price snapshot");
+    .bind(s.takenAt, s.status, JSON.stringify(s.results));
   const insert = db.prepare(
     `INSERT INTO price_rows (snapshot_id, provider, model, deployment, region, token_kind, long_prompt, batch,
        usd_per_mtok, source, date_read, stale, disagreement)
-     SELECT ?1, j.value ->> 0, j.value ->> 1, j.value ->> 2, j.value ->> 3, j.value ->> 4, j.value ->> 5, j.value ->> 6,
-       j.value ->> 7, j.value ->> 8, j.value ->> 9, j.value ->> 10, j.value ->> 11
-     FROM json_each(?2) AS j`,
+     SELECT (SELECT max(id) FROM price_snapshots), j.value ->> 0, j.value ->> 1, j.value ->> 2, j.value ->> 3,
+       j.value ->> 4, j.value ->> 5, j.value ->> 6, j.value ->> 7, j.value ->> 8, j.value ->> 9, j.value ->> 10, j.value ->> 11
+     FROM json_each(?1) AS j`,
   );
-  const statements: D1PreparedStatement[] = [];
+  const statements: D1PreparedStatement[] = [header];
   for (let i = 0; i < s.rows.length; i += ROWS_PER_INSERT) {
     const chunk = s.rows.slice(i, i + ROWS_PER_INSERT).map((r) => [
       r.provider, r.model, r.deployment, r.region, r.tokenKind, r.longPrompt ? 1 : 0, r.batch ? 1 : 0,
       r.usdPerMTok, r.source, r.dateRead, r.stale ? 1 : 0, r.disagreement ? 1 : 0,
     ]);
-    statements.push(insert.bind(created.id, JSON.stringify(chunk)));
+    statements.push(insert.bind(JSON.stringify(chunk)));
   }
   // Older snapshots beyond the kept number go, with their rows.
   statements.push(
-    db.prepare("DELETE FROM price_rows WHERE snapshot_id <= ?").bind(created.id - SNAPSHOTS_KEPT),
-    db.prepare("DELETE FROM price_snapshots WHERE id <= ?").bind(created.id - SNAPSHOTS_KEPT),
+    db.prepare("DELETE FROM price_rows WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
+    db.prepare("DELETE FROM price_snapshots WHERE id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
   );
-  await db.batch(statements);
-  return created.id;
+  const [created] = await db.batch<{ id: number }>(statements);
+  const id = created?.results[0]?.id;
+  if (id === undefined) throw new Error("could not create a price snapshot");
+  return id;
 }
 
 type RowRecord = {
@@ -84,6 +87,18 @@ const toRow = (r: RowRecord): PriceRow => ({
 
 export async function readSnapshotRows(db: D1Database, snapshotId: number): Promise<PriceRow[]> {
   const { results } = await db.prepare("SELECT * FROM price_rows WHERE snapshot_id = ?").bind(snapshotId).all<RowRecord>();
+  return results.map(toRow);
+}
+
+export async function readModelRows(
+  db: D1Database,
+  snapshotId: number,
+  key: { provider: string; model: string },
+): Promise<PriceRow[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM price_rows WHERE snapshot_id = ? AND provider = ? AND model = ?")
+    .bind(snapshotId, key.provider, key.model)
+    .all<RowRecord>();
   return results.map(toRow);
 }
 
@@ -104,13 +119,10 @@ export async function readRow(
   return r ? toRow(r) : undefined;
 }
 
-// A bad refresh rolls back: the newest snapshot is marked rolled back and the
-// one before it becomes current again. Returns the snapshot now current.
-export async function rollBackLatestSnapshot(db: D1Database, now: Date): Promise<Snapshot | undefined> {
-  const latest = await currentSnapshot(db);
-  if (!latest) return undefined;
-  await db.prepare("UPDATE price_snapshots SET status = 'rolled_back' WHERE id = ?").bind(latest.id).run();
-  await addAlert(db, now, "rolled_back", `snapshot ${latest.id} of ${latest.takenAt} rolled back`);
+// A bad refresh rolls back to the snapshot before it (rollback.ts). Returns
+// the snapshot now current.
+export async function rollBackLatestSnapshot(db: D1Database): Promise<Snapshot | undefined> {
+  await db.batch(ROLL_BACK_STATEMENTS.map((sql) => db.prepare(sql)));
   return currentSnapshot(db);
 }
 

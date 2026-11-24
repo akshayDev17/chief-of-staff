@@ -7,8 +7,14 @@
 // type ("global", "data-zone"). `undefined` means "no price yet": the proxy
 // refuses the call and the picker (T17) cannot offer the model, because the
 // budget stop needs a real price. Prices come from the current snapshot only.
+//
+//   lookupTier(db, { provider, model }) -> "Smallest" | "Middle" | "Strongest" | undefined
+//
+// The model's one tier at that provider, for the picker (T17) and the usage
+// ledger (T18); see tiers.ts for the price it comes from.
 
-import { currentSnapshot, readRow } from "./store";
+import { currentSnapshot, readModelRows, readRow } from "./store";
+import { modelTier, type Tier } from "./tiers";
 import type { Provider, SourceId, TokenKind } from "./types";
 
 export interface PriceQuery {
@@ -39,4 +45,10 @@ export async function lookupPrice(db: D1Database, q: PriceQuery): Promise<PriceA
     batch: q.batch ?? false,
   });
   return row ? { usdPerMTok: row.usdPerMTok, source: row.source, dateRead: row.dateRead, stale: row.stale } : undefined;
+}
+
+export async function lookupTier(db: D1Database, q: { provider: Provider; model: string }): Promise<Tier | undefined> {
+  const snapshot = await currentSnapshot(db);
+  if (!snapshot) return undefined;
+  return modelTier(q.provider, await readModelRows(db, snapshot.id, q));
 }

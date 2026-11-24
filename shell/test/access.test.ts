@@ -1,3 +1,4 @@
+import { env as testEnv } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { clearAccessKeyCache, readAccessConfig } from "../src/access";
@@ -24,7 +25,7 @@ afterEach(() => {
 });
 
 const send = (headers: Record<string, string> = {}, env: Record<string, string> = ENV) =>
-  worker.fetch(new Request("https://shell.test/health", { headers }), env);
+  worker.fetch(new Request("https://shell.test/health", { headers }), { ...env, DB: testEnv.DB });
 
 // The same request as a WebSocket upgrade.
 const upgrade = (headers: Record<string, string> = {}) =>

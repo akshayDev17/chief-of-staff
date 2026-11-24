@@ -1,12 +1,13 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import maintainerFile from "../prices/maintainer-read.json";
-import { lookupPrice } from "../src/prices/lookup";
+import { lookupPrice, lookupTier } from "../src/prices/lookup";
 import type { MaintainerEntry } from "../src/prices/maintainer";
 import { refreshPrices } from "../src/prices/refresh";
 import { SNAPSHOTS_KEPT, currentSnapshot, listSnapshots, readSnapshotRows, recentAlerts, rollBackLatestSnapshot } from "../src/prices/store";
 import worker from "../src/index";
 import { fakeFetch, type Overrides } from "./fake-sources";
+import azure from "./fixtures/azure-retail-eastus2.json";
 
 const entries = maintainerFile.entries as MaintainerEntry[];
 const refresh = (day: string, overrides: Overrides = {}, googleApiKey: string | null = "test-key") =>
@@ -61,23 +62,67 @@ describe("the daily refresh", () => {
     expect(await lookupPrice(env.DB, { provider: "vertex", model: "Claude Sonnet 5.5", location: "global", tokenKind: "input" })).toBeUndefined();
   });
 
-  it("refuses a read far smaller than the last good one", async () => {
+  it("stores a smaller read as the vendor lists it: a model no longer listed has no price yet", async () => {
     await refresh("2026-11-23");
-    const tiny = () => new Response(JSON.stringify({ Items: [], NextPageLink: null }));
-    const { results } = await refresh("2026-11-24", { azure: tiny });
-    expect(results.find((r) => r.source === "azure-retail")?.ok).toBe(false);
-    expect(await lookupPrice(env.DB, { provider: "foundry", model: "GPT-6-luna", location: "global", tokenKind: "input" }))
-      .toMatchObject({ dateRead: "2026-11-23", stale: true });
+    const withoutLuna = () => Response.json({ ...azure, Items: azure.Items.filter((i) => !i.meterName.startsWith("6-luna")) });
+    const { results } = await refresh("2026-11-24", { azure: withoutLuna });
+    const read = results.find((r) => r.source === "azure-retail");
+    expect(read).toMatchObject({ ok: true, added: 0 });
+    expect(read!.dropped).toBeGreaterThan(read!.rows);
+    expect((await currentSnapshot(env.DB))?.status).toBe("good");
+    expect(await lookupPrice(env.DB, { provider: "foundry", model: "GPT-6-luna", location: "global", tokenKind: "input" })).toBeUndefined();
+    expect(await lookupPrice(env.DB, { provider: "bedrock", model: "Claude Sonnet 5.5", location: "global", tokenKind: "input" }))
+      .toMatchObject({ dateRead: "2026-11-24" });
+  });
+
+  it("counts every row as added on the first refresh and none on an unchanged one", async () => {
+    const first = await refresh("2026-11-23");
+    expect(first.results.every((r) => r.added > 0 && r.dropped === 0)).toBe(true);
+    const second = await refresh("2026-11-24");
+    expect(second.results.map((r) => [r.added, r.dropped])).toEqual(second.results.map(() => [0, 0]));
+  });
+
+  it("keeps the previous snapshot current when the new one cannot be written, and alerts", async () => {
+    const first = await refresh("2026-11-23");
+    // A negative price breaks the table's CHECK, so the write fails part way.
+    const [good] = entries;
+    const broken = [{ ...good!, model: "Claude Broken", meters: [{ token_kind: "input" as const, long_prompt: false, usd_per_mtok: -1 }] }];
+    await expect(refreshPrices({
+      db: env.DB, fetcher: fakeFetch(), googleApiKey: "test-key", maintainerEntries: [...entries, ...broken], now: new Date("2026-11-24T06:00:00Z"),
+    })).rejects.toThrow();
+    expect((await currentSnapshot(env.DB))?.id).toBe(first.snapshotId);
+    expect(await listSnapshots(env.DB)).toHaveLength(1);
+    expect(await lookupPrice(env.DB, { provider: "bedrock", model: "Claude Sonnet 5.5", location: "global", tokenKind: "input" }))
+      .toMatchObject({ usdPerMTok: 2, dateRead: "2026-11-23" });
+    expect((await recentAlerts(env.DB))[0]).toMatchObject({ kind: "refresh_failed" });
+    expect((await recentAlerts(env.DB))[0]?.detail).toContain("could not store the snapshot");
   });
 
   it("rolls a bad refresh back to the previous snapshot", async () => {
     const first = await refresh("2026-11-23");
-    await refresh("2026-11-24");
-    const current = await rollBackLatestSnapshot(env.DB, new Date("2026-11-24T08:00:00Z"));
+    const second = await refresh("2026-11-24");
+    const current = await rollBackLatestSnapshot(env.DB);
     expect(current?.id).toBe(first.snapshotId);
     expect(await lookupPrice(env.DB, { provider: "bedrock", model: "Claude Sonnet 5.5", location: "global", tokenKind: "input" }))
       .toMatchObject({ dateRead: "2026-11-23" });
-    expect((await recentAlerts(env.DB))[0]?.kind).toBe("rolled_back");
+    const [alert] = await recentAlerts(env.DB);
+    expect(alert).toMatchObject({ kind: "rolled_back", detail: `snapshot ${second.snapshotId} of 2026-11-24T06:00:00.000Z rolled back` });
+    expect(alert!.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it("rolls back nothing, and records nothing, when no snapshot is current", async () => {
+    expect(await rollBackLatestSnapshot(env.DB)).toBeUndefined();
+    expect(await recentAlerts(env.DB)).toEqual([]);
+  });
+
+  it("answers one tier per model at each provider", async () => {
+    expect(await lookupTier(env.DB, { provider: "bedrock", model: "Claude Sonnet 5.5" })).toBeUndefined();
+    await refresh("2026-11-24");
+    // Global $2.00 (in-region $2.20): Middle either way, from the Global price.
+    expect(await lookupTier(env.DB, { provider: "bedrock", model: "Claude Sonnet 5.5" })).toBe("Middle");
+    expect(await lookupTier(env.DB, { provider: "foundry", model: "Claude Fable 5.1" })).toBe("Strongest");
+    expect(await lookupTier(env.DB, { provider: "foundry", model: "GPT-6-luna" })).toBe("Smallest");
+    expect(await lookupTier(env.DB, { provider: "vertex", model: "GPT-6 Luna" })).toBeUndefined();
   });
 
   it(`keeps the last ${SNAPSHOTS_KEPT} snapshots`, async () => {

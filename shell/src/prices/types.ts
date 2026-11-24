@@ -43,6 +43,10 @@ export interface SourceResult {
   ok: boolean;
   rows: number;
   unmapped: number;
+  // Rows of this source in the snapshot that the previous snapshot did not
+  // have, and rows it had that this one does not.
+  added: number;
+  dropped: number;
   error?: string;
 }
 

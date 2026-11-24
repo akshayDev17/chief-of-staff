@@ -1,18 +1,20 @@
 // Admin · Price table, rendered on the server (design T02 / T11). Owner only:
-// T15 puts the sign-in in front of the whole app.
+// the route sits behind the Cloudflare Access check (src/access.ts, T15) that
+// every request to the Worker passes first.
 //
 // One table row per provider, model, deployment type and price: regions that
 // share every price are listed together. Provider, Model, Input and Output
 // sort (click a header for ascending, again for descending; default provider
 // then model); on a phone, where the table stacks, a "Sort by" list offers the
-// same choices.
+// same choices. Each row carries its model's one tier at that provider
+// (tiers.ts), not one worked out from that row's own price.
 
 import type { MaintainerEntry } from "./maintainer";
 import { entriesDueForReading } from "./maintainer";
 import { QUOTAS } from "./quotas";
 import { SOURCES } from "./sources";
 import type { Snapshot } from "./store";
-import { tierFromInputPrice } from "./tiers";
+import { modelTiers, tierKey } from "./tiers";
 import type { PriceRow, Provider } from "./types";
 
 export type SortColumn = "provider" | "model" | "input" | "output";
@@ -131,6 +133,7 @@ function extras(r: DisplayRow): string {
 
 const SORT_CHOICES: Array<[string, string]> = [
   ["provider:asc", "Provider, then model"],
+  ["provider:desc", "Provider (Z to A)"],
   ["model:asc", "Model (A to Z)"],
   ["model:desc", "Model (Z to A)"],
   ["input:asc", "Input price (lowest first)"],
@@ -162,7 +165,7 @@ function refreshBanner(snapshot: Snapshot | undefined): string {
   const parts = snapshot.results.map((r) => {
     const name = SOURCES[r.source].label;
     return r.ok
-      ? `${esc(name)}: ok (${r.rows} rows${r.unmapped ? `, ${r.unmapped} meters not mapped` : ""})`
+      ? `${esc(name)}: ok (${r.rows} rows, ${r.added} added and ${r.dropped} dropped against the previous snapshot${r.unmapped ? `, ${r.unmapped} meters not mapped` : ""})`
       : `${esc(name)}: <strong>failed</strong> (${esc(r.error ?? "")}; rows keep their last good price and date; the maintainers were alerted)`;
   });
   const failed = snapshot.results.some((r) => !r.ok);
@@ -171,10 +174,11 @@ function refreshBanner(snapshot: Snapshot | undefined): string {
 
 export function renderPriceTablePage(input: PageInput): string {
   const rows = sortRows(displayRows(input.rows), input.sort.column, input.sort.dir);
+  const tiers = modelTiers(input.rows);
   const due = entriesDueForReading(input.maintainerEntries, input.today);
   const body = rows
     .map((r) => {
-      const tier = r.input === undefined ? "–" : tierFromInputPrice(r.input);
+      const tier = tiers.get(tierKey(r.provider, r.model)) ?? "–";
       const source = r.sources.map((s) => esc(SOURCES[s as keyof typeof SOURCES]?.label ?? s)).join("; ");
       const flags = [
         r.stale ? `<span class="pill warn">refresh failed: last good price kept</span>` : "",
@@ -242,7 +246,7 @@ ${header("Output / M", "output", input.sort)}
 <tbody>
 ${body || `<tr><td colspan="9">No prices yet.</td></tr>`}
 </tbody></table></div>
-<p class="small muted">Prices are list prices in USD per million tokens. Where two of a vendor's sources disagree, the row keeps the higher price and the maintainers are alerted. Each request's region is chosen from this table's regions. Each model's strength comes from its input price: Smallest under $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up; nobody sets it by hand.</p>
+<p class="small muted">Prices are list prices in USD per million tokens. Where two of a vendor's sources disagree, the row keeps the higher price and the maintainers are alerted. Each request's region is chosen from this table's regions. Each model's strength at a provider comes from its input price where the app runs it by default (Global on Foundry and Bedrock where offered, a region on Vertex AI): Smallest under $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up; every row of the model shows that one strength, and nobody sets it by hand.</p>
 ${alerts}
 <section class="card"><h2>Quotas, beside the table</h2>
 <div class="tbl-wrap"><table class="stackable"><thead><tr><th>Provider</th><th>Default rate limits</th><th>Read from</th></tr></thead>

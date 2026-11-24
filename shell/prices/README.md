@@ -10,16 +10,35 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
 - **Refresh.** Cron `0 6 * * *` reads every source (`src/prices/refresh.ts`)
   and stores a dated snapshot beside the last 14. A failed source keeps its
   last good rows with their own date read, marked stale, and raises a
-  refresh-failed alert. A read under half the size of the last good one counts
-  as failed. Two listings giving one row different prices keep the higher one,
-  flagged, and raise an alert. `rollBackLatestSnapshot` returns the table to
-  the previous snapshot.
+  refresh-failed alert. A source that answers stores what the vendor lists,
+  however few rows: a model no longer listed has no price yet, and the page
+  shows how many rows each source added and dropped against the previous
+  snapshot. A snapshot's header and rows are written in one transaction, so a
+  failed write leaves the previous snapshot current and raises a
+  refresh-failed alert. Two listings giving one row different prices keep the
+  higher one, flagged, and raise an alert.
+- **Rollback.** After a bad refresh a maintainer runs `make roll-back-prices`
+  (`scripts/roll-back-prices.mjs --remote`, through Wrangler; it needs T10's
+  Cloudflare token in `CLOUDFLARE_API_TOKEN`). It marks the newest snapshot
+  rolled back, so the one before it is current again, records a rolled-back
+  alert, and prints the snapshot now current. Its SQL is
+  `src/prices/rollback.ts`, the same statements `rollBackLatestSnapshot` runs
+  in the Worker. `make rollback-check` (part of `make test`) runs the script
+  against a fresh local D1.
 - **Lookup** for the proxy (T12): `lookupPrice(db, { provider, model, location, tokenKind, longPrompt?, batch? })`
   returns `{ usdPerMTok, source, dateRead, stale }`, or `undefined` for "no price yet".
+  `lookupTier(db, { provider, model })` returns the model's one tier at that
+  provider, for the picker (T17) and the usage ledger (T18).
 - **Tiers** come from the input price (`src/prices/tiers.ts`): Smallest under
-  $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up.
-- **Admin · Price table** is at `GET /admin/price-table`. It is owner only, and
-  T15 adds the sign-in.
+  $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up. A model has one
+  tier at each provider, from its standard input price where the app runs it by
+  default: Global on Foundry and Bedrock where offered (then data zone or
+  cross-region, then a region), a region on Vertex AI (then Global). Within
+  that deployment type the highest price counts. Every row of the model shows
+  that tier, whatever its own price.
+- **Admin · Price table** is at `GET /admin/price-table`. It is owner only: like
+  every request to the Worker, it is behind the Cloudflare Access check
+  (`src/access.ts`, T15).
 - **Alerts** are shown on that page and logged. Push and email come with T49.
 
 ## Sources (pages read 2026-11-24)
@@ -68,7 +87,10 @@ The only family sold just through a marketplace listing is Foundry's Claude.
 
 `maintainer-read.json` is changed only through a reviewed pull request. Every
 entry needs `listing` (the listing address) and `date_read`, and
-`checkMaintainerEntries` refuses an entry without either. The tests run it, so
+`checkMaintainerEntries` refuses an entry without either. It also refuses an
+entry without a region, with a deployment other than `global`, `data-zone` or
+`regional`, or with a meter whose `long_prompt` is not `true` or `false`, and
+two meters of one kind and prompt length in one entry. The tests run it, so
 CI does too. The prices were read on 2026-11-24 through the Marketplace catalog
 API that backs each listing (`read_via`). Cron `0 7 * * 1` raises the weekly
 reminder to read every listing again.
