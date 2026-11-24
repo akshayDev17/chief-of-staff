@@ -22,7 +22,8 @@ Later release units get their own directory when their ticket builds them.
 Every install comes from a lock file: `make check` fails when `uv.lock` or
 `package-lock.json` is out of date with its manifest (`uv lock --check`,
 `uv sync --locked`, `npm ci`). After changing a dependency, run `uv lock` in
-`agent/` or `npx npm@11.21.3 install` in `shell/` and commit the lock file.
+`agent/` or `npx npm@<packageManager version> install` in `shell/` and commit
+the lock file.
 
 ## Development
 
@@ -37,8 +38,8 @@ make check   # runs each component's linters and type checks
 Each component directory (`agent/` for Python, `shell/` for TypeScript) has its
 own `Makefile` with `test` and `check` targets; the root targets run them for
 every component directory that exists and skip one that does not yet exist.
-`make test COMPONENTS=agent` runs one component, and does nothing until
-`agent/Makefile` exists.
+`make test COMPONENTS=agent` runs one component; a named component without a
+`Makefile` is skipped.
 
 ### Continuous integration
 
