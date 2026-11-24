@@ -128,10 +128,26 @@ export async function rollBackLatestSnapshot(db: D1Database): Promise<Snapshot |
   return currentSnapshot(db);
 }
 
-export type AlertKind = "refresh_failed" | "sources_disagree" | "maintainer_reading_due" | "rolled_back";
+// `price_missing` is raised by the model proxy (T12) when a call used a kind
+// of token its model has no list price for.
+export type AlertKind = "refresh_failed" | "sources_disagree" | "maintainer_reading_due" | "rolled_back" | "price_missing";
 
 export async function addAlert(db: D1Database, now: Date, kind: AlertKind, detail: string): Promise<void> {
   await db.prepare("INSERT INTO price_alerts (created_at, kind, detail) VALUES (?, ?, ?)").bind(now.toISOString(), kind, detail).run();
+}
+
+// The same alert at most once per UTC day, for alerts raised per call rather
+// than per run. True when it was raised now.
+export async function addAlertOncePerDay(db: D1Database, now: Date, kind: AlertKind, detail: string): Promise<boolean> {
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const { meta } = await db
+    .prepare(
+      `INSERT INTO price_alerts (created_at, kind, detail) SELECT ?1, ?2, ?3
+       WHERE NOT EXISTS (SELECT 1 FROM price_alerts WHERE kind = ?2 AND detail = ?3 AND created_at >= ?4)`,
+    )
+    .bind(now.toISOString(), kind, detail, dayStart)
+    .run();
+  return meta.changes > 0;
 }
 
 export async function recentAlerts(db: D1Database, limit = 10): Promise<Array<{ createdAt: string; kind: AlertKind; detail: string }>> {

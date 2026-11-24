@@ -3,7 +3,9 @@ import { checkMaintainerEntries, entriesDueForReading, type MaintainerEntry } fr
 import { parseSort, renderPriceTablePage } from "./prices/page";
 import { refreshPrices } from "./prices/refresh";
 import { addAlert, currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
-import { checkAccess } from "./access";
+import { accessDenied, readAccessIdentity } from "./access";
+import { BUDGETS_PATH, handleBudgets } from "./proxy/budgets-page";
+import { userFromAccess } from "./users";
 
 export interface Env {
   // Cloudflare Access team domain, `https://<team>.cloudflareaccess.com`.
@@ -33,11 +35,18 @@ const json = (body: unknown, status = 200): Response =>
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const refused = await checkAccess(request, env);
-    if (refused) return refused;
+    const claims = await readAccessIdentity(request, env);
+    if (!claims) return accessDenied();
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
       return json({ status: "ok" });
+    }
+    // The signed-in user's own budgets; a token naming no person is refused.
+    if (url.pathname === BUDGETS_PATH && (request.method === "GET" || request.method === "POST")) {
+      const now = new Date();
+      const user = await userFromAccess(env.DB, claims, now);
+      if (!user) return accessDenied();
+      return handleBudgets(request, env.DB, user.id, now);
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === "/admin/price-table" && request.method === "GET") {

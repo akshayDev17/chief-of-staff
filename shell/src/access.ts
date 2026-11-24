@@ -162,17 +162,17 @@ export const verifyAccessToken = async (
 // The refusal: 403 with no body detail, the same for every reason.
 export const accessDenied = (): Response => new Response(null, { status: 403 });
 
-// Returns null when the request may go on, or the refusal to send.
-export const checkAccess = async (
+// The request's verified Access claims, or null when it must be refused.
+export const readAccessIdentity = async (
   request: Request,
   env: { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string },
-): Promise<Response | null> => {
+): Promise<AccessClaims | null> => {
   const config = readAccessConfig(env);
   // Not configured is refused, never let through.
-  if (!config) return accessDenied();
+  if (!config) return null;
   const token = readAccessToken(request);
-  if (!token) return accessDenied();
-  return (await verifyAccessToken(token, config)) ? null : accessDenied();
+  if (!token) return null;
+  return verifyAccessToken(token, config);
 };
 
 // Tests only: forget the cached keys.
