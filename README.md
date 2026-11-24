@@ -30,10 +30,10 @@ Third-party actions are pinned to full commit SHAs.
 
 ### Secret scan
 
-[gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 scans the full history
-and the tree (`make secret-scan`) and fails the build on a match. Its workflow,
-`.github/workflows/secret-scan.yml`, runs on every pull request and on a push
-to any branch. The same scanner runs as a pre-commit hook on staged changes.
+[gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 scans the history
+reachable from `HEAD` and the working tree (`make secret-scan`) and fails the
+build on a match. Its workflow, `.github/workflows/secret-scan.yml`, runs on
+every pull request and on a push to any branch. The same scanner runs as a pre-commit hook on staged changes.
 To set it up once per clone:
 
 ```sh
