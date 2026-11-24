@@ -105,7 +105,7 @@ export function parseSort(params: URLSearchParams): { column: SortColumn; dir: S
   return { column, dir: d === "desc" ? "desc" : "asc" };
 }
 
-const esc = (s: string) =>
+export const esc = (s: string) =>
   s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] as string);
 // Exact to the vendor's precision: $0.125 stays $0.125, never rounded to $0.13.
 const usd = (n: number | undefined) => {
@@ -113,7 +113,7 @@ const usd = (n: number | undefined) => {
   const [whole, frac = ""] = String(Number(n.toPrecision(12))).split(".");
   return `$${whole}.${frac.padEnd(2, "0")}`;
 };
-const nbDate = (d: string) => d.replace(/-/g, "&#8209;");
+export const nbDate = (d: string) => d.replace(/-/g, "&#8209;");
 
 function regionsLabel(r: DisplayRow): string {
   const shown = r.regions.slice(0, 3).join(", ");
@@ -218,7 +218,7 @@ export function renderPriceTablePage(input: PageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin · Price table · Chief of staff</title>
-<style>${CSS}</style>
+<style>${PAGE_CSS}</style>
 </head>
 <body>
 <main class="screen">
@@ -256,7 +256,8 @@ ${alerts}
 </html>`;
 }
 
-const CSS = `
+// The shell's server-rendered pages share these styles.
+export const PAGE_CSS = `
 :root { color-scheme: light dark; --bg: #f7f5f0; --card: #ffffff; --text: #1d1b18; --muted: #6b665d; --line: #d9d4c9;
   --accent: #2f5d8a; --warn: #8a5a00; --warn-soft: #fbefd5; --ok: #2d6a3e; --ok-soft: #e3f1e6; }
 @media (prefers-color-scheme: dark) { :root { --bg: #171614; --card: #201f1c; --text: #ece8e1; --muted: #a39d92; --line: #3a3732;

@@ -10,9 +10,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": false,
-  // The app's one D1 database. The id is a placeholder until T12 creates the
-  // database on the owner's account; local runs and tests never use it.
-  // Migrations are numbered .sql files in migrations/ (design-v3 8.4).
+  // The app's one D1 database. The id is a placeholder until T10 creates the
+  // database on the owner's account (a database id is not secret); local
+  // runs and tests never use it, and the release refuses to run with it.
+  // Migrations are numbered .sql files in migrations/ (design-v3 8.4), applied
+  // only by the release pipeline (README "Releasing the shell").
   "d1_databases": [
     {
       "binding": "DB",
@@ -27,5 +29,7 @@
   // A refresh reads every region's AWS price-list files; give it room.
   "limits": { "cpu_ms": 300000 }
   // GOOGLE_BILLING_API_KEY arrives as a Worker secret with T10; it is never
-  // written here.
+  // written here. The vault key (32 random bytes, base64; src/vault.ts) goes
+  // in Secrets Store as a binding with the first ticket that stores a vault
+  // item; the three v1 provider connections need none.
 }

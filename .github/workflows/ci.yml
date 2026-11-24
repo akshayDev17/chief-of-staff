@@ -37,6 +37,7 @@ jobs:
             shell:
               - *shared
               - 'shell/**'
+              - '.github/workflows/release-shell.yml'
 
   agent:
     needs: changes

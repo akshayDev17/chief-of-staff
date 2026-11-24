@@ -1,0 +1,33 @@
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { changesData, pendingMigrations } from "../src/release/migration-rules";
+
+describe("pending migrations", () => {
+  it("are the numbered files D1 has not applied, in order", () => {
+    expect(pendingMigrations(["0002_b.sql", "0000_a.sql", "0001_c.sql", "README.md"], ["0000_a.sql"])).toEqual(["0001_c.sql", "0002_b.sql"]);
+    expect(pendingMigrations(["0000_a.sql"], ["0000_a.sql"])).toEqual([]);
+  });
+});
+
+describe("a migration that changes or removes data", () => {
+  it("is anything but adding tables, indexes, views, columns and rows", () => {
+    expect(changesData("CREATE TABLE t (a TEXT);\nCREATE INDEX i ON t (a);\n-- DROP TABLE t; is only a comment")).toBe(false);
+    expect(changesData("ALTER TABLE t ADD COLUMN b INTEGER NOT NULL DEFAULT 0; INSERT INTO t (a) VALUES ('x');")).toBe(false);
+    for (const sql of [
+      "DROP TABLE t",
+      "ALTER TABLE t DROP COLUMN a",
+      "ALTER TABLE t RENAME TO u",
+      "UPDATE t SET a = 1",
+      "DELETE FROM t",
+      "INSERT OR REPLACE INTO t VALUES (1)",
+      "REPLACE INTO t VALUES (1)",
+      "CREATE TABLE u (a); /* then */ DROP TABLE t",
+    ]) {
+      expect(changesData(sql), sql).toBe(true);
+    }
+  });
+
+  it("is none of the migrations shipped so far: they only add", () => {
+    for (const m of env.TEST_MIGRATIONS) expect(changesData(m.queries.join(";\n")), m.name).toBe(false);
+  });
+});

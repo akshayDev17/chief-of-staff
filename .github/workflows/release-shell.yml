@@ -1,0 +1,127 @@
+name: Release shell
+
+# The shell Worker's own release unit (design-v3 2.4, 8.4, ADR-017): on main,
+# test with every migration applied to a fresh local database holding only
+# the made-up persona, then migrate the deployed D1, then deploy the Worker
+# as a tagged version. README "Releasing the shell" has the rules, the
+# rollback and the restore steps.
+#
+# Until T10 provides the Cloudflare token, the release stops after the tests
+# with a plain message and nothing touches any Cloudflare account.
+#
+# Secrets (T10): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, ACCESS_APP_DOMAIN,
+# OWNER_EMAIL. Variable: ACCESS_TEAM_DOMAIN.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shell/**'
+      - '.github/workflows/release-shell.yml'
+
+permissions:
+  contents: read
+
+# One release at a time, never cancelled half-way through a migration.
+concurrency:
+  group: release-shell
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the release and its tag
+    defaults:
+      run:
+        working-directory: shell
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # `make test` includes `make migrations`: every migration, in order, on a
+      # fresh local D1 holding only the persona. A failure stops the release.
+      - name: Check and test, migrations on a fresh local database first
+        run: make check test
+
+      - name: Skip while there is no Cloudflare token
+        id: gate
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Release skipped: CLOUDFLARE_API_TOKEN is not set (it arrives with T10). Nothing was migrated or deployed."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -q '"database_id": "00000000-0000-0000-0000-000000000000"' wrangler.jsonc; then
+            echo "::error::wrangler.jsonc still has the placeholder database_id; set the real one (T10) before releasing."
+            exit 1
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          echo "tag=shell-v$(node -p 'require("./package.json").version')-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      # Which migrations are pending, and D1's Time Travel bookmark when any
+      # of them may change or remove data.
+      - name: Plan the migrations
+        id: plan
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          plan="$(node scripts/release-migrations.mjs)"
+          echo "$plan"
+          echo "pending=$(node -e 'console.log(JSON.parse(process.argv[1]).pending.join(", ") || "none")' "$plan")" >> "$GITHUB_OUTPUT"
+          bookmark="$(node -e 'console.log(JSON.parse(process.argv[1]).bookmark ?? "")' "$plan")"
+          echo "bookmark=${bookmark}" >> "$GITHUB_OUTPUT"
+          # In the run's summary too, so it is on record even if a migration fails.
+          if [ -n "$bookmark" ]; then echo "Restore bookmark before migrating: \`${bookmark}\`" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      # Before the Worker that needs them. A failed file is rolled back by D1
+      # and stops the release here: the Worker is not deployed.
+      - name: Apply the migrations to the deployed database
+        if: steps.gate.outputs.go == 'true'
+        run: npx wrangler d1 migrations apply chief-of-staff --remote
+
+      # T15's Access application, created or updated; its AUD tag is the
+      # Worker's ACCESS_AUD.
+      - name: Sync the Access application
+        id: access
+        if: steps.gate.outputs.go == 'true'
+        env:
+          ACCESS_APP_DOMAIN: ${{ secrets.ACCESS_APP_DOMAIN }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+        run: |
+          result="$(node scripts/sync-access-app.mjs)"
+          echo "aud=$(node -e 'console.log(JSON.parse(process.argv[1]).aud)' "$result")" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy the Worker as a tagged version
+        if: steps.gate.outputs.go == 'true'
+        env:
+          TAG: ${{ steps.gate.outputs.tag }}
+          ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
+          ACCESS_AUD: ${{ steps.access.outputs.aud }}
+        run: |
+          npx wrangler deploy --tag "$TAG" --message "$TAG from ${GITHUB_SHA}" \
+            --var "ACCESS_TEAM_DOMAIN:${ACCESS_TEAM_DOMAIN}" --var "ACCESS_AUD:${ACCESS_AUD}"
+
+      - name: Record the release
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.gate.outputs.tag }}
+          PENDING: ${{ steps.plan.outputs.pending }}
+          BOOKMARK: ${{ steps.plan.outputs.bookmark }}
+        run: |
+          {
+            echo "Shell Worker version tagged \`${TAG}\`, from ${GITHUB_SHA}."
+            echo
+            echo "Migrations applied: ${PENDING}."
+            if [ -n "$BOOKMARK" ]; then
+              echo
+              echo "Restore bookmark recorded before migrating: \`${BOOKMARK}\`."
+              echo "Restoring is owner-approved only: \`npx wrangler d1 time-travel restore chief-of-staff --bookmark=${BOOKMARK}\`."
+            fi
+          } > release-notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file release-notes.md

@@ -18,12 +18,13 @@ check: $(INSTALLED)
 test: $(INSTALLED) migrations rollback-check
 	$(NPM) test
 
-# Apply every migration, in order, to a fresh local D1 database with
-# Cloudflare's own tool (design-v3 8.4); a failing file fails the build.
+# Apply every migration, in order, to a fresh local D1 database holding only
+# the made-up persona, with Cloudflare's own tool (design-v3 8.4); a failing
+# file fails the build (scripts/check-migrations.mjs).
 MIGRATIONS_CHECK_DB := .wrangler/migrations-check
 migrations: $(INSTALLED)
 	rm -rf $(MIGRATIONS_CHECK_DB)
-	CI=1 npx wrangler d1 migrations apply chief-of-staff --local --persist-to $(MIGRATIONS_CHECK_DB) < /dev/null
+	node scripts/check-migrations.mjs $(MIGRATIONS_CHECK_DB)
 
 # Run the price-table rollback script against a fresh local D1 and check
 # what it changed (scripts/check-price-rollback.mjs).
