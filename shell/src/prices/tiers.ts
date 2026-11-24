@@ -8,10 +8,12 @@
 // it, the highest price, so the tier never rests on a price lower than the
 // vendor can charge there. Every other row of the model carries that tier.
 //
-// On Vertex AI that highest regional price is an interim, conservative rule:
-// the app has no default Vertex AI region yet. T16 names it and replaces the
-// rule with that region's price.
+// On Vertex AI the price is the one at the app's default location for the
+// model (src/providers/vertex-locations.ts, T16), then Global. A model the app
+// names no default location for keeps the conservative rule: the highest
+// regional price, then Global.
 
+import { vertexDefaultLocation } from "../providers/vertex-locations";
 import type { Deployment, PriceRow, Provider } from "./types";
 
 export type Tier = "Smallest" | "Middle" | "Strongest";
@@ -29,6 +31,13 @@ export const TIER_DEPLOYMENTS: Record<Provider, readonly Deployment[]> = {
 // is a standard input price.
 export function modelTier(provider: Provider, rows: PriceRow[]): Tier | undefined {
   const inputs = rows.filter((r) => r.provider === provider && r.tokenKind === "input" && !r.longPrompt && !r.batch);
+  const home = provider === "vertex" && inputs[0] ? vertexDefaultLocation(inputs[0].model) : undefined;
+  if (home) {
+    for (const region of [home, "global"]) {
+      const prices = inputs.filter((r) => r.region === region).map((r) => r.usdPerMTok);
+      if (prices.length) return tierFromInputPrice(Math.max(...prices));
+    }
+  }
   for (const deployment of TIER_DEPLOYMENTS[provider]) {
     const prices = inputs.filter((r) => r.deployment === deployment).map((r) => r.usdPerMTok);
     if (prices.length) return tierFromInputPrice(Math.max(...prices));

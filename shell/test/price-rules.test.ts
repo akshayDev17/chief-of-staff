@@ -32,7 +32,16 @@ describe("one tier per model at each provider", () => {
     expect(modelTier("foundry", [input("foundry", "regional", "eastus2", 0.6)])).toBe("Middle");
   });
 
-  it("takes Vertex AI's regional price over its Global one, the highest region counting for now", () => {
+  it("takes Vertex AI's price at the app's default location for the model, then Global", () => {
+    const sonnet = { model: "Claude Sonnet 5.5" };
+    // The default for Claude Sonnet 5.5 is the us multi-region, not the dearer europe-west1.
+    expect(modelTier("vertex", [input("vertex", "regional", "us", 2.4, sonnet), input("vertex", "regional", "europe-west1", 2.64, sonnet), input("vertex", "global", "global", 2.6, sonnet)])).toBe("Middle");
+    expect(modelTier("vertex", [input("vertex", "regional", "europe-west1", 2.64, sonnet), input("vertex", "global", "global", 2.4, sonnet)])).toBe("Middle");
+    const opus46 = { model: "Claude Opus 4.6" };
+    expect(modelTier("vertex", [input("vertex", "regional", "us-east5", 2.6, opus46), input("vertex", "global", "global", 2.4, opus46)])).toBe("Strongest");
+  });
+
+  it("keeps the highest regional Vertex AI price for a model the app names no default location for", () => {
     expect(modelTier("vertex", [input("vertex", "global", "global", 2.4), input("vertex", "regional", "us-east5", 2.4), input("vertex", "regional", "europe-west1", 2.64)])).toBe("Strongest");
     expect(modelTier("vertex", [input("vertex", "global", "global", 0.3)])).toBe("Smallest");
   });

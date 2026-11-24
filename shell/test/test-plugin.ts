@@ -3,7 +3,7 @@
 // like a secret (so tests can check it is never stored or logged), and
 // answers each call from a queue of scripted replies.
 import { env } from "cloudflare:test";
-import type { ConnectionFields, ProviderPlugin, ProviderReply, Usage } from "../src/proxy/plugin";
+import { ProviderRefusal, type ConnectionFields, type ProviderPlugin, type ProviderReply, type Usage } from "../src/proxy/plugin";
 import { writeSnapshot } from "../src/prices/store";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
@@ -14,16 +14,33 @@ export interface TestPlugin extends ProviderPlugin {
   minted: string[];
 }
 
-export const testPlugin = (provider: Provider, opts: { failMint?: boolean } = {}): TestPlugin => {
+export const testPlugin = (provider: Provider, opts: { failMint?: boolean; refuseMint?: boolean } = {}): TestPlugin => {
   const plugin: TestPlugin = {
     provider,
     version: `test-${provider}-1`,
     connectionFields: ["account", "region"],
+    priceSource: ["maintainer-read"],
+    connect: {
+      guide: {
+        name: `Test ${provider}`, short: provider, vendor: provider, recommendedForFriends: false, steps: [], checkedOn: "2026-11-25",
+        pages: [], revoke: "remove the test grant.", regionChoice: true,
+      },
+      fields: [{ name: "account", label: "Account", placeholder: "123456789012", pattern: "\\d{12}", problem: "12 digits." }],
+      start: (typed) => ({ kind: "connection", fields: { account: typed.account!, region: "global" } }),
+      testModel: provider === "vertex" ? "test-gemini" : "test-sonnet",
+      locations: () => ["global"],
+      locationLabel: (l) => l,
+      modelId: (m) => m,
+      testRequest: () => ({ prompt: "test" }),
+      replyText: () => "OK",
+      classify: (f) => ({ reason: f.step === "credential" || f.status === 403 ? "not_set_up" : f.status === 429 ? "busy" : "refused", fix: "", links: [] }),
+    },
     replies: [],
     calls: [],
     minted: [],
     async mintCredential(connection: ConnectionFields) {
       if (opts.failMint) throw new Error(`grant revoked for ${connection.account}`);
+      if (opts.refuseMint) throw new ProviderRefusal({ step: "AssumeRole", status: 403, errorName: "AccessDenied", message: `not authorized for ${connection.account}` });
       const credential = `minted-secret-${provider}-${crypto.randomUUID()}`;
       plugin.minted.push(credential);
       return credential;

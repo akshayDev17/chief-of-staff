@@ -8,7 +8,8 @@
 // - no plug-in serves the provider (`no_plugin`);
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
-// - the user has set no monthly budget for the provider (`no_budget`);
+// - the user has set no monthly budget for the provider (`no_budget`), except
+//   for a Connect test call (`testCall`), which runs before budgets are set;
 // - the user's spend at the provider since the 1st has reached the budget
 //   (`budget_spent`), until the 1st of next month;
 // - the user has not connected the provider (`not_connected`), or the
@@ -30,14 +31,21 @@
 // maintainers get a `price_missing` alert. The
 // request and reply bodies pass through untouched and are never logged or
 // stored; the credential lives only for the call.
+//
+// A refusal the plug-in reads as the grant removed on the provider's side
+// (`connect.classify` says `not_set_up`), whether minting the credential or
+// in the call itself, stops the provider at once and is recorded for T49's
+// alert.
 
+import { AppNotConfigured } from "../issuer";
 import { lookupPrice, lookupTier, type PriceAnswer } from "../prices/lookup";
 import { addAlertOncePerDay } from "../prices/store";
 import type { Provider, TokenKind } from "../prices/types";
 import { readBudget } from "./budgets";
 import { readConnection } from "./connections";
 import { monthSpend, nextMonthStart, writeLedgerRow } from "./ledger";
-import { fallbackAnswers, type ModelRequest, type PluginRegistry, type Usage } from "./plugin";
+import { recordGrantRefused } from "../providers/revoked";
+import { fallbackAnswers, ProviderRefusal, type Failure, type ModelRequest, type PluginRegistry, type Usage } from "./plugin";
 
 export interface ModelChoice {
   provider: Provider;
@@ -61,11 +69,26 @@ export interface ModelCall {
 
 export type Refusal = "no_plugin" | "no_price" | "no_budget" | "budget_spent" | "not_connected" | "credential_failed";
 
+export const TEST_TASK = "test_call";
+
 export type ProxyOutcome =
-  | { kind: "answered"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown }
-  // The provider's own refusal or failure, passed back as it came.
-  | { kind: "provider_error"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown }
-  | { kind: "refused"; provider: Provider; model: string; fallback: boolean; reason: Refusal; detail: string; resumesOn?: string };
+  | { kind: "answered"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown; usage: Usage; costUsd: number }
+  // The provider's own refusal or failure, passed back as it came; `failure`
+  // is its status, error name and message, absent when it did not reply.
+  | { kind: "provider_error"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown; failure?: Failure }
+  // On `credential_failed`: the provider's own refusal (`failure`), or the
+  // app's own settings still missing (`missing`).
+  | {
+      kind: "refused";
+      provider: Provider;
+      model: string;
+      fallback: boolean;
+      reason: Refusal;
+      detail: string;
+      resumesOn?: string;
+      failure?: Failure;
+      missing?: string[];
+    };
 
 // Each usage count and the price-table row it is costed at.
 const USAGE_KINDS: ReadonlyArray<readonly [Exclude<keyof Usage, "longPrompt">, TokenKind]> = [
@@ -108,7 +131,7 @@ export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
 }
 
 // The model's list prices at its location, at the short- or long-prompt rows.
-async function listPrices(db: D1Database, { provider, model, location }: ModelChoice, longPrompt: boolean): Promise<Prices> {
+export async function listPrices(db: D1Database, { provider, model, location }: ModelChoice, longPrompt: boolean): Promise<Prices> {
   const answers = await Promise.all(USAGE_KINDS.map(([, tokenKind]) => lookupPrice(db, { provider, model, location, tokenKind, longPrompt })));
   return Object.fromEntries(USAGE_KINDS.map(([, kind], i) => [kind, answers[i]]));
 }
@@ -124,10 +147,17 @@ async function attempt(
   choice: ModelChoice,
   fallbackReason: "refused" | "budget_spent" | undefined,
   now: () => Date,
+  testCall = false,
 ): Promise<ProxyOutcome> {
   const { provider, model, location } = choice;
   const base = { provider, model, fallback: fallbackReason !== undefined };
-  const refuse = (reason: Refusal, detail: string, resumesOn?: string): ProxyOutcome => ({ kind: "refused", ...base, reason, detail, resumesOn });
+  const refuse = (reason: Refusal, detail: string, extra?: { resumesOn?: string; failure?: Failure; missing?: string[] }): ProxyOutcome => ({
+    kind: "refused",
+    ...base,
+    reason,
+    detail,
+    ...extra,
+  });
 
   const plugin = plugins[provider];
   if (!plugin) return refuse("no_plugin", `${PROVIDER_NAMES[provider]} is not available yet`);
@@ -136,32 +166,46 @@ async function attempt(
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);
 
   const budget = await readBudget(db, call.userId, provider);
-  if (!budget) return refuse("no_budget", `set a monthly budget for ${PROVIDER_NAMES[provider]} on Models › Setup › Budgets`);
+  if (!budget && !testCall) return refuse("no_budget", `set a monthly budget for ${PROVIDER_NAMES[provider]} on Models › Setup › Budgets`);
   const startedAt = now();
-  if ((await monthSpend(db, call.userId, provider, startedAt)) >= budget.monthlyUsd) {
+  if (budget && (await monthSpend(db, call.userId, provider, startedAt)) >= budget.monthlyUsd) {
     const resumesOn = RESUMES.format(nextMonthStart(startedAt));
-    return refuse("budget_spent", `model budget for ${PROVIDER_NAMES[provider]} this month reached. Resumes ${resumesOn}`, resumesOn);
+    return refuse("budget_spent", `model budget for ${PROVIDER_NAMES[provider]} this month reached. Resumes ${resumesOn}`, { resumesOn });
   }
 
   const connection = await readConnection(db, call.userId, provider);
   if (!connection) return refuse("not_connected", `${PROVIDER_NAMES[provider]} is not connected`);
+  const recordIfRevoked = async (failure: Failure): Promise<void> => {
+    if (plugin.connect.classify(failure, connection).reason === "not_set_up") await recordGrantRefused(db, call.userId, provider, now());
+  };
   let credential: unknown;
   try {
     credential = await plugin.mintCredential(connection);
-  } catch {
+  } catch (error) {
+    let failure: Failure | undefined;
+    if (error instanceof ProviderRefusal) {
+      const { step, status, errorName, message } = error.refusal;
+      failure = { step: "credential", exchange: step, status, errorName, message };
+      await recordIfRevoked(failure);
+    }
     // The plug-in's own error is not repeated: it may quote the connection.
-    return refuse("credential_failed", `the ${PROVIDER_NAMES[provider]} connection gave no credential; it may have been revoked`);
+    return refuse("credential_failed", `the ${PROVIDER_NAMES[provider]} connection gave no credential; it may have been revoked`, {
+      failure,
+      missing: error instanceof AppNotConfigured ? error.missing : undefined,
+    });
   }
 
   const t0 = Date.now();
   let status: number;
   let body: unknown;
+  let failure: Failure | undefined;
   let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
   try {
     const reply = await plugin.call({ credential, connection, model, location, request: choice.request });
     status = reply.status;
     body = reply.body;
     if (reply.usage) usage = reply.usage;
+    if (status < 200 || status >= 300) failure = { step: "call", status, errorName: reply.error?.name ?? `HTTP ${status}`, message: reply.error?.message ?? "" };
   } catch {
     // No reply at all: the provider failing, as a 5xx is.
     status = 0;
@@ -201,8 +245,12 @@ async function attempt(
     if (await addAlertOncePerDay(db, startedAt, "price_missing", detail)) console.warn(`price missing: ${detail}`);
   }
 
-  const kind = status >= 200 && status < 300 ? "answered" : "provider_error";
-  return { kind, ...base, status, body };
+  if (failure) {
+    await recordIfRevoked(failure);
+    return { kind: "provider_error", ...base, status, body, failure };
+  }
+  if (status === 0) return { kind: "provider_error", ...base, status, body };
+  return { kind: "answered", ...base, status, body, usage, costUsd: cost.usd };
 }
 
 // Why the main model's outcome hands the call to the fallback, or undefined
@@ -227,4 +275,12 @@ export async function callModel(
   const reason = handOver(main);
   if (!reason || !call.fallback) return main;
   return attempt(db, plugins, call, call.fallback, reason, now);
+}
+
+// The Connect test call (src/providers/check.ts): one call on `choice`, with
+// every check above except that no budget need be set yet (budgets come after
+// providers on the setup checklist); a budget set and spent still stops it.
+// Its ledger row's task is `test_call`, and it has no fallback.
+export async function sendTestCall(db: D1Database, plugins: PluginRegistry, userId: string, choice: ModelChoice, now: () => Date): Promise<ProxyOutcome> {
+  return attempt(db, plugins, { userId, task: TEST_TASK, main: choice }, choice, undefined, now, true);
 }

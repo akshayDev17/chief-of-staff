@@ -9,7 +9,7 @@ import { cloudflareApi, readInputs, syncAccessApp } from "./access-app.mjs";
 try {
   const inputs = readInputs(process.env);
   const result = await syncAccessApp(cloudflareApi(inputs.token), inputs);
-  console.log(JSON.stringify({ appId: result.appId, aud: result.aud, policyId: result.policyId, created: result.created }));
+  console.log(JSON.stringify({ appId: result.appId, aud: result.aud, policyId: result.policyId, issuerAppId: result.issuerAppId, created: result.created }));
 } catch (error) {
   console.error(`sync-access-app: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

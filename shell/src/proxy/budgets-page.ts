@@ -7,10 +7,11 @@
 // design's tokens per application (budgets.ts) at the volume the user plans.
 // The user accepts it with one tap or types their own; until then the card
 // says the provider's models cannot be called. Pages not built yet (Usage,
-// Providers, Add a model, Model for each task) are named but not linked.
+// Add a model, Model for each task) are named but not linked.
 
-import { esc, nbDate, PAGE_CSS } from "../prices/page";
+import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
+import { rerunBudgetWait } from "../providers/check";
 import {
   DEFAULT_APPLICATIONS_A_DAY,
   parseBudget,
@@ -22,6 +23,7 @@ import {
   type Suggestion,
 } from "./budgets";
 import { connectedProviders } from "./connections";
+import type { PluginRegistry } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
 
@@ -90,13 +92,13 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Models · Budgets · Chief of staff</title>
-<style>${PAGE_CSS}${CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}</style>
 </head>
 <body>
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px">Providers · <strong>Budgets</strong> · Add a model · Model for each task</p>
+<p class="small" style="margin:-4px 0 10px"><a href="/models/setup/providers">Providers</a> · <strong>Budgets</strong> · Add a model · Model for each task</p>
 <h2>Budgets, one per provider</h2>
 <p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st; a task's fallback on another provider carries on within that provider's own budget.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
@@ -118,18 +120,6 @@ const CSS = `
 .grid > .card { margin-top: 0; }
 .card h3 { margin: 10px 0 6px; }
 .big { font-size: 1.6rem; font-weight: 500; line-height: 1.1; margin: 4px 0; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
-.subtabs > span { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: .85rem; background: var(--card); }
-.subtabs > span.on { border-color: var(--accent); }
-.subtabs > span[aria-disabled] { color: var(--muted); }
-.btn { display: inline-flex; align-items: center; font: inherit; font-weight: 500; font-size: .9rem; padding: 4px 10px; min-height: 30px;
-  border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--card); cursor: pointer; }
-.btn.secondary { background: var(--card); color: var(--accent); }
-.btn:focus-visible, input.f:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-input.f { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); width: 100%; }
-.ok-line { color: var(--ok); font-weight: 500; }
-.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;
 
 const PROVIDERS: readonly Provider[] = ["bedrock", "foundry", "vertex"];
@@ -158,9 +148,10 @@ async function pageInput(db: D1Database, userId: string, applicationsADay: numbe
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
 // GET shows the page; POST sets one provider's budget from the typed amount
-// or, when none is typed, the accepted suggestion, then shows the page again. Scoped to the
-// signed-in user throughout.
-export async function handleBudgets(request: Request, db: D1Database, userId: string, now: Date): Promise<Response> {
+// or, when none is typed, the accepted suggestion, re-runs that provider's
+// test call if it was waiting for a spent budget, then shows the page again.
+// Scoped to the signed-in user throughout.
+export async function handleBudgets(request: Request, db: D1Database, plugins: PluginRegistry, userId: string, now: Date): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET") {
     return html(renderBudgetsPage(await pageInput(db, userId, parseApplicationsADay(url.searchParams.get("per_day")), now)));
@@ -186,5 +177,6 @@ export async function handleBudgets(request: Request, db: D1Database, userId: st
     return refuse("Type a budget in dollars, more than $0, for example 30.");
   }
   await setBudget(db, userId, provider, amount, typed ? "typed" : "accepted", now);
+  await rerunBudgetWait(db, plugins, userId, provider, now);
   return Response.redirect(`${url.origin}${BUDGETS_PATH}?per_day=${applicationsADay}`, 303);
 }

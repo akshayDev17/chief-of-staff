@@ -295,3 +295,19 @@ td[data-l="Input / M"], td[data-l="Output / M"] { white-space: nowrap; font-vari
   table.stackable td::before { content: attr(data-l); display: block; font-size: .75rem; color: var(--muted); font-weight: 600; }
 }
 `;
+
+// Form controls, sub-tabs and buttons, shared by the Models › Setup pages.
+export const CONTROLS_CSS = `
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.subtabs > span { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: .85rem; background: var(--card); }
+.subtabs > span.on { border-color: var(--accent); }
+.subtabs > span[aria-disabled] { color: var(--muted); }
+.btn { display: inline-flex; align-items: center; font: inherit; font-weight: 500; font-size: .9rem; padding: 4px 10px; min-height: 30px;
+  border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--card); cursor: pointer; text-decoration: none; }
+.btn.secondary { background: var(--card); color: var(--accent); }
+.btn:focus-visible, input.f:focus-visible, select.f:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input.f, select.f { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); width: 100%; }
+.ok-line { color: var(--ok); font-weight: 500; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+`;
