@@ -109,7 +109,7 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
       steps: [
         "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). For Claude: its Model Garden card → Enable.",
         "Type your project ID and tap <strong>Connect Google Vertex AI</strong>.",
-        "Run the one-line Cloud Shell command shown, which makes a role that can only call models.",
+        "Run the one-line Cloud Shell command shown, which makes a role that can only call models. If you cannot create custom roles, use Google's <strong>Vertex AI User</strong> role (<code>roles/aiplatform.user</code>) instead.",
         "In IAM → Grant access, paste the app's service-account email (copy button), pick that role and Save. No key file is made.",
       ],
       checkedOn: "2026-11-25",
@@ -168,7 +168,7 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
         return { reason: "not_allowed_yet", fix: "Turn on billing for the project, then try again.", links: [{ label: "Open Billing", href: consoleLink("billing/linkedaccount", connection?.projectId) }] };
       }
       if (f.status === 401 || f.status === 403 || /PERMISSION_DENIED|UNAUTHENTICATED/.test(f.errorName)) {
-        return { reason: "not_set_up", fix: "Grant the app's service account its role on your project, then try again.", links: [iamLink(connection)] };
+        return { reason: "not_set_up", fix: "Grant the app's service account its role on your project (the one the Cloud Shell command made, else Vertex AI User, roles/aiplatform.user), then try again.", links: [iamLink(connection)] };
       }
       if (f.status === 404 || /NOT_FOUND/.test(f.errorName)) {
         return { reason: "no_such_model", fix: "Change the region, or pick a model the project offers there.", links: [] };

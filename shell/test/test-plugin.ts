@@ -33,7 +33,7 @@ export const testPlugin = (provider: Provider, opts: { failMint?: boolean; refus
       modelId: (m) => m,
       testRequest: () => ({ prompt: "test" }),
       replyText: () => "OK",
-      classify: (f) => ({ reason: f.step === "credential" ? "not_set_up" : f.status === 429 ? "busy" : "refused", fix: "", links: [] }),
+      classify: (f) => ({ reason: f.step === "credential" || f.status === 403 ? "not_set_up" : f.status === 429 ? "busy" : "refused", fix: "", links: [] }),
     },
     replies: [],
     calls: [],

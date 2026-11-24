@@ -13,35 +13,23 @@
 // A connection that had passed and then loses its grant is recorded as
 // revoked, for T49's urgent alert.
 //
-// A test call is a real call to the user's own provider: it writes a ledger
-// row (task `test_call`) costed at the price table's list price, like every
-// other call. It needs that price, as every call does; it runs before any
-// budget is set (budgets come after providers), and waits when one is set
-// and spent.
+// A test call is a real call to the user's own provider, sent through the
+// proxy (`sendTestCall`), which prices it, writes its ledger row (task
+// `test_call`) and records a removed grant, as for every call. It needs the
+// model's list price, as every call does; it runs before any budget is set
+// (budgets come after providers on the setup checklist), and waits when one
+// is set and spent.
 
-import { lookupTier } from "../prices/lookup";
 import type { Provider } from "../prices/types";
 import { AppNotConfigured } from "../issuer";
-import { readBudget } from "../proxy/budgets";
 import { connectedAt, deleteConnection, readConnection, writeConnection } from "../proxy/connections";
-import { monthSpend, nextMonthStart, writeLedgerRow } from "../proxy/ledger";
-import {
-  ConnectProblem,
-  ProviderRefusal,
-  type ConnectionFields,
-  type Failure,
-  type Link,
-  type PlainReason,
-  type PluginRegistry,
-  type ProviderPlugin,
-  type Usage,
-} from "../proxy/plugin";
-import { costOf, listPrices, PROVIDER_NAMES } from "../proxy/proxy";
+import { nextMonthStart } from "../proxy/ledger";
+import { ConnectProblem, type ConnectionFields, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
+import { PROVIDER_NAMES, sendTestCall } from "../proxy/proxy";
 
 export const RETRY_MINUTES = 15;
 export const POLL_MINUTES = 1;
 export const SETUP_WINDOW_MINUTES = 60;
-export const TEST_TASK = "test_call";
 
 export type CheckState = "checking" | "passed" | "switching_on" | "failed" | "revoked";
 
@@ -192,12 +180,7 @@ async function testChoice(db: D1Database, userId: string, plugin: ProviderPlugin
   return { model, location };
 }
 
-function failureOf(error: unknown, step: Failure["step"]): Failure | undefined {
-  if (error instanceof ProviderRefusal) return { step, exchange: error.refusal.step, status: error.refusal.status, errorName: error.refusal.errorName, message: error.refusal.message };
-  return undefined;
-}
-
-// Mints a credential and makes the test call, then records the result.
+// Makes the test call through the proxy, then records the result.
 export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date): Promise<Check | undefined> {
   const plugin = plugins[provider];
   const connection = await readConnection(db, userId, provider);
@@ -218,68 +201,46 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
 
   const wait = async (reason: Waiting, nextTryAt: string): Promise<Check> => {
     const result: CheckResult = { ...head, verdict: "failed", reason };
-    const c: Check = { ...base, state: before?.state === "passed" ? "passed" : "failed", result, nextTryAt };
+    const c: Check = { ...base, state: before?.state === "passed" || before?.state === "revoked" ? before.state : "failed", result, nextTryAt };
     await saveCheck(db, userId, c);
     return c;
   };
-  const budget = await readBudget(db, userId, provider);
-  if (budget && (await monthSpend(db, userId, provider, now)) >= budget.monthlyUsd) return wait("budget_spent", nextMonthStart(now).toISOString());
-  const choice = { provider, model, location, request: null };
-  const prices = await listPrices(db, choice, false);
-  if (!prices.input || !prices.output) return wait("no_price", minutesAfter(now, RETRY_MINUTES));
+  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, request: plugin.connect.testRequest(model, location) }, () => now);
+  if (outcome.kind === "refused" && outcome.reason === "budget_spent") return wait("budget_spent", nextMonthStart(now).toISOString());
+  if (outcome.kind === "refused" && outcome.reason === "no_price") return wait("no_price", minutesAfter(now, RETRY_MINUTES));
 
-  let credential: unknown;
-  let failure: Failure | undefined;
   let result: CheckResult;
-  try {
-    credential = await plugin.mintCredential(connection);
-  } catch (error) {
-    failure = failureOf(error, "credential");
-    if (!failure) {
-      const note = error instanceof AppNotConfigured ? `Admin's one-time setup is missing ${error.missing.join(", ")}.` : `No answer from ${plugin.connect.guide.short} while connecting.`;
-      return record(db, userId, plugin, base, before, { ...head, verdict: "failed", reason: error instanceof AppNotConfigured ? "app_not_configured" : "no_reply", note }, now);
-    }
-  }
-
-  if (failure) {
-    result = { ...head, verdict: "failed", reply: { status: failure.status, errorName: failure.errorName, message: failure.message } };
-  } else {
-    const t0 = Date.now();
-    let status = 0;
-    let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
-    let reply: Awaited<ReturnType<ProviderPlugin["call"]>> | undefined;
-    try {
-      reply = await plugin.call({ credential, connection, model, location, request: plugin.connect.testRequest(model, location) });
-      status = reply.status;
-      if (reply.usage) usage = reply.usage;
-    } catch {
-      reply = undefined;
-    }
-    const cost = costOf(usage, prices, await listPrices(db, choice, true));
-    await writeLedgerRow(db, {
-      userId, at: now, task: TEST_TASK, site: "none", provider, model, region: location,
-      tier: await lookupTier(db, { provider, model }), pluginVersion: plugin.version, status,
-      inputTokens: usage.input, cachedInputTokens: usage.cachedInput, cacheWriteTokens: usage.cacheWrite,
-      cacheWrite1hTokens: usage.cacheWrite1h, outputTokens: usage.output, longPrompt: usage.longPrompt,
-      durationMs: Date.now() - t0, costUsd: cost.usd, costedConservatively: cost.conservative,
-    });
-    if (!reply) {
-      result = { ...head, verdict: "failed", reason: "no_reply", note: `${plugin.connect.guide.short} did not answer the test call.` };
-    } else if (status >= 200 && status < 300) {
-      result = { ...head, verdict: "passed", reply: { status, text: plugin.connect.replyText(reply.body) }, usage, costUsd: cost.usd };
-    } else {
-      failure = { step: "call", status, errorName: reply.error?.name ?? `HTTP ${status}`, message: reply.error?.message ?? "" };
-      result = { ...head, verdict: "failed", reply: { status, errorName: failure.errorName, message: failure.message } };
-    }
-  }
-  if (failure) {
+  if (outcome.kind === "answered") {
+    result = { ...head, verdict: "passed", reply: { status: outcome.status, text: plugin.connect.replyText(outcome.body) }, usage: outcome.usage, costUsd: outcome.costUsd };
+  } else if (outcome.failure) {
+    const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
-    result = { ...result, verdict: plain.reason === "switching_on" ? "switching_on" : "failed", reason: plain.reason, fix: plain.fix, links: plain.links };
+    result = {
+      ...head,
+      verdict: plain.reason === "switching_on" ? "switching_on" : "failed",
+      reason: plain.reason,
+      reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
+      fix: plain.fix,
+      links: plain.links,
+    };
+  } else if (outcome.kind === "refused" && outcome.missing) {
+    result = { ...head, verdict: "failed", reason: "app_not_configured", note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` };
+  } else if (outcome.kind === "refused" && outcome.reason === "credential_failed") {
+    result = { ...head, verdict: "failed", reason: "no_reply", note: `No answer from ${plugin.connect.guide.short} while connecting.` };
+  } else if (outcome.kind === "provider_error") {
+    result = { ...head, verdict: "failed", reason: "no_reply", note: `${plugin.connect.guide.short} did not answer the test call.` };
+  } else {
+    // The connection went while the check ran.
+    return before;
   }
   const recorded = await record(db, userId, plugin, base, before, result, now);
-  if (result.verdict === "passed" && plugin.connect.readSetupVersion && credential !== undefined) {
-    // Bedrock: the template version in the user's own stack; best effort.
-    const version = await plugin.connect.readSetupVersion(credential, connection).catch(() => undefined);
+  if (result.verdict === "passed" && plugin.connect.readSetupVersion) {
+    // Bedrock: the template version in the user's own stack, read with a
+    // credential of its own; best effort.
+    const version = await plugin
+      .mintCredential(connection)
+      .then((credential) => plugin.connect.readSetupVersion?.(credential, connection))
+      .catch(() => undefined);
     if (version && version !== recorded.templateVersion) {
       recorded.templateVersion = version;
       await saveCheck(db, userId, recorded);

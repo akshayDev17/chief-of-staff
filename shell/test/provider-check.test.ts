@@ -166,6 +166,30 @@ describe("the automatic test call", () => {
     expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "mars-1", at(3))).toMatch(/not offered at that region/);
   });
 
+  it("runs before any budget is set, through the proxy: a kind with no price row raises price_missing", async () => {
+    const { world, plugins } = awsWorld();
+    world.stack = true;
+    world.converse = () => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3, cacheWriteInputTokens: 10 } });
+    await connectBedrock(plugins);
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed" });
+    const [row] = await ledger();
+    expect(row).toMatchObject({ task: "test_call", status: 200 });
+    expect(JSON.parse(row!.costed_conservatively as string)).toEqual({ cache_write_1h: 0.5 });
+    const { results } = await env.DB.prepare("SELECT kind, detail FROM price_alerts").all<{ kind: string; detail: string }>();
+    expect(results).toEqual([{ kind: "price_missing", detail: expect.stringContaining("Claude Haiku 5.5 at Amazon Bedrock (global) has no list price for cache_write_1h") }]);
+  });
+
+  it("keeps a revoked connection revoked while the test call waits for a spent budget", async () => {
+    const { world, plugins } = awsWorld();
+    world.stack = true;
+    await connectBedrock(plugins);
+    world.stack = false;
+    await runCheck(env.DB, plugins, userId, "bedrock", at(120));
+    await setBudget(env.DB, userId, "bedrock", 0.000001, "typed", T0);
+    await runCheck(env.DB, plugins, userId, "bedrock", at(125));
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "revoked", revokedAt: at(120).toISOString(), result: { reason: "budget_spent" } });
+  });
+
   it("waits while the month's budget is spent, and while the model has no price", async () => {
     const { world, plugins } = awsWorld();
     world.stack = true;
@@ -227,6 +251,27 @@ describe("a real call that finds the grant gone", () => {
     const outcome = await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
     expect(outcome).toMatchObject({ kind: "refused", reason: "credential_failed" });
     expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "revoked", revokedAt: at(5).toISOString() });
+  });
+
+  it("is recorded as revoked when the credential still mints but the call is refused as not set up (a Vertex AI grant or Foundry role removed)", async () => {
+    const plugin = testPlugin("bedrock");
+    await writeConnection(env.DB, userId, plugin, { account: "123456789012", region: "global" }, T0);
+    await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at) VALUES (?, 'bedrock', 'passed', ?)").bind(userId, T0.toISOString()).run();
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    plugin.replies.push({ status: 403, body: {}, error: { name: "PERMISSION_DENIED", message: "Permission denied on resource project example-project-123." } });
+    const outcome = await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
+    expect(outcome).toMatchObject({ kind: "provider_error", status: 403 });
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "revoked", revokedAt: at(5).toISOString() });
+  });
+
+  it("is not called revoked when the call is refused for another reason", async () => {
+    const plugin = testPlugin("bedrock");
+    await writeConnection(env.DB, userId, plugin, { account: "123456789012", region: "global" }, T0);
+    await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at) VALUES (?, 'bedrock', 'passed', ?)").bind(userId, T0.toISOString()).run();
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    plugin.replies.push({ status: 400, body: {}, error: { name: "ValidationException", message: "bad request" } });
+    await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
+    expect((await readCheck(env.DB, userId, "bedrock"))!.state).toBe("passed");
   });
 
   it("is not called revoked when minting fails for another reason", async () => {

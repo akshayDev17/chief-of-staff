@@ -25,7 +25,8 @@ The three real plug-ins (Bedrock, Foundry, Vertex AI) and the OpenID Connect
 issuer they mint from are in `src/providers/` and `src/issuer.ts` (T16);
 `test/test-plugin.ts` is the test-only one. A credential the provider refuses
 in a way the plug-in reads as the grant removed (`connect.classify` says
-`not_set_up`) also records the connection as revoked, for T49's alert
+`not_set_up`), whether minting the credential or in the call itself, also
+records the connection as revoked, for T49's alert
 (`src/providers/revoked.ts`).
 
 ## What the proxy does with a call
@@ -42,7 +43,9 @@ in a way the plug-in reads as the grant removed (`connect.classify` says
    rate used (`costed_conservatively`), and the maintainers get a
    `price_missing` alert on Admin · Price table, at most one a UTC day for
    each model, location and token kind.
-2. Enforces the provider's monthly budget: none set is refused (`no_budget`);
+2. Enforces the provider's monthly budget: none set is refused (`no_budget`),
+   except for the Connect test call (`sendTestCall`, task `test_call`), which
+   runs before budgets are set;
    the user's spend at that provider since 00:00 UTC on the 1st reaching it is
    refused (`budget_spent`) until the 1st, with the date it resumes. The call
    that crosses the budget is the last one: the check runs before each call,

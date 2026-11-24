@@ -101,9 +101,12 @@ After "Connect", the test call runs by itself; there is no test-call button.
 - A connection whose test call had passed and then loses its grant, found by
   the check or by a real call through the proxy, is recorded as `revoked`
   (`provider_checks.state`), for T49's urgent alert.
-- A test call is a real call: it writes a ledger row (`task` `test_call`),
-  costed at the list price. It needs that price, as every call does, and
-  waits while a budget is set and spent.
+- A test call is a real call, sent through the proxy (`sendTestCall` in
+  `src/proxy/proxy.ts`), which prices it, writes its ledger row (`task`
+  `test_call`), raises `price_missing` and records a removed grant as for any
+  call. It needs the model's list price, as every call does; it needs no
+  budget yet (budgets come after providers on the checklist), and waits while
+  one is set and spent.
 - Each result is three lines, shown only to the user who made the call: the
   plain reason, the provider's own reply, the fix. "Ask Admin for help"
   (friends only) records the item's name and the plain reason in
