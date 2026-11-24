@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error: a plain JavaScript module run by Node at deploy time.
-import { APP_NAME, POLICY_NAME, cloudflareApi, readInputs, syncAccessApp } from "../scripts/access-app.mjs";
+import { APP_NAME, ISSUER_APP_NAME, ISSUER_PATHS, ISSUER_POLICY_NAME, POLICY_NAME, cloudflareApi, readInputs, syncAccessApp } from "../scripts/access-app.mjs";
+import { PUBLIC_ISSUER_PATHS } from "../src/issuer";
 
 const EMAIL = "morgan.sample@example.com";
 const INPUTS = { accountId: "acct", domain: "cos.example.com", ownerEmail: EMAIL };
@@ -13,8 +14,9 @@ const fakeApi = (state: { policies: any[]; apps: any[] }) => {
     calls.push({ method, path, body });
     if (method === "GET" && path.includes("/policies")) return state.policies;
     if (method === "GET" && path.includes("/apps")) return state.apps;
-    if (path.includes("/policies")) return { id: path.split("/").pop() === "policies" ? "pol-new" : "pol-1", ...body };
-    return { id: path.split("/").pop() === "apps" ? "app-new" : "app-1", aud: "aud-tag", ...body };
+    const last = path.split("/").pop();
+    if (path.includes("/policies")) return { id: last === "policies" ? `pol-new-${body.decision}` : last, ...body };
+    return { id: last === "apps" ? `app-new-${body.policies[0].id}` : last, aud: "aud-tag", ...body };
   };
   return { calls, request };
 };
@@ -23,34 +25,58 @@ describe("syncAccessApp", () => {
   it("creates the policy and the application when neither exists", async () => {
     const { calls, request } = fakeApi({ policies: [], apps: [] });
     const result = await syncAccessApp(request, INPUTS);
-    expect(result).toEqual({ appId: "app-new", aud: "aud-tag", policyId: "pol-new", created: { app: true, policy: true } });
-    const policy = calls.find((c) => c.method === "POST" && c.path === "/accounts/acct/access/policies")!;
-    expect(policy.body).toMatchObject({ name: POLICY_NAME, decision: "allow", include: [{ email: { email: EMAIL } }] });
-    const app = calls.find((c) => c.method === "POST" && c.path === "/accounts/acct/access/apps")!;
-    expect(app.body).toMatchObject({
+    expect(result).toEqual({
+      appId: "app-new-pol-new-allow", aud: "aud-tag", policyId: "pol-new-allow", issuerAppId: "app-new-pol-new-bypass",
+      created: { app: true, policy: true, issuerApp: true, issuerPolicy: true },
+    });
+    const [policy, issuerPolicy] = calls.filter((c) => c.method === "POST" && c.path === "/accounts/acct/access/policies");
+    expect(policy!.body).toMatchObject({ name: POLICY_NAME, decision: "allow", include: [{ email: { email: EMAIL } }] });
+    const [app] = calls.filter((c) => c.method === "POST" && c.path === "/accounts/acct/access/apps");
+    expect(app!.body).toMatchObject({
       name: APP_NAME,
       type: "self_hosted",
       domain: "cos.example.com",
       destinations: [{ type: "public", uri: "cos.example.com" }],
-      policies: [{ id: "pol-new", precedence: 1 }],
+      policies: [{ id: "pol-new-allow", precedence: 1 }],
     });
+    expect(issuerPolicy!.body).toEqual({ name: ISSUER_POLICY_NAME, decision: "bypass", include: [{ everyone: {} }], exclude: [], require: [] });
+  });
+
+  it("bypasses Access for exactly the issuer's two documents, the same paths the Worker exempts", async () => {
+    expect(ISSUER_PATHS).toEqual(PUBLIC_ISSUER_PATHS);
+    const { calls, request } = fakeApi({ policies: [], apps: [] });
+    await syncAccessApp(request, INPUTS);
+    const issuerApp = calls.find((c) => c.method === "POST" && c.body?.name === ISSUER_APP_NAME)!;
+    expect(issuerApp.body.destinations).toEqual([
+      { type: "public", uri: "cos.example.com/oidc/.well-known/openid-configuration" },
+      { type: "public", uri: "cos.example.com/oidc/jwks.json" },
+    ]);
+    expect(issuerApp.body.policies).toEqual([{ id: "pol-new-bypass", precedence: 1 }]);
+    // The owner-only application still covers the whole address.
+    const app = calls.find((c) => c.method === "POST" && c.body?.name === APP_NAME)!;
+    expect(app.body.destinations).toEqual([{ type: "public", uri: "cos.example.com" }]);
+    // No email reaches the issuer's policy.
+    expect(JSON.stringify(calls.filter((c) => c.body?.name?.includes("issuer")))).not.toContain(EMAIL);
   });
 
   it("updates both in place when they exist, with exactly one allow rule", async () => {
     const { calls, request } = fakeApi({
-      policies: [{ id: "pol-1", name: POLICY_NAME }, { id: "x", name: "other" }],
-      apps: [{ id: "app-1", name: APP_NAME }],
+      policies: [{ id: "pol-1", name: POLICY_NAME }, { id: "pol-2", name: ISSUER_POLICY_NAME }, { id: "x", name: "other" }],
+      apps: [{ id: "app-1", name: APP_NAME }, { id: "app-2", name: ISSUER_APP_NAME }],
     });
     const result = await syncAccessApp(request, INPUTS);
-    expect(result.created).toEqual({ app: false, policy: false });
+    expect(result.created).toEqual({ app: false, policy: false, issuerApp: false, issuerPolicy: false });
     expect(calls.map((c) => `${c.method} ${c.path.split("?")[0]}`)).toEqual([
       "GET /accounts/acct/access/policies",
       "PUT /accounts/acct/access/policies/pol-1",
+      "PUT /accounts/acct/access/policies/pol-2",
       "GET /accounts/acct/access/apps",
       "PUT /accounts/acct/access/apps/app-1",
+      "PUT /accounts/acct/access/apps/app-2",
     ]);
     expect(calls[1]!.body.include).toEqual([{ email: { email: EMAIL } }]);
-    expect(calls[3]!.body.policies).toEqual([{ id: "pol-1", precedence: 1 }]);
+    expect(calls[4]!.body.policies).toEqual([{ id: "pol-1", precedence: 1 }]);
+    expect(calls[5]!.body.policies).toEqual([{ id: "pol-2", precedence: 1 }]);
   });
 
   it("stops when two applications share the name", async () => {

@@ -38,6 +38,7 @@ jobs:
               - *shared
               - 'shell/**'
               - '.github/workflows/release-shell.yml'
+              - '.github/workflows/release-bedrock-template.yml'
 
   agent:
     needs: changes

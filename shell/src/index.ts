@@ -4,10 +4,19 @@ import { parseSort, renderPriceTablePage } from "./prices/page";
 import { refreshPrices } from "./prices/refresh";
 import { addAlert, currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
 import { accessDenied, readAccessIdentity } from "./access";
+import { handleIssuerRequest, PUBLIC_ISSUER_PATHS, readAppOrigin } from "./issuer";
+import { runDueChecks } from "./providers/check";
+import { providerPlugins, type ProvidersEnv } from "./providers/index";
+import { handleProviders, isProvidersPath } from "./providers/page";
 import { BUDGETS_PATH, handleBudgets } from "./proxy/budgets-page";
 import { userFromAccess } from "./users";
 
-export interface Env {
+// Variables and secrets the provider plug-ins read (T10 sets them; see
+// README "Connecting the providers"): APP_ORIGIN, ISSUER_KEYS (secret),
+// AWS_APP_ROLE_ARN, AWS_REGION, BEDROCK_TEMPLATE_URL, ENTRA_CLIENT_ID,
+// ENTRA_CERT_KEY (secret), ENTRA_CERT_THUMBPRINT, FOUNDRY_CREDENTIAL,
+// GOOGLE_WIF_PROVIDER, GOOGLE_SERVICE_ACCOUNT.
+export interface Env extends ProvidersEnv {
   // Cloudflare Access team domain, `https://<team>.cloudflareaccess.com`.
   ACCESS_TEAM_DOMAIN?: string;
   // The Access application's AUD tag.
@@ -20,6 +29,8 @@ export interface Env {
 // The Cron Triggers in wrangler.jsonc. Only handlers may be exported from this
 // module: workerd refuses any other named export of the entry point.
 const WEEKLY_READING_CRON = "0 7 * * 1";
+// Every minute: the provider checks whose next try is due (T16).
+const PROVIDER_CHECKS_CRON = "* * * * *";
 
 function maintainerEntries(): MaintainerEntry[] {
   const problems = checkMaintainerEntries(maintainerFile.entries);
@@ -35,9 +46,14 @@ const json = (body: unknown, status = 200): Response =>
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    // The issuer's two public documents are the only paths served without
+    // the owner's sign-in: AWS, Google and Microsoft fetch them (T16).
+    if (request.method === "GET" && PUBLIC_ISSUER_PATHS.includes(url.pathname)) {
+      return (await handleIssuerRequest(url.pathname, env))!;
+    }
     const claims = await readAccessIdentity(request, env);
     if (!claims) return accessDenied();
-    const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
       return json({ status: "ok" });
     }
@@ -47,6 +63,15 @@ export default {
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
       return handleBudgets(request, env.DB, user.id, now);
+    }
+    // Models › Setup › Providers, for the signed-in user. Access lets only
+    // the owner in until invitations bring friends (T45), so every viewer
+    // is the owner for now.
+    if (isProvidersPath(url.pathname)) {
+      const now = new Date();
+      const user = await userFromAccess(env.DB, claims, now);
+      if (!user) return accessDenied();
+      return handleProviders(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", appOrigin: readAppOrigin(env), now });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === "/admin/price-table" && request.method === "GET") {
@@ -66,6 +91,10 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
+    if (controller.cron === PROVIDER_CHECKS_CRON) {
+      await runDueChecks(env.DB, providerPlugins(env), now);
+      return;
+    }
     if (controller.cron === WEEKLY_READING_CRON) {
       // Every listing is read again each week; overdue ones are named first.
       const entries = maintainerEntries();

@@ -18,9 +18,26 @@
 //
 // The owner's email is personal data: it arrives at run time from the
 // pipeline's OWNER_EMAIL secret and is never logged or written anywhere.
+//
+// One exception to "owner only" (T16): the app's OpenID Connect issuer
+// publishes two documents that AWS, Google and Microsoft fetch without any
+// sign-in, its discovery document and its key set. A second application
+// covers exactly those two paths with a reusable Bypass policy. Cloudflare's
+// pages, read 2026-11-25: "The Bypass action in Cloudflare Access disables
+// Access enforcement for specific traffic" (Access policies, dateModified
+// 2026-11-17); "When multiple rules are set for a common root path, the more
+// specific rule takes precedence" (Application paths, dateModified
+// 2026-04-17); a public destination's `uri` is "The public hostname and
+// optional path to secure"; the `everyone` rule is "An empty object which
+// matches on all users". The Worker itself exempts exactly the same two paths
+// (src/issuer.ts PUBLIC_ISSUER_PATHS) and nothing else.
 
 export const APP_NAME = "chief-of-staff";
 export const POLICY_NAME = "chief-of-staff: owner only";
+export const ISSUER_APP_NAME = "chief-of-staff: issuer documents";
+export const ISSUER_POLICY_NAME = "chief-of-staff: issuer documents are public";
+// The same paths as src/issuer.ts PUBLIC_ISSUER_PATHS (a test checks).
+export const ISSUER_PATHS = ["/oidc/.well-known/openid-configuration", "/oidc/jwks.json"];
 // Access allows sessions up to one month; the app asks for the longest
 // (design-v3 section 10.3, R6).
 export const SESSION_DURATION = "730h";
@@ -40,6 +57,24 @@ export const appBody = (domain, policyId) => ({
   // `<host>` covers every path; the address is the app's whole address.
   destinations: [{ type: "public", uri: domain }],
   session_duration: SESSION_DURATION,
+  app_launcher_visible: false,
+  policies: [{ id: policyId, precedence: 1 }],
+});
+
+export const issuerPolicyBody = () => ({
+  name: ISSUER_POLICY_NAME,
+  decision: "bypass",
+  include: [{ everyone: {} }],
+  exclude: [],
+  require: [],
+});
+
+// Exactly the issuer's two documents, nothing wider.
+export const issuerAppBody = (domain, policyId) => ({
+  name: ISSUER_APP_NAME,
+  type: "self_hosted",
+  domain: `${domain}${ISSUER_PATHS[0]}`,
+  destinations: ISSUER_PATHS.map((path) => ({ type: "public", uri: `${domain}${path}` })),
   app_launcher_visible: false,
   policies: [{ id: policyId, precedence: 1 }],
 });
@@ -90,22 +125,27 @@ const findByName = (items, name, what) => {
 export const syncAccessApp = async (request, { accountId, domain, ownerEmail }) => {
   const base = `/accounts/${accountId}/access`;
 
+  const upsert = async (kind, items, name, body) => {
+    const existing = findByName(items, name, kind === "policies" ? "policy" : "application");
+    const result = existing
+      ? await request("PUT", `${base}/${kind}/${existing.id}`, body)
+      : await request("POST", `${base}/${kind}`, body);
+    return { result, created: !existing };
+  };
+
   const policies = await request("GET", `${base}/policies?per_page=1000`);
-  const existingPolicy = findByName(policies, POLICY_NAME, "policy");
-  const policy = existingPolicy
-    ? await request("PUT", `${base}/policies/${existingPolicy.id}`, policyBody(ownerEmail))
-    : await request("POST", `${base}/policies`, policyBody(ownerEmail));
+  const policy = await upsert("policies", policies, POLICY_NAME, policyBody(ownerEmail));
+  const issuerPolicy = await upsert("policies", policies, ISSUER_POLICY_NAME, issuerPolicyBody());
 
   const apps = await request("GET", `${base}/apps?per_page=1000`);
-  const existingApp = findByName(apps, APP_NAME, "application");
-  const app = existingApp
-    ? await request("PUT", `${base}/apps/${existingApp.id}`, appBody(domain, policy.id))
-    : await request("POST", `${base}/apps`, appBody(domain, policy.id));
+  const app = await upsert("apps", apps, APP_NAME, appBody(domain, policy.result.id));
+  const issuerApp = await upsert("apps", apps, ISSUER_APP_NAME, issuerAppBody(domain, issuerPolicy.result.id));
 
   return {
-    appId: app.id,
-    aud: app.aud,
-    policyId: policy.id,
-    created: { app: !existingApp, policy: !existingPolicy },
+    appId: app.result.id,
+    aud: app.result.aud,
+    policyId: policy.result.id,
+    issuerAppId: issuerApp.result.id,
+    created: { app: app.created, policy: policy.created, issuerApp: issuerApp.created, issuerPolicy: issuerPolicy.created },
   };
 };

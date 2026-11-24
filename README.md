@@ -14,11 +14,16 @@ file and version, so a component's CI job sees only its own changes:
   `uv.lock` pins every dependency to an exact version with hashes. Version in
   `agent/pyproject.toml`.
 - `shell/`: the TypeScript Cloudflare Worker, with `GET /health`, the
-  price table (see `shell/prices/README.md`), and the model proxy with its
+  price table (see `shell/prices/README.md`), the model proxy with its
   usage ledger, per-provider budgets and per-user vault (see
-  `shell/src/proxy/README.md`). D1 migrations are in `shell/migrations/`. Managed with
+  `shell/src/proxy/README.md`), and "Connect <Provider>" for Bedrock, Foundry
+  and Vertex AI with the app's own OpenID Connect issuer (see
+  `shell/src/providers/README.md`). D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
+- `shell/bedrock-template/`: the CloudFormation template a user's "Connect
+  Amazon Bedrock" link opens, its own release unit with its own version and
+  publish workflow (see `shell/bedrock-template/README.md`).
 - `testdata/persona/`: Morgan Sample, a made-up test persona with invented
   facts and a fake resume. The repository holds nothing about any real user.
 
@@ -59,7 +64,10 @@ that allows only the owner's email (T15, design-v3 section 10.3). Two parts:
   `<team domain>/cdn-cgi/access/certs` (cached; refetched on an unknown key
   id, at most every 30 seconds), and checks `iss`, `aud`, `exp` and `nbf`.
   Anything else, including a Worker without its configuration, gets a bare
-  403. Configuration is two Worker variables set at deploy:
+  403. The one exception is the app's OpenID Connect issuer: `GET` on
+  exactly `/oidc/.well-known/openid-configuration` and `/oidc/jwks.json` is
+  served without a token, because AWS, Google and Microsoft fetch them
+  (`shell/src/providers/README.md`). Configuration is two Worker variables set at deploy:
   `ACCESS_TEAM_DOMAIN` (`https://<team>.cloudflareaccess.com`) and
   `ACCESS_AUD` (the application's AUD tag).
 - **The Access application itself**, created or updated by
@@ -68,7 +76,10 @@ that allows only the owner's email (T15, design-v3 section 10.3). Two parts:
   app's host name only, no scheme or path) and `OWNER_EMAIL` from the environment, makes
   one reusable policy, `chief-of-staff: owner only`, that allows only
   `OWNER_EMAIL`, attaches it to the self-hosted application `chief-of-staff`
-  covering `ACCESS_APP_DOMAIN`, and prints the application id and AUD tag. It
+  covering `ACCESS_APP_DOMAIN`, and prints the application id and AUD tag.
+  It also makes the application `chief-of-staff: issuer documents`, covering
+  exactly the issuer's two paths, with a reusable Bypass policy (`everyone`),
+  the more specific path taking precedence over the whole-address one. It
   is idempotent: a second run updates both in place. The owner's email is
   personal data: it lives only in the GitHub Actions secret `OWNER_EMAIL`,
   never in the repository, and the script never prints it. The shell's

@@ -6,7 +6,9 @@ and each provider's own console and bill are the independent check.
 
 ## Provider plug-ins
 
-The core knows no provider. A plug-in (`plugin.ts`) supplies:
+The core knows no provider. A plug-in (`plugin.ts`) supplies its Connect
+method (`connect`, see `src/providers/README.md`), its price source
+(`priceSource`) and its caller:
 
 - `connectionFields`: the only fields its connection record may hold, none
   secret (an AWS role ARN and external ID, a Microsoft tenant ID and endpoint,
@@ -19,9 +21,12 @@ The core knows no provider. A plug-in (`plugin.ts`) supplies:
   the call at its long-prompt rates;
 - `version`: recorded on every ledger row.
 
-T16 writes the three real plug-ins and the OpenID Connect issuer they mint
-from. `test/test-plugin.ts` is the test-only one. The Worker has no plug-in
-registered until then, so every call is refused `no_plugin`.
+The three real plug-ins (Bedrock, Foundry, Vertex AI) and the OpenID Connect
+issuer they mint from are in `src/providers/` and `src/issuer.ts` (T16);
+`test/test-plugin.ts` is the test-only one. A credential the provider refuses
+in a way the plug-in reads as the grant removed (`connect.classify` says
+`not_set_up`) also records the connection as revoked, for T49's alert
+(`src/providers/revoked.ts`).
 
 ## What the proxy does with a call
 
@@ -67,8 +72,8 @@ the date its prices were read. The user accepts it or types their own.
 
 ## Connections and the vault
 
-`connections.ts` is the only code that writes (T16's Connect methods) or reads
-(the proxy) `provider_connections`, and it refuses any field the plug-in does
+`connections.ts` is the only code that writes (the Connect check,
+`src/providers/check.ts`) or reads (the proxy) `provider_connections`, and it refuses any field the plug-in does
 not declare. `vault.ts` is the per-user vault for what is secret (pasted keys,
 none in v1; later portal passwords and the Gmail token): each user's own
 AES-256-GCM key, stored wrapped by the one vault key in Secrets Store, with

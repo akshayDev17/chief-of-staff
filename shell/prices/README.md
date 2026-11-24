@@ -37,9 +37,12 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
   default: Global on Foundry and Bedrock where offered (then data zone or
   cross-region, then a region), a region on Vertex AI (then Global). Within
   that deployment type the highest price counts. Every row of the model shows
-  that tier, whatever its own price. On Vertex AI the highest regional price is
-  an interim, conservative rule until T16 names the app's default Vertex AI
-  region; that region's price then replaces it.
+  that tier, whatever its own price. On Vertex AI the price is the one at the
+  app's default location for the model (`src/providers/vertex-locations.ts`,
+  T16, from Google's model pages: the `us` multi-region for Claude 4.7 and
+  later and for Gemini, `us-east5` for the older Claude models), then Global;
+  a model the app names no default location for keeps the conservative rule,
+  the highest regional price.
 - **Admin · Price table** is at `GET /admin/price-table`. It is owner only: like
   every request to the Worker, it is behind the Cloudflare Access check
   (`src/access.ts`, T15).

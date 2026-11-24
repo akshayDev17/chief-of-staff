@@ -37,7 +37,8 @@ import type { Provider, TokenKind } from "../prices/types";
 import { readBudget } from "./budgets";
 import { readConnection } from "./connections";
 import { monthSpend, nextMonthStart, writeLedgerRow } from "./ledger";
-import { fallbackAnswers, type ModelRequest, type PluginRegistry, type Usage } from "./plugin";
+import { recordGrantRefused } from "../providers/revoked";
+import { fallbackAnswers, ProviderRefusal, type ModelRequest, type PluginRegistry, type Usage } from "./plugin";
 
 export interface ModelChoice {
   provider: Provider;
@@ -108,7 +109,7 @@ export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
 }
 
 // The model's list prices at its location, at the short- or long-prompt rows.
-async function listPrices(db: D1Database, { provider, model, location }: ModelChoice, longPrompt: boolean): Promise<Prices> {
+export async function listPrices(db: D1Database, { provider, model, location }: ModelChoice, longPrompt: boolean): Promise<Prices> {
   const answers = await Promise.all(USAGE_KINDS.map(([, tokenKind]) => lookupPrice(db, { provider, model, location, tokenKind, longPrompt })));
   return Object.fromEntries(USAGE_KINDS.map(([, kind], i) => [kind, answers[i]]));
 }
@@ -148,7 +149,14 @@ async function attempt(
   let credential: unknown;
   try {
     credential = await plugin.mintCredential(connection);
-  } catch {
+  } catch (error) {
+    // A refusal the plug-in reads as the grant removed on the provider's
+    // side stops the provider at once and is recorded for T49's alert.
+    if (error instanceof ProviderRefusal) {
+      const { step, status, errorName, message } = error.refusal;
+      const plain = plugin.connect.classify({ step: "credential", exchange: step, status, errorName, message }, connection);
+      if (plain.reason === "not_set_up") await recordGrantRefused(db, call.userId, provider, now());
+    }
     // The plug-in's own error is not repeated: it may quote the connection.
     return refuse("credential_failed", `the ${PROVIDER_NAMES[provider]} connection gave no credential; it may have been revoked`);
   }

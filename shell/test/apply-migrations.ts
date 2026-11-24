@@ -22,6 +22,8 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM vault_items"),
     env.DB.prepare("DELETE FROM vault_keys"),
     env.DB.prepare("DELETE FROM provider_connections"),
+    env.DB.prepare("DELETE FROM provider_checks"),
+    env.DB.prepare("DELETE FROM help_requests"),
     env.DB.prepare("DELETE FROM provider_budgets"),
     env.DB.prepare("DELETE FROM user_models"),
     env.DB.prepare("DELETE FROM data_migration_steps"),
