@@ -1,0 +1,8 @@
+// The shell Worker. Local development and tests only: no account, routes or
+// secrets here; the deploy ticket adds them.
+{
+  "name": "chief-of-staff-shell",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false
+}

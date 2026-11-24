@@ -2,6 +2,27 @@
 
 An AI agent that runs a job search end to end: finds roles, fills applications and follows up.
 
+## Layout
+
+One directory per release unit (design-v3 ADR-017), each with its own lock
+file and version, so a component's CI job sees only its own changes:
+
+- `agent/`: the Python 3.13 agent, built on Google ADK. Managed with
+  [uv](https://docs.astral.sh/uv/); `uv.lock` pins every dependency to an exact
+  version with hashes. Version in `agent/pyproject.toml`.
+- `shell/`: the TypeScript Cloudflare Worker, with `GET /health`. Managed with
+  npm 11 (pinned in `packageManager`); `package-lock.json` pins every
+  dependency with integrity hashes. Version in `shell/package.json`.
+- `testdata/persona/`: Morgan Sample, a made-up test persona with invented
+  facts and a fake resume. The repository holds nothing about any real user.
+
+Later release units get their own directory when their ticket builds them.
+
+Every install comes from a lock file: `make check` fails when `uv.lock` or
+`package-lock.json` is out of date with its manifest (`uv lock --check`,
+`uv sync --locked`, `npm ci`). After changing a dependency, run `uv lock` in
+`agent/` or `npx npm@11.21.3 install` in `shell/` and commit the lock file.
+
 ## Development
 
 The repository root has one test command and one check command for every
