@@ -12,7 +12,11 @@ The app spans a TypeScript Worker, a Python container image, a database, an inst
 
 ## Considered options
 
-As in design-v3 section 2, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. The record's own context, in section 2.7, names two:
+
+- **A single pipeline for every component** (section 2.7).
+- **A separate section listing the components** (section 2.7).
+- **Each component's boundary, contract and release facts stated in the section that designs it** (decided; section 2.7).
 
 ## Decision
 
@@ -20,7 +24,8 @@ Each component's boundary, contract and release facts are stated in the section 
 
 ### Rejected alternatives
 
-The options design-v3 section 2 compares other than the one decided above, for the reasons given there.
+- **A single pipeline**: it "would couple them" (section 2.7).
+- **A separate section listing the components**: it "would drift from the design (the owner, 2026-11-24: "i agree with the components as demaracated in the cos-release-units report. by i disagree with a separate section. why should we do that? why cant we bake it into the design v3 doc within the appropriate sections?")" (section 2.7).
 
 ## Consequences
 

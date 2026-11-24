@@ -1,6 +1,6 @@
 # Decision records
 
-The decision records of [design-v3](../design-v3.md), one file each, in the template of the course's `ADR_structure.md`: status, context, considered options, decision, rejected alternatives, consequences. Context, decision and consequences are the design's own wording; the considered options are those of the design's comparison tables, in the section each record names.
+The decision records of [design-v3](../design-v3.md), one file each, in the template of the course's `ADR_structure.md`: status, context, considered options, decision, rejected alternatives, consequences. Context, decision and consequences are the design's own wording. The considered options and rejected alternatives are taken from the design's comparison tables, and from the alternatives its text names, with the reasons it gives, in the sections each record cites; where the design compares no alternatives for a decision, the record says so and lists only those its text names.
 
 | Record | Subject | Design section |
 | --- | --- | --- |

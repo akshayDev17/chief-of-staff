@@ -12,7 +12,13 @@ Cover letters, free-text answers and referral messages are sent without review. 
 
 ## Considered options
 
-As in design-v3 section 7, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in section 7:
+
+- **A writer that sees the whole knowledge hub or the open web** (section 7.3).
+- **Softening unsupported content** instead of deleting it (section 7.3).
+- **Company praise with no source** (section 7.3).
+- **Web search for company research** (section 7.1).
+- **Sending the user's own default cover letter as it is** (section 7).
 
 ## Decision
 
@@ -20,7 +26,11 @@ Any generated text that makes a statement about the user or a company is produce
 
 ### Rejected alternatives
 
-The options design-v3 section 7 compares other than the one decided above, for the reasons given there.
+- **A writer that sees the whole hub or the open web**: "The writer cannot see anything it could embellish from. It receives selected evidence items, not the whole hub and not the open web" (section 7.3).
+- **Softening unsupported content**: "Unsupported content is deleted, not softened. The system prefers a short true letter to a long impressive one" (section 7.3).
+- **Company praise with no source**: "Praise with no source ("your world-class team") is rejected by rule" (section 7.3).
+- **Web search**: "No web search is used: LinkedIn is the only job source, so no company-discovery search is needed" (section 7.1).
+- **Sending the default cover letter as it is**: it "is source material only: for their voice (section 4.5) and for their own claims ... It is never sent as it is"; "Every letter, optional or required, is written fresh and tailored to the company being applied to" (section 7).
 
 ## Consequences
 

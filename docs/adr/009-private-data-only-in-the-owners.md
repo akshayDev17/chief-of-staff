@@ -12,15 +12,21 @@ The repository is public under the MIT licence. The agent handles resumes, legal
 
 ## Considered options
 
-As in design-v3 section 8, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in section 8.4:
+
+- **Personal data, or saved real examples, in the public repository** (section 8.4).
+- **Each user's own secret in Cloudflare Secrets Store** (section 8.4).
+- **Embeddings and a vector database** for the hub at the start (section 8.4).
 
 ## Decision
 
-The repository holds code, schema migrations, generic prompts and a made-up test persona only. All personal data lives in the owner's Cloudflare account: one D1 database as the system of record with every row carrying its user and every query scoped to one user; one private R2 bucket with a prefix and an encryption key per user; each run's working record in its own Durable Object, named by user; a vault per user in D1, encrypted with that user's key, holding provider credentials, residential-exit details, portal passwords and the Gmail token, and never a LinkedIn password. The key that protects the per-user keys sits in Secrets Store. The container holds no key and keeps nothing between runs. Gateway logs keep metadata only. Saved real examples for tests live in a private store, never in the repository.
+The repository holds code, schema migrations, generic prompts and a made-up test persona only. All personal data lives in the owner's Cloudflare account: one D1 database as the system of record with every row carrying its user and every query scoped to one user; one private R2 bucket with a prefix and an encryption key per user; each run's working record in its own Durable Object, named by user; a vault per user in D1, encrypted with that user's key, holding provider credentials, residential-exit details, portal passwords and the Gmail token, and never a LinkedIn password. The key that protects the per-user keys sits in Secrets Store. The container holds no key and keeps nothing between runs. The model proxy keeps no prompt or response bodies, only the ledger row. Saved real examples for tests live in a private store, never in the repository.
 
 ### Rejected alternatives
 
-The options design-v3 section 8 compares other than the one decided above, for the reasons given there.
+- **Personal data or saved real examples in the repository**: "the repository contains code and a made-up test persona, and nothing about any user (standing rule 3)", because "The repository is public under the MIT licence"; saved real examples "are kept in a private test-examples store that only the tests can read, never in the public repository" (section 8.4).
+- **Each user's secret in Secrets Store**: "Secrets Store allows "up to 100 secrets per account" and "only be one store per account" (tier report D4), so per-user secrets cannot each sit there. Each user's own key is kept in D1 wrapped by the one key in Secrets Store" (section 8.4).
+- **Embeddings and a vector database at the start**: "The hub is expected to hold a few hundred short items per user (an estimate), which a keyword search plus one small-model check handles. If matching proves weak in practice mode, an embedding model at the user's provider is the addition" (section 8.4).
 
 ## Consequences
 

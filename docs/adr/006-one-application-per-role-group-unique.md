@@ -12,7 +12,7 @@ Applications are submitted without review, runs can stop at any point and are re
 
 ## Considered options
 
-As in design-v3 section 5, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision: sections 5.4 and 5.5 list the guards it uses, all of them together. The only alternative its text names is retrying a submit whose outcome was never confirmed (section 5.5).
 
 ## Decision
 
@@ -20,7 +20,7 @@ Jobs are grouped into role groups; the applications table has a unique index on 
 
 ### Rejected alternatives
 
-The options design-v3 section 5 compares other than the one decided above, for the reasons given there.
+- **Retrying an unconfirmed submit automatically**: "If neither appears, the application is shown to the user as *submitted, unconfirmed* and is never retried automatically. A missed application is recoverable; a duplicate is not, and LinkedIn says a submitted Easy Apply application cannot be edited or withdrawn" (section 5.5).
 
 ## Consequences
 

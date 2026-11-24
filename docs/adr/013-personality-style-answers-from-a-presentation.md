@@ -12,7 +12,13 @@ Application forms include rating-scale and personality-style questions. The owne
 
 ## Considered options
 
-As in design-v3 section 8, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in sections 8.5 and 8.6:
+
+- **Fine-tuning a model** on the user's data (section 8.5).
+- **A trait baseline measured from the user** (sections 8.5 and 8.6).
+- **The model choosing a rating-scale answer** (section 8.5).
+- **A profile at the top of every scale** (section 8.5).
+- **A stories section or questionnaire for the user** (section 8.5).
 
 ## Decision
 
@@ -20,7 +26,11 @@ A presentation profile per role family is stored in the knowledge hub. For a rat
 
 ### Rejected alternatives
 
-The options design-v3 section 8 compares other than the one decided above, for the reasons given there.
+- **Fine-tuning a model**: the persona sub-agent "is "tuned" by instruction and stored data, not by training a model: fine-tuning on this little data would add cost and a second model to maintain for no measurable gain" (section 8.5).
+- **A measured trait baseline**: "These are answered from a **presentation profile**, not from a measurement of the user. No trait baseline is asked for" (section 8.5); the user is never asked "to supply a personality baseline" (section 8.6), since the owner decided "that no such question waits for the user (HANDOFF.md:28)" (section 8.5).
+- **The model choosing the answer**: "The sub-agent's only judgement is to classify the item ... The answer is then **computed in code** from the profile score and the scale on the form. The model does not choose the answer" (section 8.5).
+- **The top of every scale**: "a few traits are deliberately moderate, because a candidate who claims the top of every scale is the pattern such questionnaires are built to notice" (section 8.5).
+- **A stories section or questionnaire**: "No stories section or questionnaire (the owner, 2026-11-24: "remove stories, ask the hub, and writing style. all of them are unnecessarly slop")" (section 8.5).
 
 ## Consequences
 

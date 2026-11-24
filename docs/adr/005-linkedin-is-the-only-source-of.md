@@ -12,7 +12,14 @@ The owner decided that LinkedIn is the primary and only job source, and that emp
 
 ## Considered options
 
-As in design-v3 section 5, which compares the options for this decision; this record does not restate them.
+design-v3 compares the ways of reading LinkedIn's jobs in the table in section 5.1; sections 5.1, 4.3 and 4.10 name the sources that are not used.
+
+- **LinkedIn's own job-alert email** (decided; section 5.1).
+- **The signed-in LinkedIn browser**, running the user's searches by a fixed script (decided; section 5.1).
+- **An official LinkedIn interface for reading jobs** (section 5.1).
+- **LinkedIn's public job pages read without signing in** (sections 5.1 and 4.3).
+- **LinkedIn's official data-portability interface, for reading only** (section 4.3).
+- **Employer feeds, job aggregators, a company-discovery run, a list of companies to maintain, or web search** (section 5.1), kept as the main source or in reserve (section 4.10).
 
 ## Decision
 
@@ -20,7 +27,10 @@ Jobs come only from LinkedIn. Up to 20 saved job alerts deliver candidates by em
 
 ### Rejected alternatives
 
-The options design-v3 section 5 compares other than the one decided above, for the reasons given there.
+- **An official LinkedIn interface for reading jobs**: none exists. "The only permissions LinkedIn opens to any developer are sign-in and posting; its job interfaces are for employers' recruiting systems" (section 5.1).
+- **LinkedIn's public job pages read without signing in**: "Not used" (section 5.1). LinkedIn's `robots.txt` says "The use of robots or other automated means to access LinkedIn without the express permission of LinkedIn is strictly prohibited", and "It would also not remove the need to sign in to apply" (section 4.3).
+- **LinkedIn's official data-portability interface**: "Open only to members whose profile location is in the EU, the EEA or Switzerland" (section 4.3).
+- **Employer feeds, aggregators, a company list or web search, as a source or in reserve**: "the owner has ruled out keeping employers' feeds anywhere, even in reserve (HANDOFF.md:26)" (section 5); "The owner has decided that no other source of roles is kept, not even in reserve ... There is no fallback, by decision" (section 4.10). What this costs: "roles that are not on LinkedIn are never seen" (section 5.1).
 
 ## Consequences
 

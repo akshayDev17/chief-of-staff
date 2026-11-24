@@ -12,7 +12,17 @@ The owner wants the models with a different vendor from the rest of the system, 
 
 ## Considered options
 
-As in design-v3 section 1, which compares the options for this decision; this record does not restate them.
+design-v3 section 1.4 compares what could sit in front of the providers; sections 1.6, 15.1 (open point 1) and 15.6 name the alternatives for how a provider is connected and which providers are offered.
+
+- **One proxy in this app's Worker, with a per-user vault** (decided): "the only code that holds a provider credential, so the container never holds one" (section 1.4).
+- **Cloudflare AI Gateway** as a pass-through in front of the providers (section 1.4).
+- **Nothing in front of the providers** (section 1.4).
+- **A provider's own API gateway product** (section 1.4).
+- **LiteLLM as a proxy server** (section 1.4).
+- **A "Connect <Provider>" grant to the app's own identity** (decided) **or a long-lived key the user hands the app** (sections 1.4 and 1.6).
+- **Google OAuth with the `cloud-platform` scope**, for connecting Vertex AI (section 1.6).
+- **Direct Anthropic and OpenAI keys** (sections 1 and 15.6).
+- **Other suppliers on the T14 shortlist**: IBM watsonx, Oracle OCI Generative AI, Alibaba Model Studio, and Cloudflare's own AI services (section 15.1, open point 1).
 
 ## Decision
 
@@ -20,7 +30,14 @@ Foundry, Bedrock and Vertex AI are the only providers in v1, for the owner and e
 
 ### Rejected alternatives
 
-The options design-v3 section 1 compares other than the one decided above, for the reasons given there.
+- **Cloudflare AI Gateway**: "a second count of calls the app does not need: the ledger is the app's count, and each provider's own console and bill are the independent check" (the owner, 2026-11-24: "yes drop it", after asking "why we still need this?") (section 1.4).
+- **Nothing in front of the providers**: "then no per-site figures and the credential would have to live in the container" (section 1.4).
+- **A provider's own API gateway product**: "a further paid service for something the Worker already does" (section 1.4).
+- **LiteLLM as a proxy server**: "it needs a server and a database of its own" (section 1.4).
+- **A long-lived key handed to the app**: "No user hands the app a long-lived key" (the owner, 2026-11-24: "why would a user wanna trust my app with their key? why am i being given the key in the first place?"). A pasted key with the narrowest permission the provider offers stays only as that provider's fallback if its M2 check fails (section 1.6).
+- **Google OAuth with the `cloud-platform` scope**: "it covers the user's whole Google Cloud ("See, edit, configure, and delete your Google Cloud data"), needs Google's app verification, caps an unverified app at 100 users, stops after 7 days in Testing, and Google says "you must not use, or encourage the use of, user credentials for server-to-server deployment."" (section 1.6).
+- **Direct Anthropic and OpenAI keys**: not in v1 (the owner, 2026-11-23: "model providers for **everyone**: only the 3 for now"; 2026-11-24: "keep anthropic in v2"). They are a v2 requirement, as pasted-key plug-ins with a dedicated, spend-limited key, "since neither documents a way for a third-party app to call a user's models" (section 15.6).
+- **The other suppliers on the T14 shortlist**: Cloudflare's own AI services were "excluded by the owner"; the shortlist put Bedrock and Vertex AI first, then IBM watsonx, Oracle OCI Generative AI and Alibaba Model Studio, and the owner decided on Foundry, Bedrock and Vertex AI (section 15.1). design-v3 gives no further reason for the others.
 
 ## Consequences
 

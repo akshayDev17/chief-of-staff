@@ -12,7 +12,14 @@ Each user wants a dashboard on the portfolio site and alerts on their phone, ans
 
 ## Considered options
 
-As in design-v3 section 10, which compares the options for this decision; this record does not restate them.
+design-v3 compares the routes for phone alerts in the table in section 10.5; section 15.6 names a later route.
+
+- **Installable dashboard + Web Push** (decided; section 10.5).
+- **A Telegram bot** (section 10.5).
+- **Pushover or ntfy** (section 10.5).
+- **Text messages** (section 10.5).
+- **A native app** (section 10.5).
+- **App Store wrappers around the same sites** (section 15.6).
 
 ## Decision
 
@@ -20,7 +27,11 @@ This app ships the dashboard screens, a web app manifest, a service worker and a
 
 ### Rejected alternatives
 
-The options design-v3 section 10 compares other than the one decided above, for the reasons given there.
+- **A Telegram bot**: "Works, including typed replies, but every alert's text (company, question, sometimes a code) would pass through and rest on Telegram's servers, and the reply screen could not show the remote browser view" (section 10.5).
+- **Pushover or ntfy**: "Notification only; the reply would still need the dashboard, so they add an app and remove nothing. ntfy's own pages describe delayed delivery on iPhone unless its central server is used" (section 10.5).
+- **Text messages**: "Costs money, needs a sender registration, and a text cannot carry the remote view" (section 10.5).
+- **A native app**: "A second codebase and a yearly fee, to gain reply buttons on the notification itself" (section 10.5).
+- **App Store wrappers**: a v2 requirement, not v1: it "needs an Apple Developer account at $99 a year, announced before anything is set up, and Apple's app review for each app" (the owner, 2026-11-24: "v1: androind behaves as i want, apple fuck apple. yes, agreed with the v2 item as well") (section 15.6).
 
 ## Consequences
 

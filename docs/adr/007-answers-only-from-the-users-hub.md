@@ -12,7 +12,14 @@ Applications are submitted without review, on LinkedIn and on employers' portals
 
 ## Considered options
 
-As in design-v3 section 6, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in sections 2.6, 6.5, 8.1 and 8.3:
+
+- **A confirmation step** before an answer is used or an application is sent (sections 8.1 and 8.6).
+- **ADK's tool confirmation** (`require_confirmation=True`) (section 2.6).
+- **A generated value for a legal or factual question** (section 6.5).
+- **Reusing a near-miss wording** of a stored question (section 8.3).
+- **Re-asking a fact because of its age** (section 8.1).
+- **A separate answer bank** beside the fact sheet (section 8.1).
 
 ## Decision
 
@@ -20,7 +27,12 @@ Every value about a user is typed by the `answer` tool from that user's knowledg
 
 ### Rejected alternatives
 
-The options design-v3 section 6 compares other than the one decided above, for the reasons given there.
+- **A confirmation step**: "No confirmation steps (HANDOFF.md:29). A fact the user has entered is used as entered, on every form that asks for it, until the user changes it. The cost of that choice, stated plainly: a fact that has gone out of date ... keeps being used until the user updates it" (section 8.1).
+- **ADK's tool confirmation**: "The design does not use it: the owner wants no confirmation steps, and the page still says unsupported" (section 2.6).
+- **A generated value for a legal or factual question**: "A generated value is never accepted for them. This is the rule the owner asked for: these answers come from the knowledge hub each user fills, with no confirmation step in between, and the agent never invents one" (section 6.5).
+- **Reusing a near-miss wording**: "A near miss is not reused: for a legal or factual question it becomes a missing fact and goes to the user once; for a free-text question a fresh answer is written from evidence" (section 8.3).
+- **Re-asking a fact because of its age**: "Nothing is blocked or re-asked because of age"; the daily digest lists facts older than a year, "for information only" (section 8.1).
+- **A separate answer bank**: "One fact sheet, no separate answer bank"; the owner, 2026-11-24, found it a duplicate of the fact sheet ("answer bank: how come is this not a fact sheet?") (section 8.1).
 
 ## Consequences
 

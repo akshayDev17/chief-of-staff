@@ -12,7 +12,13 @@ The agent waits on mail, on its user and on strangers, for minutes to weeks. Not
 
 ## Considered options
 
-As in design-v3 section 2, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in sections 2.2, 2.5 and 2.6:
+
+- **ADK's durability add-ons from Temporal, Restate, DBOS and Dapr** (section 2.2).
+- **ADK's tool confirmation** (`require_confirmation=True`) as a pause (section 2.6).
+- **A long-running tool inside an agent wrapped with `AgentTool`** (section 2.6).
+- **Delivering a reply by editing stored state from outside** (sections 2.5 and 2.6).
+- **Retrying an outside action whose outcome was never recorded** (section 2.6).
 
 ## Decision
 
@@ -20,7 +26,11 @@ Each wait is an ADK `LongRunningFunctionTool` (or, in a fixed step, a `RequestIn
 
 ### Rejected alternatives
 
-The options design-v3 section 2 compares other than the one decided above, for the reasons given there.
+- **Temporal, Restate, DBOS or Dapr**: "none is needed here, because the shell's Durable Objects already do that job, and each would add a further service to run" (section 2.2).
+- **ADK's tool confirmation**: "It worked in that one run on 2.15.0. The design does not use it: the owner wants no confirmation steps, and the page still says unsupported" (section 2.6).
+- **A long-running tool inside an `AgentTool`**: "`AgentTool` gives the wrapped agent a throwaway in-memory session (ADK source, `tools/agent_tool.py`), so a wait left pending inside it could never be resumed" (section 2.6).
+- **Editing stored state from outside**: "The reply enters the record as an ordinary event, never by editing stored state from outside" (section 2.6), following the course's rule that "state is changed only through a tool or callback context" (section 2.5).
+- **Retrying an unrecorded outside action**: "The course's module 13: an unacknowledged action "is a reconciliation problem, not a retry"" (section 2.6).
 
 ## Consequences
 

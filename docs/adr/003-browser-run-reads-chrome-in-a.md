@@ -12,7 +12,15 @@ The agent must browse from Cloudflare. Cloudflare Browser Run signs every reques
 
 ## Considered options
 
-As in design-v3 section 3, which compares the options for this decision; this record does not restate them.
+design-v3 compares the options in section 3.3 (a reader and an actor), section 3.4 (where the actor browser's traffic comes from) and section 3.7 (hosted browser companies); sections 3.1 and 3.3 name the parts of Browser Run that are not used.
+
+- **Browser Run for everything, including acting as the user** (sections 3.1 and 3.3).
+- **Two browsers split by purpose**: Browser Run reads, a Chrome in a Cloudflare Container acts (decided; section 3.3).
+- **Browser Run's built-in "Human in the Loop" handoff** (section 3.1).
+- **Stagehand** with Browser Run (section 3.1).
+- **Cloudflare's "Kitesurf" engine** (section 3.1).
+- **Network exit** (section 3.4): A. Cloudflare's own addresses; B. a rented residential address in the user's own city or country, NodeMaven residential proxies (decided); C. the user's home connection, through a small always-on device at home.
+- **A hosted browser company** (section 3.7): Browserbase; others (Steel, Hyperbrowser, Browserless, Anchor, Kernel).
 
 ## Decision
 
@@ -20,7 +28,13 @@ Browsing is split by purpose. Browser Run reads public pages and renders documen
 
 ### Rejected alternatives
 
-The options design-v3 section 3 compares other than the one decided above, for the reasons given there.
+- **Browser Run as the browser that acts as the user**: "Browser Run is an honest crawler. That is right for reading job descriptions and company pages, and wrong for acting as a person: a site that checks the signature knows with certainty that a Cloudflare automation is filling its form. So no form is ever filled on Browser Run" (section 3.1).
+- **Browser Run's built-in handoff**: "its built-in handoff is not used", for the same reason (section 3.1).
+- **Stagehand**: "Supported only at `v2.5.x`; "Stagehand `v3` and later are not supported". Stagehand is at 4.x, so the pairing is stale and is not used" (section 3.1).
+- **Kitesurf**: "out of scope: it cannot yet "Negotiate a bot-challenge handshake" or "Start a long-running, authenticated session"" (section 3.1).
+- **A. Cloudflare's own addresses**: "The signal Greenhouse lists as high-risk and the kind of location LinkedIn challenges. **Not used** for any user's LinkedIn or portal browser" (section 3.4).
+- **C. The user's home connection**: not rejected; "**The fallback**, as its own owner decision, if LinkedIn or the portals still challenge or block the browser through option B (proofs 3 and 4)" (section 3.4).
+- **A hosted browser company**: "Declined by the owner (decision 14). It would move users' signed-in sessions to another company and depart from "runs on Cloudflare" for the part that matters most. It comes back only as its own decision, if proof 3 or 4 fails (M4, M5 fallbacks)" (section 3.7).
 
 ## Consequences
 

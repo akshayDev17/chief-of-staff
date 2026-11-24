@@ -12,7 +12,12 @@ The owner wants to share the app with a small circle of friends, each with their
 
 ## Considered options
 
-As in design-v3 section 11, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in sections 11.2, 11.5, 11.7 and 15.6:
+
+- **A single `Chief` handling every user's caps** (section 11.2).
+- **An "owner's runs go first" queue order and a base-tier "runs at once" cap** (section 11.5).
+- **Per-friend overrides of the owner settings** (sections 11.5 and 15.6).
+- **The guest list kept through T52's option (b), a separate Access-list Worker** (decided; section 11.7). design-v3 does not describe T52's other options.
 
 ## Decision
 
@@ -20,7 +25,9 @@ Two tiers: the owner, with no tier caps; and base users, invited by the owner, w
 
 ### Rejected alternatives
 
-The options design-v3 section 11 compares other than the one decided above, for the reasons given there.
+- **A single `Chief` for every user**: it "would be a choke point and would let one user's fault affect the others" (section 11.2).
+- **"Owner's runs go first" and a base-tier "runs at once" cap**: "**Not used** (tier report D2) ... Spend is capped by A1 and A2 whatever the concurrency, and the owner's runs are never counted against base limits, so they never wait behind a friend" (section 11.5).
+- **Per-friend overrides**: "Not in v1 (the owner, 2026-11-24: "... how am i the admin supposed to add custom overrides for my users? lets not put that feature for now because it will create more confusion.")"; a v2 item (sections 11.5 and 15.6).
 
 ## Consequences
 

@@ -12,7 +12,12 @@ Portals show captchas, many of them score-based. The owner left captcha-solving 
 
 ## Considered options
 
-As in design-v3 section 3, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision in a table; section 3.6 names them, and section 15.6 holds the one chosen for v2.
+
+- **The agent solving the captcha** (section 3.6).
+- **A captcha-solving service** (section 3.6).
+- **The user solving only the captcha in the remote view, with the filled form held open** (sections 3.6 and 15.6).
+- **Stopping the application with a push alert and an email, to finish by hand** (decided; section 3.6).
 
 ## Decision
 
@@ -20,7 +25,8 @@ No captcha on an employer's job site is solved in v1, by the agent, by a service
 
 ### Rejected alternatives
 
-The options design-v3 section 3 compares other than the one decided above, for the reasons given there.
+- **The agent or a captcha-solving service solving it**: "Score-based checks such as Greenhouse's invisible reCAPTCHA judge the whole session, not one puzzle; a 2026 study found solver services "largely defeat challenge-based defenses with a 100% success rate, but collapse to an average 23% success rate on reCaptcha v3". A solving service is a further vendor and a clearer breach of portals' intent" (section 3.6). A captcha-solving service is not approved (standing rule 6).
+- **The user solving only the captcha in the remote view**: not in v1 (the owner, 2026-11-23: "lets for now v1 sake agree captcha will remain unsolved and lets do an email notification here as well"); it is "The v2 requirement the owner chose" (sections 3.6 and 15.6).
 
 ## Consequences
 

@@ -12,7 +12,16 @@ LinkedIn is the only job source and the place of Easy Apply and referrals; autom
 
 ## Considered options
 
-As in design-v3 section 4, which compares the options for this decision; this record does not restate them.
+design-v3 compares the options in the table "Options considered and not used" at the end of section 4.3, the section that designs account safety. They are other ways of doing a user's LinkedIn work; the same table is recorded in ADR-004.
+
+- **Each account's own controls, signals, stop rule and learning record** (decided; section 4.3).
+- **Cloudflare Browser Run for LinkedIn** (section 4.3).
+- **Reading LinkedIn's public job pages without signing in** (section 4.3).
+- **A hosted LinkedIn API vendor such as Unipile** (section 4.3).
+- **A second LinkedIn account for the agent** (section 4.3).
+- **LinkedIn Premium** (section 4.3).
+- **LinkedIn's official data-portability interface, for reading only** (section 4.3).
+- **Provoking a challenge to learn LinkedIn's behaviour** (section 4.3).
 
 ## Decision
 
@@ -20,7 +29,13 @@ Each account has its own controls (alert and notification mail does the reading;
 
 ### Rejected alternatives
 
-The options design-v3 section 4 compares other than the one decided above, for the reasons given there.
+- **Cloudflare Browser Run for LinkedIn**: "Every request carries a signature proving it is an automated Cloudflare browser (section 3.1)" (section 4.3).
+- **Reading LinkedIn's public job pages without signing in**: "LinkedIn's `robots.txt` opens: "The use of robots or other automated means to access LinkedIn without the express permission of LinkedIn is strictly prohibited", and disallows everything for any crawler it has not named. It would also not remove the need to sign in to apply" (section 4.3).
+- **A hosted LinkedIn API vendor such as Unipile**: "It "operates through reverse engineering", needs the user's password or session cookie, and costs a 49 EUR monthly minimum. Handing over credentials is itself a Don't ("sharing log-in credentials or copying cookies")" (section 4.3).
+- **A second LinkedIn account for the agent**: ""Create a false identity" is the first Don't; it also defeats the purpose, since applications and referrals depend on the user's real profile" (section 4.3).
+- **LinkedIn Premium**: "Declined by the owner (decision 10). Outreach is built for a free account's limits (section 4.8)" (section 4.3).
+- **LinkedIn's official data-portability interface, for reading only**: "Open only to members whose profile location is in the EU, the EEA or Switzerland. Raised with T67 only if the owner wants that route (A6)" (section 4.3).
+- **Provoking a challenge**: "A challenge must never be provoked to see what happens: provoking a real challenge harms the account. So the stop path cannot be tested on purpose, and stays **not proven live** per account until LinkedIn really shows a challenge (M4)" (section 4.3).
 
 ## Consequences
 

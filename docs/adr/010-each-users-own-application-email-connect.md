@@ -12,7 +12,15 @@ The agent needs one-time codes, verification links, confirmations and LinkedIn's
 
 ## Considered options
 
-As in design-v3 section 9, which compares the options for this decision; this record does not restate them.
+design-v3 compares no alternatives for this decision. Its text names these, in sections 9.2, 9.3, 9.6, 15.1 (decision 7) and 15.6:
+
+- **A dedicated address on the owner's domain, copied to the inbox**, on every application (section 15.1, decision 7).
+- **A separate alert email** for the app's own mail (section 9.2).
+- **A list of senders the user keeps** (section 9.3).
+- **A Gmail scope narrower than the whole mailbox** (section 9.3).
+- **Google verification of the Connect Gmail app in v1** (sections 9.3 and 15.6).
+- **The Google project left in "Testing" status** (section 9.3).
+- **An application email that is not Gmail, in v1** (sections 9.6 and 15.6).
 
 ## Decision
 
@@ -20,7 +28,13 @@ Each user sets their application email, offered from the Gmail account they conn
 
 ### Rejected alternatives
 
-The options design-v3 section 9 compares other than the one decided above, for the reasons given there.
+- **A dedicated address on the owner's domain**: "Approved as recommended on 2026-11-21 (a dedicated address on the owner's domain, copied to the inbox); the owner's decision of 2026-11-23 replaces it: each user's own application email, set in a dashboard field, with no app-owned address on applications (C13)" (section 15.1).
+- **A separate alert email**: "there is no separate alert email (the owner, 2026-11-24: "drop the step entirely because why shouldnt the application email be used? ...")" (section 9.2).
+- **A list of senders the user keeps**: "The sources are automatic and the user keeps no list of senders on any screen (the owner, 2026-11-23)" (section 9.3).
+- **A narrower Gmail scope**: not available. "No Gmail scope is limited to a sender, a label or a search. So **the stored token can technically read the whole mailbox**; only the app's own search and gate keep it to job mail" (section 9.3).
+- **Google verification in v1**: it requires "an annual security assessment from an independent, third-party assessor that is approved by Google", and "can potentially take several weeks"; "v1 does not seek it; it is a v2 item" (the owner, 2026-11-23: "skip it for v1, but document it as a v2 item") (sections 9.3 and 15.6).
+- **"Testing" status**: a project in it "is issued a refresh token expiring in 7 days", so "the Google project is set to production, not Testing (T39)" (section 9.3).
+- **An application email that is not Gmail**: "v1 supports Gmail only; anything else is a v2 requirement" (section 9.6), with the points for designing it in section 15.6.
 
 ## Consequences
 
