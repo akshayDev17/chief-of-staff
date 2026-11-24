@@ -10,8 +10,9 @@
 //
 //   lookupTier(db, { provider, model }) -> "Smallest" | "Middle" | "Strongest" | undefined
 //
-// The model's one tier at that provider, for the picker (T17) and the usage
-// ledger (T18); see tiers.ts for the price it comes from.
+// The model's one tier at that provider, for Add a model (T17), the per-task
+// picker (T18) and the usage ledger (T12); see tiers.ts for the price it
+// comes from.
 
 import { currentSnapshot, readModelRows, readRow } from "./store";
 import { modelTier, type Tier } from "./tiers";
