@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setBudget } from "../src/proxy/budgets";
 import { writeConnection } from "../src/proxy/connections";
 import { monthSpend } from "../src/proxy/ledger";
+import { recentAlerts } from "../src/prices/store";
 import { callModel, costOf, type ModelCall } from "../src/proxy/proxy";
 import { dumpEveryTable, ok, refused, seedPrices, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
@@ -56,8 +57,9 @@ describe("one ledger row per call", () => {
       user_id: userId, at: NOW.toISOString(), task: "fill", site: "jobs.example.com", run_id: "run-1",
       provider: "bedrock", model: "test-sonnet", region: "global", tier: "Strongest", plugin_version: "test-bedrock-1",
       status: 200, fallback: 0, fallback_reason: null, input_tokens: 2000, cached_input_tokens: 5000,
-      cache_write_tokens: 1000, cache_write_1h_tokens: 500, output_tokens: 400, long_prompt: 0,
+      cache_write_tokens: 1000, cache_write_1h_tokens: 500, output_tokens: 400, long_prompt: 0, costed_conservatively: null,
     });
+    expect(await recentAlerts(env.DB)).toEqual([]);
     expect(rows[0]!.cost_usd).toBeCloseTo(cost, 12);
     expect(typeof rows[0]!.duration_ms).toBe("number");
   });
@@ -70,34 +72,49 @@ describe("one ledger row per call", () => {
     expect(row!.cost_usd).toBeCloseTo((250_000 * 6 + 10_000 * 0.6 + 2000 * 7.5 + 1000 * 22.5) / 1e6, 12);
   });
 
-  it("costs nothing below list price: a kind used with no row leaves the cost unknown", () => {
+  it("costs a kind with no row of its own never below the vendor: cached input at input, else the dearest listed rate", () => {
     const at = (usdPerMTok: number) => ({ usdPerMTok, source: "azure-retail", dateRead: "", stale: false }) as const;
+    const short = { input: at(1), cache_write: at(1.25), output: at(4) };
+    const long = { input: at(2), output: at(6) };
     const usage = { input: 1e6, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 1e6, longPrompt: false };
-    expect(costOf(usage, { input: at(1), output: at(4) })).toBe(5);
-    expect(costOf({ ...usage, cachedInput: 1 }, { input: at(1), output: at(4) })).toBeUndefined();
-    expect(costOf({ ...usage, cacheWrite1h: 1 }, { input: at(1), cache_write: at(1.25), output: at(4) })).toBeUndefined();
+    expect(costOf(usage, short, long)).toEqual({ usd: 5, conservative: {} });
+    expect(costOf({ ...usage, cachedInput: 1e6 }, short, long)).toEqual({ usd: 6, conservative: { cached_input: 1 } });
+    expect(costOf({ ...usage, cacheWrite1h: 1e6 }, short, long)).toEqual({ usd: 11, conservative: { cache_write_1h: 6 } });
+    expect(costOf({ ...usage, cachedInput: 1e6, cacheWrite: 1e6, longPrompt: true }, short, long)).toEqual({
+      usd: 2 + 2 + 6 + 6,
+      conservative: { cached_input: 2, cache_write: 6 },
+    });
   });
 
-  it("answers a call it cannot cost, then refuses the provider until the 1st rather than undercount", async () => {
-    // test-sonnet lists no long-prompt 1-hour cache write.
+  it("costs a long-prompt 1-hour cache write the table lacks at the dearest rate, marks the row and alerts the maintainers", async () => {
+    // test-sonnet lists no long-prompt 1-hour cache write; its dearest rate is the long-prompt output, $22.50.
     bedrock.replies.push(ok({ input: 250_000, cacheWrite1h: 4000, output: 1000, longPrompt: true }));
     expect(await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
-    const rows = await ledger();
-    expect(rows).toEqual([expect.objectContaining({ provider: "bedrock", cache_write_1h_tokens: 4000, long_prompt: 1, cost_usd: null })]);
-    expect(await monthSpend(env.DB, userId, "bedrock", NOW)).toBeUndefined();
+    const [row] = await ledger();
+    expect(row).toMatchObject({ cache_write_1h_tokens: 4000, long_prompt: 1, costed_conservatively: '{"cache_write_1h":22.5}' });
+    expect(row!.cost_usd).toBeCloseTo((250_000 * 6 + 4000 * 22.5 + 1000 * 22.5) / 1e6, 12);
+    expect(await recentAlerts(env.DB)).toEqual([
+      expect.objectContaining({
+        kind: "price_missing",
+        detail: expect.stringContaining("test-sonnet at Amazon Bedrock (global) has no long-prompt list price for cache_write_1h"),
+      }),
+    ]);
 
-    const next = await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock);
-    expect(next).toMatchObject({ kind: "refused", provider: "bedrock", reason: "no_price", resumesOn: "1 December" });
-    expect(bedrock.calls).toHaveLength(1);
-    expect(await monthSpend(env.DB, userId, "bedrock", new Date("2026-12-01T00:00:00Z"))).toBe(0);
+    expect(await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
+    expect(bedrock.calls).toHaveLength(2);
   });
 
-  it("leaves the cost unknown for cache tokens a model lists no price for", async () => {
-    vertex.replies.push(ok({ input: 800, cacheWrite: 200, output: 50 }));
+  it("costs cache tokens a model lists no price for conservatively, and counts them in the budget", async () => {
+    // test-gemini lists only input ($0.25) and output ($1).
+    vertex.replies.push(ok({ input: 800, cachedInput: 300, cacheWrite: 200, output: 50 }));
     expect(await callModel(env.DB, { bedrock, vertex }, call({ main: call().fallback!, fallback: undefined }), clock)).toMatchObject({
       kind: "answered", provider: "vertex",
     });
-    expect(await ledger()).toEqual([expect.objectContaining({ provider: "vertex", cache_write_tokens: 200, cost_usd: null })]);
+    const [row] = await ledger();
+    expect(JSON.parse(row!.costed_conservatively as string)).toEqual({ cached_input: 0.25, cache_write: 1 });
+    const cost = (800 * 0.25 + 300 * 0.25 + 200 * 1 + 50 * 1) / 1e6;
+    expect(row!.cost_usd).toBeCloseTo(cost, 12);
+    expect(await monthSpend(env.DB, userId, "vertex", NOW)).toBeCloseTo(cost, 12);
   });
 
   it("sends the request untouched with a freshly minted credential", async () => {

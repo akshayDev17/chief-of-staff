@@ -34,7 +34,9 @@ describe("a migration that changes or removes data", () => {
     }
   });
 
-  it("is none of the migrations shipped so far: they only add", () => {
-    for (const m of env.TEST_MIGRATIONS) expect(changesData(m.queries.join(";\n")), m.name).toBe(false);
+  it("is, among the migrations shipped so far, only the one that rebuilds the price alerts table", () => {
+    expect(env.TEST_MIGRATIONS.filter((m) => changesData(m.queries.join(";\n"))).map((m) => m.name)).toEqual([
+      "0006_add_price_missing_alert.sql",
+    ]);
   });
 });

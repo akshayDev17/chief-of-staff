@@ -30,9 +30,12 @@ CREATE TABLE model_calls (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   long_prompt INTEGER NOT NULL DEFAULT 0 CHECK (long_prompt IN (0, 1)), -- billed at long-prompt rates
   duration_ms INTEGER NOT NULL,
-  -- Tokens at the price table's list price; NULL when a kind of token the call
-  -- used had none, which stops the provider until the 1st rather than undercount.
-  cost_usd REAL CHECK (cost_usd >= 0),
+  cost_usd REAL NOT NULL CHECK (cost_usd >= 0), -- tokens at the price table's list price
+  -- A kind the call used with no list price of its own is costed above it (the
+  -- input price for cached input, else the model's dearest listed rate): a JSON
+  -- object of each such token kind and the USD per million tokens used, e.g.
+  -- {"cache_write_1h":22.5}. NULL when every kind had its own row.
+  costed_conservatively TEXT,
   CHECK ((fallback = 0 AND fallback_reason IS NULL) OR (fallback = 1 AND fallback_reason IS NOT NULL))
 );
 

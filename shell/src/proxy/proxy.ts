@@ -8,9 +8,6 @@
 // - no plug-in serves the provider (`no_plugin`);
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
-// - a call to the provider this month used a kind of token (a long-prompt
-//   rate, a 1-hour cache write) the price table has no list price for, so the
-//   month's spend there is not known (`no_price`), until the 1st of next month;
 // - the user has set no monthly budget for the provider (`no_budget`);
 // - the user's spend at the provider since the 1st has reached the budget
 //   (`budget_spent`), until the 1st of next month;
@@ -26,12 +23,16 @@
 // Every call sent to a provider writes one ledger row, answered or not, its
 // tokens costed at the price table's list price: at the long-prompt rows
 // when the provider billed the call at them, and each cache write at its own
-// 5-minute or 1-hour row. A row whose tokens cannot all be costed that way
-// has no cost, never a lower one, and stops the provider as above. The
+// 5-minute or 1-hour row. A kind the call used with no row of its own is
+// costed so it can never be below what the vendor charges: cached input at
+// the input price, anything else at the dearest rate the table lists for the
+// model there. The row names each such kind and its rate, and the
+// maintainers get a `price_missing` alert. The
 // request and reply bodies pass through untouched and are never logged or
 // stored; the credential lives only for the call.
 
 import { lookupPrice, lookupTier, type PriceAnswer } from "../prices/lookup";
+import { addAlert } from "../prices/store";
 import type { Provider, TokenKind } from "../prices/types";
 import { readBudget } from "./budgets";
 import { readConnection } from "./connections";
@@ -77,18 +78,33 @@ const USAGE_KINDS: ReadonlyArray<readonly [Exclude<keyof Usage, "longPrompt">, T
 
 type Prices = Partial<Record<TokenKind, PriceAnswer>>;
 
-// Tokens at the price table's list price, each kind at its own row.
-// Undefined when a kind the call used has no row: no call is costed below
-// its list price.
-export function costOf(usage: Usage, prices: Prices): number | undefined {
+export interface Cost {
+  usd: number;
+  // Each kind the call used that had no row of its own at the tier billed,
+  // and the rate, in USD per million tokens, it was costed at instead.
+  conservative: Partial<Record<TokenKind, number>>;
+}
+
+// Tokens at the price table's list price, each kind at its own row at the
+// tier the provider billed (`short` or `long` prompt). A kind with no row
+// there is never costed lower than the vendor charges: cached input at the
+// input price, any other kind at the dearest rate the model lists at either
+// tier.
+export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
+  const billed = usage.longPrompt ? long : short;
+  const ceiling = Math.max(...[...Object.values(short), ...Object.values(long)].map((p) => p?.usdPerMTok ?? 0));
+  const conservative: Cost["conservative"] = {};
   let usd = 0;
   for (const [count, kind] of USAGE_KINDS) {
     if (!usage[count]) continue;
-    const price = prices[kind];
-    if (!price) return undefined;
-    usd += usage[count] * price.usdPerMTok;
+    let rate = billed[kind]?.usdPerMTok;
+    if (rate === undefined) {
+      rate = kind === "cached_input" && billed.input ? billed.input.usdPerMTok : ceiling;
+      conservative[kind] = rate;
+    }
+    usd += usage[count] * rate;
   }
-  return usd / 1_000_000;
+  return { usd: usd / 1_000_000, conservative };
 }
 
 // The model's list prices at its location, at the short- or long-prompt rows.
@@ -122,16 +138,8 @@ async function attempt(
   const budget = await readBudget(db, call.userId, provider);
   if (!budget) return refuse("no_budget", `set a monthly budget for ${PROVIDER_NAMES[provider]} on Models › Setup › Budgets`);
   const startedAt = now();
-  const spent = await monthSpend(db, call.userId, provider, startedAt);
-  const resumesOn = RESUMES.format(nextMonthStart(startedAt));
-  if (spent === undefined) {
-    return refuse(
-      "no_price",
-      `a call to ${PROVIDER_NAMES[provider]} this month used tokens the price table has no list price for, so this month's spend is not known. Resumes ${resumesOn}`,
-      resumesOn,
-    );
-  }
-  if (spent >= budget.monthlyUsd) {
+  if ((await monthSpend(db, call.userId, provider, startedAt)) >= budget.monthlyUsd) {
+    const resumesOn = RESUMES.format(nextMonthStart(startedAt));
     return refuse("budget_spent", `model budget for ${PROVIDER_NAMES[provider]} this month reached. Resumes ${resumesOn}`, resumesOn);
   }
 
@@ -160,6 +168,7 @@ async function attempt(
     body = { error: `no reply from ${PROVIDER_NAMES[provider]}` };
   }
   const durationMs = Date.now() - t0;
+  const cost = costOf(usage, prices, await listPrices(db, choice, true));
 
   await writeLedgerRow(db, {
     userId: call.userId,
@@ -182,8 +191,19 @@ async function attempt(
     outputTokens: usage.output,
     longPrompt: usage.longPrompt,
     durationMs,
-    costUsd: costOf(usage, usage.longPrompt ? await listPrices(db, choice, true) : prices),
+    costUsd: cost.usd,
+    costedConservatively: cost.conservative,
   });
+  const substituted = Object.entries(cost.conservative);
+  if (substituted.length) {
+    const tier = usage.longPrompt ? "long-prompt " : "";
+    const detail =
+      `${model} at ${PROVIDER_NAMES[provider]} (${location}) has no ${tier}list price for ` +
+      substituted.map(([kind, rate]) => `${kind} (a call was costed at $${rate} per million tokens instead)`).join(", ") +
+      ". Add the missing rows to the price table.";
+    console.warn(`price missing: ${detail}`);
+    await addAlert(db, startedAt, "price_missing", detail);
+  }
 
   const kind = status >= 200 && status < 300 ? "answered" : "provider_error";
   return { kind, ...base, status, body };

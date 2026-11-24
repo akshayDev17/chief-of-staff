@@ -29,10 +29,13 @@ registered until then, so every call is refused `no_plugin`.
    location in the current price table (`lookupPrice`, T11), else it is refused
    (`no_price`). Once the reply is in, every kind of token it used is costed
    at its own row: the long-prompt rows when the provider billed at them, and
-   the 5-minute and 1-hour cache writes each at theirs. A call that used a kind
-   with no row is never costed lower: its ledger row has no cost, and the
-   provider's calls are refused (`no_price`) until the 1st, since that
-   month's spend there is not known.
+   the 5-minute and 1-hour cache writes each at theirs. A kind the call used
+   with no row of its own is costed so it can never be below what the vendor
+   charges: cached input at the input price, anything else at the dearest
+   rate the table lists for the model at its location (input, output and cache
+   writes, at either prompt tier). The ledger row names each such kind and the
+   rate used (`costed_conservatively`), and the maintainers get a
+   `price_missing` alert on Admin · Price table.
 2. Enforces the provider's monthly budget: none set is refused (`no_budget`);
    the user's spend at that provider since 00:00 UTC on the 1st reaching it is
    refused (`budget_spent`) until the 1st, with the date it resumes. The call

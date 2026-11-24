@@ -30,8 +30,7 @@ export const BUDGETS_PATH = "/models/setup/budgets";
 export interface ProviderBudgetCard {
   provider: Provider;
   budget?: Budget;
-  // Undefined when a call this month has no cost (ledger.ts).
-  spentThisMonth: number | undefined;
+  spentThisMonth: number;
   suggestion?: Suggestion;
 }
 
@@ -54,9 +53,7 @@ function card(c: ProviderBudgetCard, applicationsADay: number): string {
 <p class="small">Basis: ${applicationsADay} application${applicationsADay === 1 ? "" : "s"} a day, if this provider carried every task, at ${esc(s.model)}'s list prices from the app's price table and the design's tokens per application. Replaced by the figures measured in practice mode.</p>`
     : `<p class="small muted">No suggestion yet: it is worked out from the list price of a model you pick at this provider (Add a model).</p>`;
   const set = c.budget
-    ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month · ${
-        c.spentThisMonth === undefined ? "spend since the 1st not known: a call used tokens with no list price" : `${cents(c.spentThisMonth)} spent since the 1st`
-      }</p>`
+    ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month · ${cents(c.spentThisMonth)} spent since the 1st</p>`
     : "";
   const unset = c.budget ? "" : `<p class="small muted">Until it is set, this provider's models cannot be called.</p>`;
   const hidden = `<input type="hidden" name="provider" value="${c.provider}">

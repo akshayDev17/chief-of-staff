@@ -128,7 +128,9 @@ export async function rollBackLatestSnapshot(db: D1Database): Promise<Snapshot |
   return currentSnapshot(db);
 }
 
-export type AlertKind = "refresh_failed" | "sources_disagree" | "maintainer_reading_due" | "rolled_back";
+// `price_missing` is raised by the model proxy (T12) when a call used a kind
+// of token its model has no list price for.
+export type AlertKind = "refresh_failed" | "sources_disagree" | "maintainer_reading_due" | "rolled_back" | "price_missing";
 
 export async function addAlert(db: D1Database, now: Date, kind: AlertKind, detail: string): Promise<void> {
   await db.prepare("INSERT INTO price_alerts (created_at, kind, detail) VALUES (?, ?, ?)").bind(now.toISOString(), kind, detail).run();
