@@ -106,7 +106,8 @@ After "Connect", the test call runs by itself; there is no test-call button.
   `test_call`), raises `price_missing` and records a removed grant as for any
   call. It needs the model's list price, as every call does; it needs no
   budget yet (budgets come after providers on the checklist), and waits while
-  one is set and spent.
+  one is set and spent; saving that provider's budget on Models › Setup ›
+  Budgets, or Try again, runs it again at once.
 - Each result is three lines, shown only to the user who made the call: the
   plain reason, the provider's own reply, the fix. "Ask Admin for help"
   (friends only) records the item's name and the plain reason in
