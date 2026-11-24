@@ -17,8 +17,9 @@ Each row shows, with nothing to type:
 - its strength (the tier, `lookupTier`), worked out from that price.
 
 Foundry calls a model by the user's deployment name: the row fills it in with
-the model ID (`connect.deploymentName`), and a user who named the deployment
-differently changes it. Friend screens say "Foundry's name for the model".
+the model's ID from Microsoft's catalog pages (`connect.deploymentName`,
+`FOUNDRY_MODEL_IDS`), and a user who named the deployment differently changes
+it. Friend screens say "Foundry's name for the model".
 
 **Pick** runs the model's test call by itself through the proxy's one
 pipeline (`sendTestCall`), which prices it and writes its ledger row (task
@@ -30,10 +31,14 @@ the three lines of design-v3 1.5 and nothing stored, when:
   call is made, because the budget stop needs a real price, and the proxy
   refuses a direct call to it too;
 - the plug-in cannot call it (`connect.canCall`: Bedrock needs Bedrock's own
-  ID for the model, `BEDROCK_MODEL_IDS`; Vertex AI calls Claude and Gemini);
+  ID for the model, `BEDROCK_MODEL_IDS`, and Foundry its catalog ID,
+  `FOUNDRY_MODEL_IDS`; Vertex AI calls Claude and Gemini);
 - the reply names a different model than the one picked
   (`connect.replyModel`, `namesPickedModel`): Messages and Chat Completions
-  `model`, Gemini's `modelVersion`; Bedrock's Converse names none;
+  `model`, Gemini's `modelVersion`; Bedrock's Converse names none. The reply
+  may add only a date or version stamp to the picked ID, and never names
+  another listed model whose ID extends it (`claude-opus-5-5-20261101` is
+  not Claude Opus 5);
 - the provider refuses the call: the plug-in's plain reason, so a misspelt
   Foundry deployment shows "That deployment name or model ID doesn't exist
   here." with Foundry's own reply under it.

@@ -96,21 +96,102 @@ const ASSERTION_LIFETIME_S = 300;
 const ENDPOINT = /^https:\/\/[a-z0-9][a-z0-9-]{1,62}\.services\.ai\.azure\.com\/?$/;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// The deployment name the guide asks the user to keep: the model's ID, from
-// its catalog name ("Claude Haiku 5.5" -> "claude-haiku-5-5").
-export const deploymentName = (model: string): string => model.trim().toLowerCase().replace(/[\s.]+/g, "-");
-
 // Claude is called in Anthropic's Messages format; every other model in
 // Chat Completions.
 export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim());
 
+// Foundry's own IDs for the models the app knows, by the price table's names,
+// from Microsoft's catalog pages (ms.date 2026-09-21, updated 2026-11-24,
+// read 2026-11-25):
+// - Claude: "Foundry Models from partners and community", the Claude table.
+//   https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-from-partners
+// - Every other model: "Foundry Models sold directly by Azure".
+//   https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-sold-directly-by-azure
+// The ID is the deployment name the guide asks the user to keep ("By
+// default, the deployment uses the model name"). A model the table prices
+// but this map leaves out (a Fireworks or Baseten row, a retired or dated
+// version, a meter that names no one catalog ID) cannot be picked.
+export const FOUNDRY_MODEL_IDS: Readonly<Record<string, string>> = {
+  "Claude Haiku 5.5": "claude-haiku-5-5",
+  "Claude Sonnet 5.5": "claude-sonnet-5-5",
+  "Claude Opus 5.5": "claude-opus-5-5",
+  "Claude Sonnet 5": "claude-sonnet-5",
+  "Claude Opus 5": "claude-opus-5",
+  "Claude Fable 5.1": "claude-fable-5-1",
+  "Claude Fable 5": "claude-fable-5",
+  "Claude Opus 4.8": "claude-opus-4-8",
+  "Claude Opus 4.7": "claude-opus-4-7",
+  "Claude Opus 4.6": "claude-opus-4-6",
+  "Claude Sonnet 4.6": "claude-sonnet-4-6",
+  "Claude Haiku 4.5": "claude-haiku-4-5",
+  "GPT-6.2-astra": "gpt-6.2-astra",
+  "GPT-6.2-sol": "gpt-6.2-sol",
+  "GPT-6.1-sol": "gpt-6.1-sol",
+  "GPT-6.1-terra": "gpt-6.1-terra",
+  "GPT-6-astra": "gpt-6-astra",
+  "GPT-6-luna": "gpt-6-luna",
+  "GPT-6-sol": "gpt-6-sol",
+  "GPT-5.6-sol": "gpt-5.6-sol",
+  "GPT-5.6-terra": "gpt-5.6-terra",
+  "GPT-5.6-luna": "gpt-5.6-luna",
+  "GPT-5.5": "gpt-5.5",
+  "GPT-5.4": "gpt-5.4",
+  "GPT-5.4 pro": "gpt-5.4-pro",
+  "GPT-5.4 mini": "gpt-5.4-mini",
+  "GPT-5.4 nano": "gpt-5.4-nano",
+  "GPT-5.3 codex": "gpt-5.3-codex",
+  "GPT-5.2 codex": "gpt-5.2-codex",
+  "GPT 5.2": "gpt-5.2",
+  "GPT 5.1": "gpt-5.1",
+  "GPT-5.1 codex": "gpt-5.1-codex",
+  "GPT-5.1 codex mini": "gpt-5.1-codex-mini",
+  "GPT-5.1 codex max": "gpt-5.1-codex-max",
+  "GPT 5": "gpt-5",
+  "GPT 5 Mini": "gpt-5-mini",
+  "GPT 5 Nano": "gpt-5-nano",
+  "gpt-5-codex": "gpt-5-codex",
+  "gpt 5 pro": "gpt-5-pro",
+  "gpt-oss-120B": "gpt-oss-120b",
+  "gpt 4.1": "gpt-4.1",
+  "gpt 4.1 mini": "gpt-4.1-mini",
+  "gpt 4.1 nano": "gpt-4.1-nano",
+  "codex mini": "codex-mini",
+  "o3-pro": "o3-pro",
+  "o4-mini 0416": "o4-mini",
+  "o3 0416": "o3",
+  "o3 mini 0131": "o3-mini",
+  "o1 1217": "o1",
+  "o1 mini": "o1-mini",
+  "DeepSeek V4.1 Flash": "DeepSeek-V4.1-Flash",
+  "DeepSeek V4 Pro": "DeepSeek-V4-Pro",
+  "DeepSeek V4 Flash 0731": "DeepSeek-V4-Flash-0731",
+  "DeepSeek V4 Flash": "DeepSeek-V4-Flash",
+  "DeepSeek V3.2": "DeepSeek-V3.2",
+  "Grok 4.7": "grok-4.7",
+  "Grok 4.6": "grok-4.6",
+  "Grok 4.3": "grok-4.3",
+  "Grok-4": "grok-4",
+  "Grok Code Fast 1": "grok-code-fast-1",
+  "Kimi 3.1 Pro": "Kimi-K3.1-Pro",
+  "Kimi K2.7 Code": "Kimi-K2.7-Code",
+  "Mistral Large 4": "mistral-large-4-latest",
+  "Mistral Large 3": "Mistral-Large-3",
+  "Llama 4 Maverick 17B": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+  "Llama 3.3 70B": "Llama-3.3-70B-Instruct",
+  "Cohere Command A Plus": "Cohere-command-a-plus-05-2026",
+  "Cohere Command A": "Cohere-command-a",
+  "MAI-Thinking-1": "MAI-Thinking-1",
+};
+
+// The deployment name the guide asks the user to keep: the model's ID.
+export const deploymentName = (model: string): string | undefined => FOUNDRY_MODEL_IDS[model];
+
+const foundryModelId = (model: string): string => FOUNDRY_MODEL_IDS[model] ?? model;
+
 // The Claude models Foundry sells (through Azure Marketplace, priced by the
 // maintainers' reading of each listing, shell/prices/maintainer-read.json):
 // offered on Add a model, as "no price yet" until that reading is recorded.
-export const FOUNDRY_CLAUDE_MODELS: readonly string[] = [
-  "Claude Haiku 5.5", "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude Sonnet 5", "Claude Opus 5", "Claude Fable 5.1", "Claude Fable 5",
-  "Claude Opus 4.8", "Claude Opus 4.7", "Claude Opus 4.6", "Claude Sonnet 4.6", "Claude Haiku 4.5",
-];
+export const FOUNDRY_CLAUDE_MODELS: readonly string[] = Object.keys(FOUNDRY_MODEL_IDS).filter(isClaude);
 
 const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
 
@@ -219,16 +300,15 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
     },
     testModel: "Claude Haiku 5.5",
     knownModels: FOUNDRY_CLAUDE_MODELS,
-    // Foundry calls any deployment by its name, Claude or not.
-    canCall: () => true,
+    canCall: (model) => model in FOUNDRY_MODEL_IDS,
     deploymentName,
     locations: () => ["global", "data-zone"],
     locationLabel: (location) => (location === "global" ? "Global Standard" : location === "data-zone" ? "Data Zone Standard" : location),
-    modelId: (model) => deploymentName(model),
+    modelId: foundryModelId,
     testRequest: (model) =>
       isClaude(model)
-        ? { model: deploymentName(model), max_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] }
-        : { model: deploymentName(model), max_completion_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] },
+        ? { model: foundryModelId(model), max_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] }
+        : { model: foundryModelId(model), max_completion_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] },
     replyText: (body) => messagesText(body) ?? chatCompletionsText(body),
     replyModel: messagesModel,
     classify(f: Failure) {
@@ -310,7 +390,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       return { accessToken: token, expiresIn: (body as { expires_in?: number }).expires_in };
     },
     async call({ credential, connection, model, deployment, request }) {
-      const name = deployment ?? deploymentName(model);
+      const name = deployment ?? foundryModelId(model);
       const claude = isClaude(model);
       const headers: Record<string, string> = { authorization: `Bearer ${(credential as { accessToken: string }).accessToken}`, "content-type": "application/json" };
       if (claude) headers["anthropic-version"] = ANTHROPIC_VERSION;
@@ -322,7 +402,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       const reply = await readBody(response);
       if (!response.ok) return { status: response.status, body: reply, error: errorFromBody(response.status, reply) };
       // The long-prompt rule is keyed by the model's own ID, not the user's name for it.
-      return { status: response.status, body: reply, usage: claude ? usageFromMessages(reply, deploymentName(model)) : usageFromChatCompletions(reply) };
+      return { status: response.status, body: reply, usage: claude ? usageFromMessages(reply, foundryModelId(model)) : usageFromChatCompletions(reply) };
     },
   };
 }

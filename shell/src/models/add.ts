@@ -126,7 +126,7 @@ async function saveUserModel(db: D1Database, userId: string, m: UserModel): Prom
     .prepare(
       `INSERT INTO user_models (user_id, provider, model, location, deployment, added_at, test_result) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
        ON CONFLICT (user_id, provider, model) DO UPDATE SET location = excluded.location, deployment = excluded.deployment,
-         added_at = excluded.added_at, test_result = excluded.test_result`,
+         test_result = excluded.test_result`,
     )
     .bind(userId, m.provider, m.model, m.location, m.deployment ?? null, m.addedAt, m.test ? JSON.stringify(m.test) : null)
     .run();
@@ -200,21 +200,24 @@ const comparable = (id: string): string =>
     .replace(/^anthropic\./, "")
     .replace(/[\s._]+/g, "-");
 
+// A date or version stamp a provider puts after a model's ID: "20261001",
+// "2026-10-01", "001", "v1:0", one or more of them.
+const STAMP_PART = String.raw`(?:\d{8}|\d{4}-\d{2}-\d{2}|\d{3}|v\d+(?::\d+)?)`;
+const STAMP = new RegExp(`^${STAMP_PART}(?:-${STAMP_PART})*$`);
+
 // Whether the model a reply names is the one picked: its ID, or that ID with
-// a version or date after it ("claude-haiku-5-5-20261001", "gemini-3.5-flash-001"),
-// but never a longer name ("gemini-3.5-flash-lite" is not "gemini-3.5-flash").
-// A reply that only echoes the user's own deployment name names no model,
-// unless that name is another listed model's ID (`otherIds`).
+// a date or version stamp after it ("claude-haiku-5-5-20261001",
+// "gemini-3.5-flash-001"), but never a longer name ("gemini-3.5-flash-lite"
+// is not "gemini-3.5-flash", "claude-opus-5-5-20261101" is not
+// "claude-opus-5") and never another listed model's ID (`otherIds`) that
+// extends it. A reply that only echoes the user's own deployment name names
+// no model, unless that name is another listed model's ID.
 export function namesPickedModel(replied: string, modelId: string, deployment?: string, otherIds: readonly string[] = []): boolean {
   const said = comparable(replied);
   const id = comparable(modelId);
-  const isModel = (candidate: string): boolean => {
-    if (said === candidate) return true;
-    if (!said.startsWith(`${candidate}-`)) return false;
-    return /^(\d|v\d|latest\b|preview\b)/.test(said.slice(candidate.length + 1));
-  };
-  if (isModel(id)) return true;
+  const isModel = (candidate: string): boolean => said === candidate || (said.startsWith(`${candidate}-`) && STAMP.test(said.slice(candidate.length + 1)));
   const others = otherIds.map(comparable).filter((o) => o !== id);
+  if (isModel(id)) return !others.some((o) => o.length > id.length && isModel(o));
   return Boolean(deployment && said === comparable(deployment) && !others.some(isModel));
 }
 
@@ -244,7 +247,7 @@ export async function addModel(
 
   let deployment: string | undefined;
   if (plugin.connect.deploymentName) {
-    deployment = (input.deployment ?? "").trim() || plugin.connect.deploymentName(model);
+    deployment = (input.deployment ?? "").trim() || (plugin.connect.deploymentName(model) ?? "");
     if (!DEPLOYMENT.test(deployment)) return refuse("bad_deployment", { location: offer.location });
   }
   const { location } = offer;

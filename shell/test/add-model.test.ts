@@ -10,6 +10,7 @@ import type { PriceRow, Provider } from "../src/prices/types";
 import { writeConnection } from "../src/proxy/connections";
 import type { PluginRegistry } from "../src/proxy/plugin";
 import { callModel } from "../src/proxy/proxy";
+import { runCheck } from "../src/providers/check";
 import type { Viewer } from "../src/providers/page";
 import { APP_ORIGIN, issuerKey, issuerKeys, scriptedFetch, type Sent } from "./issuer-fixture";
 import { ok, testPlugin, userFor, type TestPlugin } from "./test-plugin";
@@ -37,8 +38,16 @@ const seed = () =>
       row("bedrock", "test-half-priced", "input", 1, "aws-price-list"),
       row("foundry", "Claude Sonnet 5.5", "input", 3),
       row("foundry", "Claude Sonnet 5.5", "output", 15),
-      row("foundry", "GPT-6", "input", 1.25, "azure-retail"),
-      row("foundry", "GPT-6", "output", 10, "azure-retail"),
+      row("foundry", "Claude Opus 5", "input", 5),
+      row("foundry", "Claude Opus 5", "output", 25),
+      row("foundry", "Claude Opus 5.5", "input", 5),
+      row("foundry", "Claude Opus 5.5", "output", 25),
+      row("foundry", "GPT-6-luna", "input", 1.25, "azure-retail"),
+      row("foundry", "GPT-6-luna", "output", 10, "azure-retail"),
+      row("foundry", "GPT 5.1", "input", 1.25, "azure-retail"),
+      row("foundry", "GPT 5.1", "output", 10, "azure-retail"),
+      row("foundry", "DeepSeek V3.2 (Fireworks)", "input", 0.56, "azure-retail"),
+      row("foundry", "DeepSeek V3.2 (Fireworks)", "output", 1.68, "azure-retail"),
       { ...row("vertex", "Gemini 3.5 Flash", "input", 0.3, "google-catalog"), deployment: "regional", region: "us" },
       { ...row("vertex", "Gemini 3.5 Flash", "output", 2.5, "google-catalog"), deployment: "regional", region: "us" },
     ],
@@ -183,6 +192,20 @@ describe("Add a model: each user's own", () => {
     expect((await ledger(other)).map((r) => r.model)).toEqual(["test-haiku"]);
   });
 
+  it("keeps a model's first added date when it is tested again, so the daily check keeps calling the first model picked", async () => {
+    await pick(plugins, "bedrock", { model: "test-haiku" });
+    const later = new Date("2026-11-26T10:00:00Z");
+    await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "test-sonnet", now: later });
+    const latest = new Date("2026-11-27T10:00:00Z");
+    expect(await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "test-haiku", now: latest })).toMatchObject({ kind: "added" });
+    const haiku = (await readUserModels(env.DB, userId)).find((m) => m.model === "test-haiku")!;
+    expect(haiku.addedAt).toBe(NOW.toISOString());
+    expect(haiku.test?.at).toBe(latest.toISOString());
+
+    await runCheck(env.DB, plugins, userId, "bedrock", latest);
+    expect(plugin.calls.at(-1)!.model).toBe("test-haiku");
+  });
+
   it("refuses a form posted from another site", async () => {
     const response = await handleAddModel(
       request("/bedrock/pick", { method: "POST", body: new URLSearchParams({ model: "test-sonnet" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" } }),
@@ -205,10 +228,13 @@ describe("Add a model on Microsoft Foundry", () => {
   });
 
   // Foundry answers only the deployments it has: Claude Sonnet 5.5 deployed
-  // as "claude-sonnet-5-5" and as "my-sonnet", GPT-6 as "gpt-6", and
-  // "claude-haiku-5-5" running Claude Haiku 5.5.
+  // as "claude-sonnet-5-5" and as "my-sonnet", GPT-6-luna as "gpt-6-luna",
+  // "claude-haiku-5-5" running Claude Haiku 5.5, and "claude-opus-5" running
+  // Claude Opus 5.5.
   function foundry() {
-    const deployments: Record<string, string> = { "claude-sonnet-5-5": "claude-sonnet-5-5", "my-sonnet": "claude-sonnet-5-5", "claude-haiku-5-5": "claude-haiku-5-5" };
+    const deployments: Record<string, string> = {
+      "claude-sonnet-5-5": "claude-sonnet-5-5", "my-sonnet": "claude-sonnet-5-5", "claude-haiku-5-5": "claude-haiku-5-5", "claude-opus-5": "claude-opus-5-5-20261101",
+    };
     const notFound = () => Response.json({ error: { code: "DeploymentNotFound", message: "The API deployment for this resource does not exist." } }, { status: 404 });
     const { fetcher, sent } = scriptedFetch([
       [/^https:\/\/login\.microsoftonline\.com\//, () => Response.json({ token_type: "Bearer", expires_in: 4500, access_token: "entra-access-token" })],
@@ -220,8 +246,8 @@ describe("Add a model on Microsoft Foundry", () => {
       }],
       [/\/openai\/v1\/chat\/completions$/, (s: Sent) => {
         const name = JSON.parse(s.body).model as string;
-        if (name !== "gpt-6") return notFound();
-        return Response.json({ model: "gpt-6-2026-10-01", choices: [{ message: { role: "assistant", content: "OK" } }], usage: { prompt_tokens: 15, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 0 } } });
+        if (name !== "gpt-6-luna") return notFound();
+        return Response.json({ model: "gpt-6-luna-2026-10-01", choices: [{ message: { role: "assistant", content: "OK" } }], usage: { prompt_tokens: 15, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 0 } } });
       }],
     ]);
     const plugin = foundryPlugin({ APP_ORIGIN, ISSUER_KEYS, ENTRA_CLIENT_ID: "client-1", ENTRA_CERT_KEY: keyPem, ENTRA_CERT_THUMBPRINT: "thumb" }, fetcher, () => NOW);
@@ -236,7 +262,9 @@ describe("Add a model on Microsoft Foundry", () => {
     const page = await (await open(regs, "?provider=foundry")).text();
     expect(page).toContain('<label class="small" for="dep-foundry-Claude-Sonnet-5-5">Deployment name</label>');
     expect(page).toContain('name="deployment" value="claude-sonnet-5-5"');
-    expect(page).toContain('name="deployment" value="gpt-6"');
+    expect(page).toContain('name="deployment" value="gpt-6-luna"');
+    // The catalog's own ID, dots kept.
+    expect(page).toContain('name="deployment" value="gpt-5.1"');
     expect(page).toContain("Change it only if you named it differently at Foundry.");
     const at = page.indexOf("<strong>Claude Haiku 5.5</strong>");
     const tr = page.slice(at, page.indexOf("</tr>", at));
@@ -263,12 +291,12 @@ describe("Add a model on Microsoft Foundry", () => {
   it("calls a model that is not Claude in Chat Completions, and costs it from the price table", async () => {
     const { plugins: regs, sent } = foundry();
     await connectFoundry(regs);
-    const outcome = await addModel(env.DB, regs, { userId, provider: "foundry", model: "GPT-6", now: NOW });
-    expect(outcome).toMatchObject({ kind: "added", model: { deployment: "gpt-6", test: { repliedModel: "gpt-6-2026-10-01", usage: { input: 15, output: 4 } } } });
+    const outcome = await addModel(env.DB, regs, { userId, provider: "foundry", model: "GPT-6-luna", now: NOW });
+    expect(outcome).toMatchObject({ kind: "added", model: { deployment: "gpt-6-luna", test: { repliedModel: "gpt-6-luna-2026-10-01", usage: { input: 15, output: 4 } } } });
     const call = sent.find((s) => s.url.endsWith("/chat/completions"))!;
     expect(call.url).toBe(`${ENDPOINT}/openai/v1/chat/completions`);
     expect(call.headers.get("authorization")).toBe("Bearer entra-access-token");
-    expect(JSON.parse(call.body)).toMatchObject({ model: "gpt-6", max_completion_tokens: 5 });
+    expect(JSON.parse(call.body)).toMatchObject({ model: "gpt-6-luna", max_completion_tokens: 5 });
   });
 
   it("shows a misspelt deployment name's plain reason and adds nothing", async () => {
@@ -291,10 +319,31 @@ describe("Add a model on Microsoft Foundry", () => {
     expect(await readUserModels(env.DB, userId)).toEqual([]);
   });
 
+  it("shows a model with no catalog ID in the app as \"cannot be picked\", and refuses it without calling Foundry", async () => {
+    const { plugins: regs, sent } = foundry();
+    await connectFoundry(regs);
+    const page = await (await open(regs, "?provider=foundry")).text();
+    const at = page.indexOf("<strong>DeepSeek V3.2 (Fireworks)</strong>");
+    const tr = page.slice(at, page.indexOf("</tr>", at));
+    expect(tr).toContain("$0.56 in · $1.68 out");
+    expect(tr).toContain("Cannot be picked");
+    expect(tr).not.toContain('name="deployment"');
+    expect(await addModel(env.DB, regs, { userId, provider: "foundry", model: "DeepSeek V3.2 (Fireworks)", now: NOW })).toMatchObject({ kind: "refused", reason: "cannot_call" });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("refuses a deployment named for the picked model whose reply names a newer listed model that extends its ID", async () => {
+    const { plugins: regs } = foundry();
+    await connectFoundry(regs);
+    const outcome = await addModel(env.DB, regs, { userId, provider: "foundry", model: "Claude Opus 5", now: NOW });
+    expect(outcome).toMatchObject({ kind: "refused", reason: "wrong_model", reply: { repliedModel: "claude-opus-5-5-20261101" } });
+    expect(await readUserModels(env.DB, userId)).toEqual([]);
+  });
+
   it("refuses a name Foundry cannot have without calling it", async () => {
     const { plugins: regs, sent } = foundry();
     await connectFoundry(regs);
-    expect(await addModel(env.DB, regs, { userId, provider: "foundry", model: "GPT-6", deployment: "has spaces/and slashes", now: NOW })).toMatchObject({ kind: "refused", reason: "bad_deployment" });
+    expect(await addModel(env.DB, regs, { userId, provider: "foundry", model: "GPT-6-luna", deployment: "has spaces/and slashes", now: NOW })).toMatchObject({ kind: "refused", reason: "bad_deployment" });
     expect(sent).toHaveLength(0);
   });
 
@@ -348,6 +397,16 @@ describe("the model a reply names", () => {
     expect(namesPickedModel("publishers/google/models/gemini-3.5-flash", "gemini-3.5-flash")).toBe(true);
     expect(namesPickedModel("gemini-3.5-flash-lite", "gemini-3.5-flash")).toBe(false);
     expect(namesPickedModel("claude-sonnet-5-5", "claude-haiku-5-5")).toBe(false);
+    expect(namesPickedModel("claude-haiku-4-5-20251001-v1:0", "claude-haiku-4-5")).toBe(true);
+    // Not a newer model whose ID extends the picked one's, listed or not.
+    expect(namesPickedModel("claude-opus-5-5-20261101", "claude-opus-5")).toBe(false);
+    expect(namesPickedModel("claude-opus-5-5-20261101", "claude-opus-5", undefined, ["claude-opus-5-5"])).toBe(false);
+    expect(namesPickedModel("claude-opus-5-20261101", "claude-opus-5", undefined, ["claude-opus-5-5"])).toBe(true);
+    expect(namesPickedModel("gpt-5.1-2025-11-13", "gpt-5", undefined, ["gpt-5.1"])).toBe(false);
+    expect(namesPickedModel("claude-opus-5-5-fast", "claude-opus-5-5")).toBe(false);
+    expect(namesPickedModel("gemini-3.5-flash-preview", "gemini-3.5-flash")).toBe(false);
+    // Nor a reply that also names a longer listed model with a stamp after it.
+    expect(namesPickedModel("deepseek-v4-flash-0731", "DeepSeek-V4-Flash", undefined, ["DeepSeek-V4-Flash-0731"])).toBe(false);
     // A reply that only echoes the user's own deployment name names no model.
     expect(namesPickedModel("my-sonnet", "claude-sonnet-5-5", "my-sonnet")).toBe(true);
     // Unless the name is another listed model's ID.

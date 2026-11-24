@@ -165,8 +165,9 @@ export interface ConnectMethod {
   canCall(model: string): boolean;
   // Foundry only: the deployment name the guide asks the user to keep, the
   // model's ID, filled in on Add a model and changed by a user who named the
-  // deployment differently. Absent where the provider names the model itself.
-  deploymentName?(model: string): string;
+  // deployment differently; undefined for a model it cannot call. Absent
+  // where the provider names the model itself.
+  deploymentName?(model: string): string | undefined;
   // The model a reply says answered, in the provider's own words, where the
   // reply names one (Messages `model`, Chat Completions `model`, Gemini
   // `modelVersion`); undefined where it does not (Bedrock's Converse).
