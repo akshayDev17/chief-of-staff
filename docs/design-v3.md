@@ -199,7 +199,7 @@ This table is the only comparison with design-v2 in this document. Line numbers 
                                                                           ▼
           THE AGENT (Cloudflare Container: Python, ADK, Chrome) ─► NodeMaven residential proxies, each user's own sessions ─► LinkedIn, employer portals
                                                                           │ every model call
-                          model proxy in the shell ─► AI Gateway ─► the user's own Foundry, Bedrock or Vertex AI account
+                          model proxy in the shell ─► the user's own Foundry, Bedrock or Vertex AI account
 ```
 
 **Five things to know before accepting**
@@ -218,7 +218,7 @@ This table is the only comparison with design-v2 in this document. Line numbers 
 
 ## 1. Model endpoint
 
-**Design: each user, the owner included, brings their own model provider account at one or more of three providers: Microsoft Foundry, Amazon Bedrock or Google Vertex AI. These three are the only providers in v1, for the owner and every friend; there is no direct Anthropic or OpenAI key (the owner, 2026-11-23: "model providers for **everyone**: only the 3 for now"). The user registers each provider on guided screens; the credentials go into that user's own encrypted vault. Every model call goes through one proxy in this app's Worker, which reads the credential from the vault, costs the call from the app's own price table, refuses the call if the user's budget at that provider is spent, and writes one ledger row. Cloudflare AI Gateway stays in the path as a free pass-through that keeps an independent count.**
+**Design: each user, the owner included, brings their own model provider account at one or more of three providers: Microsoft Foundry, Amazon Bedrock or Google Vertex AI. These three are the only providers in v1, for the owner and every friend; there is no direct Anthropic or OpenAI key (the owner, 2026-11-23: "model providers for **everyone**: only the 3 for now"). The user registers each provider on guided screens; the credentials go into that user's own encrypted vault. Every model call goes through one proxy in this app's Worker, which reads the credential from the vault, costs the call from the app's own price table, refuses the call if the user's budget at that provider is spent, and writes one ledger row. Each provider's own console and bill are the independent check; there is no AI Gateway in v1 (the owner, 2026-11-24: "yes drop it").**
 
 The reason for the provider choice is the owner's: the models should not sit with the same vendor as everything else ("not all eggs in one basket"), and the owner wants to be "slightly on a backfoot" with Microsoft (HANDOFF.md:53). Bedrock and Vertex AI are the suppliers besides Microsoft (T14). Microsoft Foundry is the current name of Azure AI Foundry; Azure OpenAI is part of it.
 
@@ -259,7 +259,7 @@ Foundry's terms, from design-v2's reading of Microsoft's pages (2026-11-21):
 
 The default rate limits of all three providers, read from the vendors' current pages and dated, are shown beside the app's price table (T11). Bedrock's and Vertex AI's data-handling terms are not summarised here; *unverified* until the provider guides are written from their pages (T16).
 
-**Decision 5 (where prompts are processed).** The owner approved Global processing, on condition that the owner sees the prices of frontier models and of cheaper good-enough models (HANDOFF.md:39). The app's price table (section 1.3) is what the owner sees, with every region and deployment type it prices. **Regions are chosen by the app** (the owner, 2026-11-24: "since region is part of request and is key agnostic, kets use your suggested defaults"). A region is a property of each request, not of the key: Vertex AI's region is in the request address itself (`locations/global`, `LOCATION-aiplatform.googleapis.com`, or the us and eu multi-region hosts), and the only key tied to a region is Bedrock's short-term key ("You can use a short-term API key only in the AWS Region where you generated it", AWS's page as read by the main firstmate), which the app does not use; AWS's pages do not say long-term keys are region-locked. Defaults: Global on Bedrock and Foundry; on Vertex AI a specific region, since Cloudflare's gateway page advises "a specific regional endpoint like `us-central1` or `us-east4` rather than `global`. The `global` endpoint has limited model support" [CF-AIG-VERTEX]. The app picks the region automatically from what the chosen model supports at that provider (the price table's regions), the test call proves it, and the user may change it on the Models tab (T16).
+**Decision 5 (where prompts are processed).** The owner approved Global processing, on condition that the owner sees the prices of frontier models and of cheaper good-enough models (HANDOFF.md:39). The app's price table (section 1.3) is what the owner sees, with every region and deployment type it prices. **Regions are chosen by the app** (the owner, 2026-11-24: "since region is part of request and is key agnostic, kets use your suggested defaults"). A region is a property of each request, not of the key: Vertex AI's region is in the request address itself (`locations/global`, `LOCATION-aiplatform.googleapis.com`, or the us and eu multi-region hosts), and the only key tied to a region is Bedrock's short-term key ("You can use a short-term API key only in the AWS Region where you generated it", AWS's page as read by the main firstmate), which the app does not use; AWS's pages do not say long-term keys are region-locked. Defaults: Global on Bedrock and Foundry; on Vertex AI a specific regional endpoint, since its global endpoint supports fewer models. The app picks the region automatically from what the chosen model supports at that provider (the price table's regions), the test call proves it, and the user may change it on the Models tab (T16).
 
 **Decision 6 (model per task)** is agreed: the smallest tier for matching and extraction, the middle tier for form filling (HANDOFF.md:40). For writing, the owner set the tiers (2026-11-24): "cover letter: mid tier should do the job. messages: simplest task, low tier should do." So cover letters are on the middle tier, and LinkedIn invitations and messages on the smallest. Free-text answers on forms follow the cover-letter answer and are on the middle tier too. No task defaults to the strongest tier (the owner, 2026-11-24: "oh its too costly, lets use the middle tier as was the case before."), so the form-filling loop runs on the middle tier. These are the defaults the per-task picker proposes; each user can change any task's model (section 1.5). **Three tiers, set by the app from price** (the owner, 2026-11-24: "lets combine strong and strongest into one, and then i accept ur tiers."). Each model's tier is worked out by the app's code from its input list price per 1M tokens in the price table (section 1.3), refreshed daily, never by the user or the maintainers: **Smallest** under $0.50; **Middle** $0.50 to under $2.50; **Strongest** $2.50 and up. A price change that crosses a boundary moves the model by itself. The bands come from the price report of 2026-11-24 (`data/cos-model-prices/report.md`), in which input prices group near $0.10 to $0.30, $1 to $2, $3 to $4 and $8 to $10; the top two groups are one tier. GPT-6.1 Terra and GPT-6 Luna stand in for the GPT-6 "mini" and "nano" the owner named, which do not exist under those names (the owner, 2026-11-24: "yes use terra and luna"). As read then: Claude Haiku 5.5 ($0.10), GPT-6 Luna, DeepSeek-V4.1-Flash, Gemini 3.5 Flash-Lite and Grok 4.1 Fast are Smallest; Claude Sonnet 5.5 ($2), GPT-6.x Sol, GPT-6.1 Terra, Gemini 4 Hydrogen, Gemini 3.8 Flash, DeepSeek-V4-Pro and Grok 4.6 and 4.7 are Middle; Claude Opus 5.5 ($4), Gemini 4 Carbon, Argon and Neon, Kimi K3 and K3.1 and GPT-6.x Astra are Strongest. Which model each task uses is proposed by the per-task picker (section 1.5).
 
@@ -296,11 +296,10 @@ Where each row comes from (vendors' pages and price sources read 2026-11-23):
 
 | Layer | What it is | Why it is there |
 | --- | --- | --- |
-| **The model proxy** | One entrypoint in this app's Worker, reached from the agent container as `models.cos` (section 2.4) | It is the only code that reads a provider credential, so the container never holds one. It reads the run's user's credential from that user's vault, attaches the tags, refuses the call if that user's budget is spent or the model has no price, sends it on, and writes one ledger row from the provider's reply. No provider can attribute cost to a job site, so per-site figures can only come from something in front that this app controls [AZ-COSTS] |
-| **The per-user vault** | One per user, for both tiers: rows in D1, encrypted with that user's own key (section 11.3) | It holds that user's provider credentials, portal passwords and Gmail token, and in the owner's vault the residential-exit details every user's browser uses in v1 (section 3.4). T16 writes provider credentials to it; the proxy reads them; nothing else does. Credentials are never shown again after entry, and never sit in Secrets Store |
-| **Cloudflare AI Gateway**, as a pass-through | A managed gateway with routes for all three providers: Azure OpenAI (`…/azure-openai/{resource_name}/{deployment_name}`) and custom providers [CF-AIG-AZURE] [CF-AIG-CUSTOM]; Amazon Bedrock (`…/aws-bedrock`), which accepts "an Amazon Bedrock API key" on its Anthropic Messages route [CF-AIG-BEDROCK]; Google Vertex AI (`…/google-vertex-ai`), which accepts a "Service account JSON in header" or an access token [CF-AIG-VERTEX] | It costs nothing and keeps a second, independent count of calls and tokens that this app did not write. Its own key store ("BYOK") is not used: credentials stay in each user's vault and travel with each request. Prompt bodies are not logged (`cf-aig-collect-log-payload: false` [CF-AIG-LOGGING]). It can be switched out of the path with one setting |
+| **The model proxy** | One entrypoint in this app's Worker, reached from the agent container as `models.cos` (section 2.4) | It is the only code that reads a provider credential, so the container never holds one. It reads the run's user's credential from that user's vault, refuses the call if that user's budget is spent or the model has no price, sends it on, and writes one ledger row from the provider's reply. No provider can attribute cost to a job site, so per-site figures can only come from something in front that this app controls [AZ-COSTS] |
+| **The per-user vault** | One per user, for both tiers: rows in D1, encrypted with that user's own key (section 11.3) | It holds that user's provider credentials, portal passwords and Gmail token, and in the owner's vault the NodeMaven username, password and API key (section 3.4). T16 writes provider credentials to it; the proxy reads them; nothing else does. Credentials are never shown again after entry, and never sit in Secrets Store |
 
-Considered and not used: nothing in front of the providers (then no per-site figures and the credential would have to live in the container); a provider's own API gateway product (a further paid service for something the Worker already does [AZ-APIM]); LiteLLM as a proxy server (it needs a server and a database of its own).
+Considered and not used: Cloudflare AI Gateway as a pass-through in front of the providers (a second count of calls the app does not need: the ledger is the app's count, and each provider's own console and bill are the independent check) (the owner, 2026-11-24: "yes drop it", after asking "why we still need this?"); nothing in front of the providers (then no per-site figures and the credential would have to live in the container); a provider's own API gateway product (a further paid service for something the Worker already does [AZ-APIM]); LiteLLM as a proxy server (it needs a server and a database of its own).
 
 **How the agent names a model without a key.** The agent side names a model through ADK's connectors, with the address set to `models.cos` and no real key. For Claude it is ADK's own Claude connector (`AnthropicLlm`), whose prompt caching ADK documents ("ADK places cache breakpoints on the tool declarations, the system instruction, and the latest conversation content" [ADK-ANTHROPIC]); for OpenAI-family models it is LiteLLM (`LiteLlm(model="azure/<deployment>")`), the course's connector [ADK-OPENAI]. Design-v2 ran these against a local stand-in for Foundry's routes; each returned token counts, including cached tokens, to ADK (Appendix B.3). The connectors for Bedrock and Vertex AI routes behind `models.cos` are confirmed live in M2 (T12).
 
@@ -358,7 +357,7 @@ Read on 2026-11-23; each page's own date is in brackets where it shows one. Each
 
 ### 1.7 How daily and per-site usage, cost and time are produced
 
-Three records are kept, because no single one is enough.
+Two records are kept: the app's own count, and the provider's bill as the independent check.
 
 **Record A: the app's own ledger** (exact tokens, exact time, per user and per site). The proxy writes a row to D1 after every call:
 
@@ -377,9 +376,7 @@ Three records are kept, because no single one is enough.
 
 A second table records each container run: user, `site`, `company`, `run_id`, start, end, size. The dashboard's figures are plain queries on these two tables: daily usage, per-site tokens and cost, per-site time, and cost per submitted application on each path.
 
-**Record B: AI Gateway's analytics**, an independent count. Each call carries up to five tags to the gateway [CF-AIG-META]; once a day the app shows the gateway's request counts beside the ledger's [CF-AIG-ANALYTICS], and a gap larger than 10% over a day (a starting value) means a call bypassed the ledger, which the Usage screen flags.
-
-**Record C: the provider's bill**, the authority. Each provider's console shows token counts per model within minutes (Azure Monitor, CloudWatch, Cloud Monitoring; M2 step 6). The automatic daily comparison of the ledger with each provider's bill is not built in v1; it is added after M14 if drift appears (plan, closing list).
+**Record B: the provider's bill**, the authority and the independent check. Each provider's console shows token counts per model within minutes (Azure Monitor, CloudWatch, Cloud Monitoring; M2 step 6). The automatic daily comparison of the ledger with each provider's bill is not built in v1; it is added after M14 if drift appears (plan, closing list).
 
 ### 1.8 Budget, quotas and fallback
 
@@ -389,7 +386,6 @@ A second table records each container run: user, `site`, `company`, `run_id`, st
 | --- | --- | --- |
 | The proxy's budget check, per user and per provider | That user's spend at each provider, counted from the ledger at the price table's list prices. When a provider's monthly budget is spent the proxy refuses calls to that provider until the month resets on the 1st; a task's fallback on another provider still runs within that provider's own budget | Exact, and under this app's control |
 | The provider's own rate limit on each model | Tokens per minute; the provider refuses the rest | Enforced by the provider. It limits the rate, not the total |
-| AI Gateway's spend limit | Dollars per time window [CF-AIG-SPEND] | A backstop only. Cloudflare says limits apply "for models with known pricing" |
 
 **A monthly budget per provider, each user's own, with no silent default** (tier report E6; the owner, 2026-11-24: "wont model budget anyways be not an actual model budget but a fucking provider budget? because at the end of the month a provider is charing the whole amount right?"). Each registered provider has its own monthly budget, set on that provider in the Models tab; there is no daily budget and no per-model budget, and Settings holds none. Spend counts from the 1st of the month. The field suggests a value with its basis, worked out from the list prices of that provider's models and design-v2's tokens per application at the user's planned volume (section 12.2), marked "estimate" with its "checked on" date, and replaced by the figures M12 and M13 measure. The user taps to accept it or types their own; until a provider's budget is set, that provider's models cannot be called. The owner's budgets follow the same rule and are never in Admin · Owner settings. At ten applications a day on the recommended tiers the whole month comes to about $30 (section 12.2), split across the providers the tasks use.
 
@@ -400,12 +396,12 @@ A second table records each container run: user, `site`, `company`, `run_id`, st
 - Open an account at one or more of the three providers, with a payment method. Opening it and creating deployments cost nothing until used.
 - Register the provider and pick models on the guided screens (section 1.5). No price is typed; no key is pasted anywhere but the provider screen.
 - Accept or set a monthly budget for each provider registered.
-- Every call is paid by the user to their own provider. The layers in front cost nothing: the gateway's logs count against the Workers Logs allowance, far above this app's volume [CF-WLOGS] [CF-OBS-PRICING].
+- Every call is paid by the user to their own provider. The proxy in front costs nothing extra.
 - The owner has a live account at all three providers (T10), so no guide ships to friends unproven. M2 does not pass until each one has answered real calls.
 
-> **Decision record ADR-001: each user registers their own Foundry, Bedrock or Vertex AI account; credentials sit in that user's vault; one proxy in the Worker reads them, prices every call from the app's own price table, enforces the user's budget and keeps the usage ledger; AI Gateway is a pass-through**
+> **Decision record ADR-001: each user registers their own Foundry, Bedrock or Vertex AI account; credentials sit in that user's vault; one proxy in the Worker reads them, prices every call from the app's own price table, enforces the user's budget and keeps the usage ledger; calls go straight to the provider**
 > *Context.* The owner wants the models with a different vendor from the rest of the system, to configure an endpoint rather than put a key in code, to see daily and per-job-site usage, and not to depend on Microsoft alone. The app serves the owner and invited friends, each paying for their own model usage. Foundry, Bedrock and Vertex AI each issue their own endpoint and credential and bill the user's own account; none offers a hard spending cap the app can rely on, and none can attribute cost to a per-request tag. The agent runs in a container that must hold no secret.
-> *Decision.* Foundry, Bedrock and Vertex AI are the only providers in v1, for the owner and every friend; there is no direct Anthropic or OpenAI key (T14). Each user registers providers and models on guided screens with automatic test calls; credentials go into that user's encrypted vault, are never shown again and never enter Secrets Store, the repository or the container. Every call goes through one proxy in the Worker, which reads the credential, tags the call, prices it from the app's own price table (filled from the vendors' price sources, with maintainer-read rows where no automatic source exists), refuses it if the user's budget is spent or the model has no price, and writes a D1 ledger row. Calls pass through AI Gateway for an independent count, with prompt bodies not logged. The per-task picker proposes a main model and a fallback on another provider. A Foundry key covers its whole resource (to be confirmed live, T13).
+> *Decision.* Foundry, Bedrock and Vertex AI are the only providers in v1, for the owner and every friend; there is no direct Anthropic or OpenAI key (T14). Each user registers providers and models on guided screens with automatic test calls; credentials go into that user's encrypted vault, are never shown again and never enter Secrets Store, the repository or the container. Every call goes through one proxy in the Worker, straight to the user's own provider, which reads the credential, prices it from the app's own price table (filled from the vendors' price sources, with maintainer-read rows where no automatic source exists), refuses it if the user's budget is spent or the model has no price, and writes a D1 ledger row. Each provider's own console and bill are the independent check of the ledger; there is no AI Gateway in v1 (the owner, 2026-11-24: "yes drop it", after asking "why we still need this?"). The per-task picker proposes a main model and a fallback on another provider. A Foundry key covers its whole resource (to be confirmed live, T13).
 > *Consequences.* No user types a price, and the budget stop always counts at least what the vendor can charge. A friend's setup includes a cloud account with a payment method, which is an accepted cost (the owner, 2026-11-23). The owner keeps a live account at all three providers so that every guide is walked live. Foundry's Claude prices depend on a weekly maintainer reading of the Marketplace listings. Bedrock's long-term key expires and must be renewed. Direct provider keys are a v2 requirement (section 15.6).
 
 ## 2. Agent framework and where it runs
@@ -521,7 +517,7 @@ So the answer to "how come their agents are not set on Cloudflare" is that a com
                                     THE AGENT: one container per run (Python 3.13, ADK, Playwright, Chrome)
                                         ADK workflows and agents ── browser tools ──► NodeMaven residential proxies (each user's own sessions) ──► LinkedIn, portals
                                                                            │
-                               models.cos ─► AI Gateway (tags, log) ─► the user's own Foundry, Bedrock or Vertex AI account
+                               models.cos ─► the model proxy ─► the user's own Foundry, Bedrock or Vertex AI account
 ```
 
 **The shell** is one Cloudflare Worker written in TypeScript. It never calls a model and makes no judgement. It holds:
@@ -1472,7 +1468,7 @@ There is no separate answer bank: every answer the user gives is a fact-sheet en
 - Tests and continuous integration use a made-up persona with invented facts and a fake resume. No fixture is ever derived from any user's data. Saved real examples (a real page, mail, model reply or vendor error body) used by automated tests are kept in a private test-examples store that only the tests can read, never in the public repository; a secret-scan-style check in CI fails a pull request that adds one (T114).
 - A secret scanner runs in continuous integration and as a pre-commit hook, and the build fails on a match (T06).
 - Prompts in the repository are generic. Style profiles, presentation profiles, example messages and fact sheets are data, not code.
-- The model gateway logs request metadata but not prompt or response bodies (section 1.4).
+- The model proxy keeps no prompt or response bodies, only the ledger row (section 1.7).
 
 **What a public repository still reveals:** how the agent works, including that applications and messages are machine-written and that personality-style questions are answered to a prepared profile. A recruiter who finds it will know. The consent page tells each friend (section 11.7). The LinkedIn-specific exposure is in section 4.3, control 10.
 
@@ -2060,20 +2056,19 @@ Nothing below has been enabled, and nothing is spent before the owner's word to 
 | Durable Objects | `Chief` per user, the owner-level object, and one `Run` object per run | 1 million requests and 400,000 GB-seconds included, then $0.15 per million and $12.50 per million GB-seconds; SQLite storage 5 GB included [CF-DO-PRICING] | $0. They sleep when idle |
 | D1 | System of record | 25 billion rows read, 50 million written, 5 GB included [CF-D1-PRICING] | $0 |
 | R2 | Resumes, letters, screenshots, passed mail, LinkedIn exports, saved sign-in state | 10 GB free each month, then $0.015 per GB-month [CF-R2-PRICING] | $0 at a few users; at most $0.03 a month per user at the 2 GB quota |
-| AI Gateway | The pass-through in front of the providers | Core features free [CF-AIG-PRICING] | $0 |
 | Logs | Gateway, Worker and container logs | 20 million log events a month included; from 1 December 2026, 50 GB of ingestion included, then $0.25 per GB [CF-WLOGS] [CF-OBS-PRICING] | $0 |
 | **Containers** | The agent runtime and the actor browser (section 2.4) | Included each month: 25 GiB-hours of memory, 375 vCPU-minutes, 200 GB-hours of disk. Then $0.0000025 per GiB-second, $0.000020 per vCPU-second (charged only while the CPU is working), $0.00000007 per GB-second [CF-CONT-PRICING] | **About $2** for the owner's own runs; worked below. Each base user adds at most about $2.36 (section 11.5) |
 | Browser Run | The reader: company pages, PDF rendering | 10 browser hours a month included, then $0.09 an hour [CF-BR-PRICING] | $0 at the owner's volume; measured per user (T80) |
 | Mail sending | The digest, alert fallbacks, the captcha email, the removal email, each to a verified address | "Sends to verified destination addresses are free and do not count toward the included quota" (tier report A5) | $0 |
 | Push notifications | Phone alerts | No charge by Cloudflare, Apple or Google (section 10.5) | $0 |
 | Secrets Store | The key that protects the per-user keys; the push key | Open beta; no price is published on the pages read [CF-SECRETS] | $0 today; watch for a price at general availability |
-| Not used | Vectorize, Queues, Workflows, Workers AI, the Web Search API, Unified Billing, AI Gateway's key store | — | $0 |
+| Not used | Vectorize, Queues, Workflows, Workers AI, the Web Search API, Unified Billing, AI Gateway | — | $0 |
 
 **Container time, worked** (the owner's own runs). A run with Chrome uses standard-1: half a CPU, 4 GiB of memory and 8 GB of disk. One hour costs at most: memory 4 × 3,600 × $0.0000025 = $0.036; CPU 0.5 × 3,600 × $0.000020 = $0.036; disk 8 × 3,600 × $0.00000007 = $0.002; **$0.074 an hour**. A run without a browser uses basic: about $0.028 an hour. As an illustration, two LinkedIn sittings of twenty minutes a day, three portal applications a day and ten minutes a day of browser-less work come to about 30 hours of standard-1 and 5 of basic in a month. After the included amounts that is about $0.90 of memory, at most $0.72 of CPU and a few cents of disk: **under $2 a month**. Those hours are an assumption until measured in M3 and in practice mode.
 
 **Cloudflare total for the owner alone: about $7 a month**, of which $5 is the plan. Each base user adds container time under the cap of section 11.5.
 
-**Cloudflare cannot cap container spending, so the app does** (correction C12; section 11.5). Cloudflare's spending limits cover only `workers` and `durable_objects`; containers have no spending limit and no spending alert. The app's meter and caps are the cap on container time. Cloudflare's spend alerts on Workers and Durable Objects cost nothing and are set as alerts, not blocking limits (A3). AI Gateway's spend limit is a backstop for model calls only.
+**Cloudflare cannot cap container spending, so the app does** (correction C12; section 11.5). Cloudflare's spending limits cover only `workers` and `durable_objects`; containers have no spending limit and no spending alert. The app's meter and caps are the cap on container time. Cloudflare's spend alerts on Workers and Durable Objects cost nothing and are set as alerts, not blocking limits (A3).
 
 **The price table's Google key** (section 1.3). Google's pages read name no charge for the Catalog API's calls; T11 confirms on the maintainers' bill after the first week.
 
@@ -2511,7 +2506,7 @@ Outside every v1 milestone; no v1 ticket depends on them. Each is an issue in th
 | The site-side hookup on akshayprabhakant.com is the site team's job | 10.3 |
 | "Sign in with Google", "Sign in with LinkedIn" and "Apply with LinkedIn" on employers' sites are never used | 6.6 |
 | One application per role group; a crash can leave one unconfirmed, never doubled | 5.5 |
-| Gateway logs keep no prompt bodies; step traces kept only for practice mode and failed runs | 8.4 |
+| No prompt bodies are logged; step traces kept only for practice mode and failed runs | 8.4 |
 | No web search, no embeddings and no vector database at the start | 7.1, 8.4 |
 | The automatic daily comparison of the ledger with each provider's bill is not built in v1 | 1.7 |
 | Work on GitHub is done as akshayDev17 only; changes go through pull requests with tests; the first change adds CI | 14.2 |
@@ -2523,7 +2518,7 @@ Outside every v1 milestone; no v1 ticket depends on them. Each is an issue in th
 - **The plan.** `data/cos-linear-plan/report.md`, accepted by the owner on 2026-11-23 and created in Linear as it stands. Where design-v2 and the plan differ, the plan holds, and this design follows it.
 - **The tier-limits proposal.** `data/cos-tier-limits/report.md`, whose limits the owner accepted on 2026-11-23, for the per-user `Chief` (D3), the isolation rules (D4) and the limits of section 11. Where it and the plan differ (for example on what a profile-name mismatch does, or on app-owned mail addresses), the plan holds.
 - **Design-v2.** `design-v2-current.md` (2026-11-21), the base text: its evidence, experiments, measurements and citations are carried here under the same keys where they still hold. Its method is in its own Appendix A: vendor pages read first-hand or by research assistants that saved every page and checked every quotation against the saved copy; 47 quotations re-checked first-hand; LinkedIn pages read only from saved copies.
-- **Read afresh for this design** (2026-11-23, 13:20 UTC): Cloudflare's AI Gateway provider pages for Amazon Bedrock and Google Vertex AI, fetched as Markdown (Appendix C, "Pages read on 2026-11-23"). Every other 2026-11-23 vendor fact here is the plan's reading, with the plan's date.
+- Every 2026-11-23 vendor fact here is the plan's reading, with the plan's date.
 - **The course.** The Harness-Engineering course mapping (Appendix D) is design-v2's, read-only on 2026-11-21, with the "how it is checked" column set to the milestones' live checks and the automated-test rule of section 14.1.
 - **What was not done.** No application was submitted, no LinkedIn message or invitation sent, no account signed in to, no mail read, nothing deployed, enabled, created or spent. No Linear item was changed. No personal data about the owner or any user appears in this document; every value only the owner can supply is left to the owner (section 13).
 
@@ -2650,7 +2645,7 @@ A small local server recorded what each connector sent and answered with a fixed
 | `AnthropicLlm(client=AsyncAnthropicFoundry(base_url=…/anthropic))` | `/anthropic/v1/messages` | `api-key` and `x-api-key` | the same |
 | `AnthropicLlm(client=AsyncAnthropic(base_url=…/anthropic))` | `/anthropic/v1/messages` | `authorization` | the same |
 
-The routes match the ones Microsoft documents for the two families (section 1.1). An extra header carrying the gateway's tags (`cf-aig-metadata`) arrived intact on the first, second and fourth. Tokens written to the cache are in the provider's raw reply but are not a separate field on ADK's event, which is one reason the ledger is written by the proxy from the raw reply (section 1.5).
+The routes match the ones Microsoft documents for the two families (section 1.1). Tokens written to the cache are in the provider's raw reply but are not a separate field on ADK's event, which is one reason the ledger is written by the proxy from the raw reply (section 1.5).
 
 ### B.4 Measurement: how large is a real application form as text?
 
@@ -2685,9 +2680,6 @@ Not measured: any LinkedIn page, including the Easy Apply dialog, because no Lin
 | The container scheduling used here is beta | "The `durable_object` scheduling policy is in public beta."; "The `default` scheduling policy is deprecated." | [CF-CONT-SCHED] |
 | Python Workers are not ordinary Python | "your code is interpreted directly by Pyodide, within a V8 isolate" | [CF-PY-HOW] |
 | Push from a Worker is documented | "Send browser push notifications from your agent — even when the user has closed the tab." | [CF-AGENTS-PUSH] |
-| Gateway route for Azure | `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/azure-openai/{resource_name}/{deployment_name}` | [CF-AIG-AZURE] |
-| Gateway tags | "up to five custom metadata entries per request" | [CF-AIG-META] |
-| Gateway spend limits | "Spend limits apply to both Unified Billing requests and BYOK requests for models with known pricing." | [CF-AIG-SPEND] |
 | Email Routing needs Cloudflare DNS | "You must be using Cloudflare DNS to use Email Service." | [CF-EMAIL-START] |
 | Containers need the paid plan | "Available on Workers Paid plan" | [CF-CONTAINERS] |
 
@@ -2719,7 +2711,6 @@ The author also checked 36 quotations from LinkedIn's Help pages, User Agreement
 | The ADK connectors for Bedrock's and Vertex AI's routes behind the proxy; whether prompt caching reaches Claude on each | M2 (T12) |
 | Where Foundry's portal shows the key; the Google role that allows calling models; Google's exact error strings; the Bedrock console's deep link and longest key expiry | T16, walked live |
 | Bedrock's and Vertex AI's data-handling terms for prompts | T16, from the providers' pages |
-| Whether AI Gateway's spend limit applies to calls priced by the custom-cost header | M2; the app's own budget does not depend on it |
 | The number behind LinkedIn's daily Easy Apply limit, its speed limit, its weekly invitation limit and its commercial use limit | Not published; the caps are cautious starting values, and the learning record measures what each account meets (section 4.3) |
 | How often LinkedIn asks an idle but signed-in browser to sign in again | Measured from M4 (T32) |
 | What LinkedIn makes of a Linux Chrome in a data centre behind residential proxies | Proof 3 (M4), then the learning record |
@@ -2742,11 +2733,6 @@ The pages in the tables carried from design-v2 were read on 2026-11-21. For Clou
 
 | Key | Page |
 | --- | --- |
-| CF-AIG-PRICING | `ai-gateway/reference/pricing/` (2026-11-02) |
-| CF-AIG-LOGGING | `ai-gateway/observability/logging/` (2026-11-05) |
-| CF-AIG-ANALYTICS | `ai-gateway/observability/analytics/` (2026-11-17) |
-| CF-AIG-META | `ai-gateway/observability/custom-metadata/` (2026-09-24); limits at `ai-gateway/reference/limits/` (2026-11-05) |
-| CF-AIG-SPEND | `ai-gateway/features/spend-limits/` (2026-11-17) |
 | CF-WLOGS | `workers/observability/logs/workers-logs/` (2026-11-18) |
 | CF-OBS-PRICING | `observability/pricing/` (2026-11-11) |
 | CF-AGENTS | `agents/` (2026-10-29) |
@@ -2784,9 +2770,6 @@ The pages in the tables carried from design-v2 were read on 2026-11-21. For Clou
 | CF-AGENTS-HARNESSES | `agents/harnesses/` (2026-11-10); `agents/harnesses/build-your-own/` (2026-11-09) |
 | CF-AGENTS-PUSH | `agents/agent-class/communication-channels/webhooks/push-notifications/` (2026-10-27) |
 | CF-AGENTS-REPO | https://registry.npmjs.org/agents ; https://api.github.com/repos/cloudflare/agents/languages (read 2026-11-21: TypeScript, no Python) |
-| CF-AIG-AZURE | `ai-gateway/usage/providers/azureopenai/` (2026-11-19) |
-| CF-AIG-CUSTOM | `ai-gateway/configuration/custom-providers/` (2026-11-04) |
-| CF-AIG-CUSTOMCOST | `ai-gateway/configuration/custom-costs/` (2026-09-09) |
 | CF-CONT-ARCH | `containers/concepts/architecture/` (2026-11-19) |
 | CF-CONT-BIND | `containers/configuration/workers-connections/` (2026-11-09) |
 | CF-CONT-OUT | `containers/configuration/outbound-traffic/` (2026-11-09) |
@@ -2999,8 +2982,6 @@ Read for the plan (`data/cos-linear-plan/report.md`, section 7), for the tier-li
 | MS-FOUNDRY-GUIDE | Microsoft Learn: use-foundry-models-claude (2026-09-21), endpoints (2026-07-31; "you can use the same authentication mechanism to consume more than one deployment"; a key grants "full access to the resource"), create-model-deployments (2026-08-13) | Plan, fetched as HTML at 08:42 UTC |
 | AWS-BEDROCK-GUIDE | AWS documentation: Bedrock api-keys, model-access, inference profiles, troubleshooting-api-error-codes (no page date shown) | Plan, 08:42 UTC |
 | GC-VERTEX-GUIDE | Google Cloud documentation: use-claude (2026-11-20), authentication (2026-11-10), keys-create-delete (2026-11-17), express-mode (2026-11-20); the pages redirect to "Gemini Enterprise Agent Platform" | Plan, 08:42 UTC |
-| CF-AIG-BEDROCK | `ai-gateway/usage/providers/bedrock/` (fetched as Markdown): endpoint `…/aws-bedrock`; the Anthropic Messages route `…/aws-bedrock/bedrock-mantle/<AWS_REGION>/anthropic`, called "with stored AWS credentials or an Amazon Bedrock API key" | This design, 13:20 UTC |
-| CF-AIG-VERTEX | `ai-gateway/usage/providers/vertex/` (fetched as Markdown): endpoint `…/google-vertex-ai`; credentials as "service account JSON or access token"; a "Service account JSON in header" method beside the gateway's own key store; "Use a specific regional endpoint like `us-central1` or `us-east4` rather than `global`. The `global` endpoint has limited model support" | This design, 13:20 UTC |
 | CF-ACCESS | Cloudflare Access pages: application-token, validating-json, one-time-pin, session-management | Plan, fetched as Markdown at 08:38 UTC |
 | CF-SVC-BIND | Workers service bindings (page date 2026-11-12): a Worker that "can only be reached via an explicit Service binding that another Worker declares" | Plan, through a fetch agent with verbatim quotes |
 | CF-TOKENS | Cloudflare's API token permissions reference (page metadata 2026-11-15), create-token (2026-11-06), restrict-tokens (2026-04-20), and the Access application-policy and reusable-policy API pages: "Access: Policies Write" and "Access: Apps and Policies Write" under account permissions; no way found to scope a token to one Access application or policy | Plan, through a fetch agent with verbatim quotes |
