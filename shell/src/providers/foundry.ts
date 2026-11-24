@@ -114,7 +114,8 @@ export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim
 // Fireworks or Baseten row, a retired or dated version, and a meter whose
 // catalog ID would be a guess ("DeepSeek V3.2 SP", "Mistral MM3.5",
 // "Mistral Codestral", "Grok 4.1", "Grok 4.2", "Grok4 Fast",
-// "Kimi K2.5 Thinking", "Kimi K2.6 Thinking", "GPT 5.2 pro", the dated
+// "Kimi K2.5 Thinking", "Kimi K2.6 Thinking", "GPT 5.2 pro", "Code 1.1 Flash"
+// (the page lists MAI-Code-1.1-Flash only as a fine-tuning base), the dated
 // gpt-4o and GPT-chat-latest rows).
 export const FOUNDRY_MODEL_IDS: Readonly<Record<string, string>> = {
   "Claude Haiku 5.5": "claude-haiku-5-5",
@@ -188,7 +189,6 @@ export const FOUNDRY_MODEL_IDS: Readonly<Record<string, string>> = {
   "Cohere Command A Plus": "Cohere-command-a-plus-05-2026",
   "Cohere Command A": "Cohere-command-a",
   "MAI-Thinking-1": "MAI-Thinking-1",
-  "Code 1.1 Flash": "MAI-Code-1.1-Flash",
 };
 
 // The deployment name the guide asks the user to keep: the model's ID.

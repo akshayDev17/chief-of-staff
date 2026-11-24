@@ -46,8 +46,6 @@ const seed = () =>
       row("foundry", "GPT-6-luna", "output", 10, "azure-retail"),
       row("foundry", "GPT 5.1", "input", 1.25, "azure-retail"),
       row("foundry", "GPT 5.1", "output", 10, "azure-retail"),
-      row("foundry", "Code 1.1 Flash", "input", 0.3, "azure-retail"),
-      row("foundry", "Code 1.1 Flash", "output", 1.2, "azure-retail"),
       row("foundry", "DeepSeek V3.2 (Fireworks)", "input", 0.56, "azure-retail"),
       row("foundry", "DeepSeek V3.2 (Fireworks)", "output", 1.68, "azure-retail"),
       { ...row("vertex", "Gemini 3.5 Flash", "input", 0.3, "google-catalog"), deployment: "regional", region: "us" },
@@ -267,8 +265,6 @@ describe("Add a model on Microsoft Foundry", () => {
     expect(page).toContain('name="deployment" value="gpt-6-luna"');
     // The catalog's own ID, dots kept.
     expect(page).toContain('name="deployment" value="gpt-5.1"');
-    // The catalog's ID where the meter leaves out the family's prefix.
-    expect(page).toContain('name="deployment" value="MAI-Code-1.1-Flash"');
     expect(page).toContain("Change it only if you named it differently at Foundry.");
     const at = page.indexOf("<strong>Claude Haiku 5.5</strong>");
     const tr = page.slice(at, page.indexOf("</tr>", at));
