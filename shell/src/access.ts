@@ -175,11 +175,5 @@ export const readAccessIdentity = async (
   return verifyAccessToken(token, config);
 };
 
-// Returns null when the request may go on, or the refusal to send.
-export const checkAccess = async (
-  request: Request,
-  env: { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string },
-): Promise<Response | null> => ((await readAccessIdentity(request, env)) ? null : accessDenied());
-
 // Tests only: forget the cached keys.
 export const clearAccessKeyCache = (): void => cache.clear();
