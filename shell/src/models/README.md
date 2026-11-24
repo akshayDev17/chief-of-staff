@@ -70,8 +70,12 @@ Only the user's own passed models (`readUserModels`) are offered:
 - more: each task is proposed the cheapest model at its tier (each model's
   tier from its price, `lookupTier`) and a fallback at that tier on another
   provider; where the user has none at the task's tier, the other
-  non-Strongest tier. **Accept all with one tap** saves every proposal
-  (`task_models`, `set_how` `accepted`); a task the user changed is kept;
+  non-Strongest tier, and the page says so ("a Middle model, since you have
+  no Smallest model yet"). **Accept all with one tap** saves every proposal
+  (`task_models`, `set_how` `accepted`). An accepted task follows its
+  proposal: when the proposal changes (a model at another provider is
+  added, say), the task shows the new one as proposed and keeps its accepted
+  models until the next tap. A task the user changed is never overwritten;
 - any task can be changed to any of the user's models, the Strongest
   included, the fallback on another provider or none.
 

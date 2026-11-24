@@ -132,6 +132,24 @@ describe("proposals", () => {
     const all = await routes();
     // No Middle at Bedrock: scoring falls back to Bedrock's Smallest, never Opus.
     expect([named(all.score!.proposal?.main), named(all.score!.proposal?.fallback)]).toEqual(["vertex/sonnet", "bedrock/haiku"]);
+    const html = await (await open()).text();
+    expect(html.split("a Smallest model, since you have no Middle model at another provider yet").length - 1).toBe(5);
+    expect(html).not.toContain("since you have no Smallest model");
+  });
+
+  it("says plainly when a proposed main model is of the other strength, also once accepted", async () => {
+    await addModel(userId, "bedrock", "sonnet");
+    await addModel(userId, "vertex", "sonnet");
+    const count = (html: string, text: string) => html.split(text).length - 1;
+    const before = await (await open()).text();
+    // Matching, extraction and LinkedIn: Smallest, and the user has only Middle models.
+    expect(count(before, "a Middle model, since you have no Smallest model yet")).toBe(3);
+    expect(count(before, "a Middle model, since you have no Smallest model at another provider yet")).toBe(3);
+    await acceptProposals(env.DB, userId, NOW);
+    expect(count(await (await open()).text(), "a Middle model, since you have no Smallest model yet")).toBe(3);
+    // A task the user changed is their own choice, with no note.
+    await changeTask(env.DB, userId, "match", "bedrock|sonnet", undefined, NOW);
+    expect(count(await (await open()).text(), "a Middle model, since you have no Smallest model yet")).toBe(2);
   });
 
   it("one tap accepts every proposal, and the proxy then routes each task by it", async () => {
@@ -142,6 +160,36 @@ describe("proposals", () => {
     expect(await res.text()).toContain(`Accepted: ${TASKS.length} tasks`);
     const route = await routeTask(env.DB, userId, "cover_letter");
     expect([named(route?.main), named(route?.fallback)]).toEqual(["bedrock/sonnet", "vertex/sonnet"]);
+    expect(await (await open()).text()).not.toContain("Accept all with one tap");
+  });
+
+  it("proposes a fallback added after accepting one provider's models, keeping a changed task and the accepted models until the tap", async () => {
+    await addModel(userId, "bedrock", "haiku");
+    await addModel(userId, "bedrock", "sonnet");
+    await acceptProposals(env.DB, userId, NOW);
+    await changeTask(env.DB, userId, "cover_letter", "bedrock|haiku", undefined, NOW);
+    expect(await (await open()).text()).toContain("none: add a model at another provider");
+
+    await addModel(userId, "vertex", "flash");
+    await addModel(userId, "vertex", "sonnet");
+    const all = await routes();
+    expect([named(all.match!.proposal?.main), named(all.match!.proposal?.fallback), all.match!.pending]).toEqual(["bedrock/haiku", "vertex/flash", true]);
+    expect([named(all.cover_letter!.current?.main), all.cover_letter!.current?.setHow, all.cover_letter!.pending]).toEqual(["bedrock/haiku", "changed", false]);
+    // Until the tap, calls keep the accepted models.
+    expect(named((await routeTask(env.DB, userId, "match"))?.fallback)).toBeUndefined();
+    const html = await (await open()).text();
+    expect(html).toContain("Accept all with one tap");
+    expect(html).toContain("flash · vertex <span class=\"pill\">proposed</span>");
+    expect(html).not.toContain("add a model at another provider");
+
+    expect(await (await post("accept")).text()).toContain(`Accepted: ${TASKS.length - 1} tasks`);
+    const match = await routeTask(env.DB, userId, "match");
+    expect([named(match?.main), named(match?.fallback)]).toEqual(["bedrock/haiku", "vertex/flash"]);
+    const score = await routeTask(env.DB, userId, "score");
+    expect([named(score?.main), named(score?.fallback)]).toEqual(["bedrock/sonnet", "vertex/sonnet"]);
+    const cover = await routeTask(env.DB, userId, "cover_letter");
+    expect([named(cover?.main), named(cover?.fallback)]).toEqual(["bedrock/haiku", undefined]);
+    for (const r of Object.values(await routes())) expect(r.pending).toBe(false);
     expect(await (await open()).text()).not.toContain("Accept all with one tap");
   });
 });
@@ -158,8 +206,9 @@ describe("changing a task", () => {
     expect(res.status).toBe(200);
     await acceptProposals(env.DB, userId, NOW);
     const route = await routeTask(env.DB, userId, "cover_letter");
-    expect([named(route?.main), route?.main.tier, named(route?.fallback)]).toEqual(["bedrock/opus", "Strongest", "vertex/flash"]);
-    expect((await routes()).cover_letter!.current?.setHow).toBe("changed");
+    expect([named(route?.main), named(route?.fallback)]).toEqual(["bedrock/opus", "vertex/flash"]);
+    const current = (await routes()).cover_letter!.current;
+    expect([current?.main.tier, current?.setHow]).toEqual(["Strongest", "changed"]);
   });
 
   it("refuses a fallback on the main model's provider, and a model the user has not passed", async () => {
@@ -171,9 +220,11 @@ describe("changing a task", () => {
     expect(await res.text()).toContain("The fallback must be on another provider");
   });
 
-  it("can drop the fallback", async () => {
-    await post("change", { task: "match", main: "bedrock|haiku", fallback: "" });
+  it("can drop the fallback, shown as plain none", async () => {
+    const html = await (await post("change", { task: "match", main: "bedrock|haiku", fallback: "" })).text();
     expect(named((await routeTask(env.DB, userId, "match"))?.fallback)).toBeUndefined();
+    expect(html).toContain(`<td data-l="Fallback (another provider)">none</td>`);
+    expect(html).not.toContain("add a model at another provider");
   });
 });
 

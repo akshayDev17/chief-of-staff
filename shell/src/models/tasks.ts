@@ -14,8 +14,11 @@
 // its price (lookupTier, T11). No task is proposed the Strongest tier; where
 // the user has no model of the task's own strength, the other non-Strongest
 // tier is proposed instead. The proposal is used once the user accepts it;
-// any task can be changed to any of the user's models, the Strongest
-// included. Every query is scoped to the user.
+// an accepted task whose proposal has since changed (say a model at another
+// provider was added) is pending again and keeps its accepted models until
+// the next tap. Any task can be changed to any of the user's models, the
+// Strongest included, and a changed task is never overwritten by a tap.
+// Every query is scoped to the user.
 //
 // `callTask` is how the app makes a task's model call: it sends it to the
 // task's main model through the proxy (`callModel`, T12), whose one fallback
@@ -67,6 +70,9 @@ export interface TaskRoute {
   // that model. Undefined until a proposal is accepted or a model chosen.
   current?: Route & { setHow: "accepted" | "changed" | "only_model" };
   proposal?: Route;
+  // The proposal waits for the one tap: the task has no model yet, or its
+  // accepted models differ from its proposal now.
+  pending: boolean;
 }
 
 export const modelKey = (m: { provider: Provider; model: string }): string => `${m.provider}|${m.model}`;
@@ -99,6 +105,9 @@ export function proposeRoute(task: Task, models: Offered[]): Route | undefined {
   return { main, fallback: bestFor(task, models.filter((m) => m.provider !== main.provider)) };
 }
 
+const sameRoute = (a: Route, b: Route): boolean =>
+  modelKey(a.main) === modelKey(b.main) && (a.fallback && modelKey(a.fallback)) === (b.fallback && modelKey(b.fallback));
+
 interface ChoiceRecord {
   task: string;
   main_provider: Provider;
@@ -108,50 +117,64 @@ interface ChoiceRecord {
   set_how: "accepted" | "changed";
 }
 
+const CHOICE_COLUMNS = "task, main_provider, main_model, fallback_provider, fallback_model, set_how";
+
+// A saved choice as models among `byKey` (the user's own); a choice whose
+// main model is no longer there is ignored, as is a fallback no longer there.
+function savedRoute<M extends UserModel>(r: ChoiceRecord, byKey: Map<string, M>): { main: M; fallback?: M } | undefined {
+  const main = byKey.get(modelKey({ provider: r.main_provider, model: r.main_model }));
+  if (!main) return undefined;
+  const fallback = r.fallback_provider && r.fallback_model ? byKey.get(modelKey({ provider: r.fallback_provider, model: r.fallback_model })) : undefined;
+  return { main, fallback };
+}
+
 export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ offered: Offered[]; routes: TaskRoute[] }> {
   const offered = await readOffered(db, userId);
   const byKey = new Map(offered.map((m) => [modelKey(m), m]));
   const { results } = await db
-    .prepare("SELECT task, main_provider, main_model, fallback_provider, fallback_model, set_how FROM task_models WHERE user_id = ?")
+    .prepare(`SELECT ${CHOICE_COLUMNS} FROM task_models WHERE user_id = ?`)
     .bind(userId)
     .all<ChoiceRecord>();
   const saved = new Map(results.map((r) => [r.task, r]));
   const routes = TASKS.map((task): TaskRoute => {
-    if (offered.length === 1) return { task, current: { main: offered[0]!, setHow: "only_model" } };
+    if (offered.length === 1) return { task, current: { main: offered[0]!, setHow: "only_model" }, pending: false };
     const proposal = proposeRoute(task, offered);
     const r = saved.get(task.id);
-    const main = r && byKey.get(modelKey({ provider: r.main_provider, model: r.main_model }));
-    if (!r || !main) return { task, proposal };
-    const fallback = r.fallback_provider && r.fallback_model ? byKey.get(modelKey({ provider: r.fallback_provider, model: r.fallback_model })) : undefined;
-    return { task, proposal, current: { main, fallback, setHow: r.set_how } };
+    const route = r && savedRoute(r, byKey);
+    if (!r || !route) return { task, proposal, pending: proposal !== undefined };
+    const pending = r.set_how === "accepted" && proposal !== undefined && !sameRoute(route, proposal);
+    return { task, proposal, current: { ...route, setHow: r.set_how }, pending };
   });
   return { offered, routes };
 }
 
-// The models a call for `task` goes to, or undefined when the task has none.
+// The models a call for `task` goes to, or undefined when the task has none:
+// what `readTaskRoutes` names its current route, read from the user's models
+// and the task's one saved choice only.
 export async function routeTask(db: D1Database, userId: string, task: string): Promise<Route | undefined> {
-  const { routes } = await readTaskRoutes(db, userId);
-  return routes.find((r) => r.task.id === task)?.current;
+  const models = await readUserModels(db, userId);
+  if (models.length === 1) return { main: models[0]! };
+  const r = await db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_models WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
+  return r ? savedRoute(r, new Map(models.map((m) => [modelKey(m), m]))) : undefined;
 }
 
-async function saveChoice(db: D1Database, userId: string, task: string, route: Route, setHow: "accepted" | "changed", now: Date): Promise<void> {
-  await db
+function prepareChoiceWrite(db: D1Database, userId: string, task: string, route: Route, setHow: "accepted" | "changed", now: Date): D1PreparedStatement {
+  return db
     .prepare(
       `INSERT INTO task_models (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
        ON CONFLICT (user_id, task) DO UPDATE SET main_provider = excluded.main_provider, main_model = excluded.main_model,
          fallback_provider = excluded.fallback_provider, fallback_model = excluded.fallback_model, set_how = excluded.set_how, set_at = excluded.set_at`,
     )
-    .bind(userId, task, route.main.provider, route.main.model, route.fallback?.provider ?? null, route.fallback?.model ?? null, setHow, now.toISOString())
-    .run();
+    .bind(userId, task, route.main.provider, route.main.model, route.fallback?.provider ?? null, route.fallback?.model ?? null, setHow, now.toISOString());
 }
 
-// The one tap: every task with a proposal and no choice of the user's takes
-// its proposal. A task the user changed is kept. Returns how many were set.
+// The one tap: every pending task takes its proposal, all or none. A task
+// the user changed is kept. Returns how many were set.
 export async function acceptProposals(db: D1Database, userId: string, now: Date): Promise<number> {
   const { routes } = await readTaskRoutes(db, userId);
-  const pending = routes.filter((r) => !r.current && r.proposal);
-  for (const r of pending) await saveChoice(db, userId, r.task.id, r.proposal!, "accepted", now);
+  const pending = routes.filter((r) => r.pending);
+  if (pending.length) await db.batch(pending.map((r) => prepareChoiceWrite(db, userId, r.task.id, r.proposal!, "accepted", now)));
   return pending.length;
 }
 
@@ -174,7 +197,7 @@ export async function changeTask(
   const fallbackModel = fallback ? byKey.get(fallback) : undefined;
   if (!mainModel || (fallback && !fallbackModel)) return "not_your_model";
   if (fallbackModel && fallbackModel.provider === mainModel.provider) return "same_provider";
-  await saveChoice(db, userId, task, { main: mainModel, fallback: fallbackModel }, "changed", now);
+  await prepareChoiceWrite(db, userId, task, { main: mainModel, fallback: fallbackModel }, "changed", now).run();
   return undefined;
 }
 

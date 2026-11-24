@@ -9,7 +9,9 @@
 // Only the user's own passed models are offered. With one, every task uses
 // it ("Model now"). With more, each task shows its main model and its
 // fallback on another provider: the user's choice, or the proposal at the
-// task's suggested strength marked "proposed" until accepted. Any task can be
+// task's suggested strength marked "proposed" until accepted (again, for an
+// accepted task whose proposal has changed). A proposed model of the other
+// strength, where the user has none of the task's own, says so. Any task can be
 // changed to any of the user's models, the Strongest included. Friend
 // screens say "Admin" for the owner and never "tier".
 
@@ -20,7 +22,7 @@ import { BUDGETS_PATH } from "../proxy/budgets-page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
 import { ADD_MODEL_PATH } from "./page";
-import { acceptProposals, changeTask, modelKey, readTaskRoutes, taskById, type ChangeProblem, type Offered, type Route, type TaskRoute } from "./tasks";
+import { acceptProposals, changeTask, modelKey, readTaskRoutes, taskById, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
 
 export const TASK_MODELS_PATH = "/models/setup/tasks";
 
@@ -36,8 +38,7 @@ export interface PickerPageInput {
 
 const modelName = (m: Offered, input: PickerPageInput): string => `${m.model} · ${input.providerName(m.provider)}`;
 
-function changeForm(r: TaskRoute, input: PickerPageInput): string {
-  const now = r.current ?? r.proposal;
+function changeForm(r: TaskRoute, now: Route | undefined, input: PickerPageInput): string {
   const option = (m: Offered, selected: boolean) =>
     `<option value="${esc(modelKey(m))}"${selected ? " selected" : ""}>${esc(modelName(m, input))}${m.tier ? ` (${m.tier})` : ""}</option>`;
   const mains = input.offered.map((m) => option(m, now?.main !== undefined && modelKey(m) === modelKey(now.main))).join("");
@@ -57,12 +58,24 @@ ${fallback}
 <div class="row"><button type="submit" class="btn small">Save</button></div></form></details>`;
 }
 
-function routeCells(route: Route | undefined, proposed: boolean, input: PickerPageInput, single: boolean): string {
-  const tag = proposed ? ` <span class="pill">proposed</span>` : "";
+// Why a proposed model is not of the task's suggested strength.
+function substituteNote(task: Task, m: Offered, atAnotherProvider: boolean): string {
+  if (!m.tier || m.tier === task.tier) return "";
+  return ` <span class="small">a ${m.tier} model, since you have no ${task.tier} model${atAnotherProvider ? " at another provider" : ""} yet</span>`;
+}
+
+function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput, single: boolean): string {
   if (single) return `<td data-l="Model now">${route ? esc(modelName(route.main, input)) : "–"}</td>`;
   if (!route) return `<td data-l="Main">none yet: add a model of the suggested strength</td><td data-l="Fallback (another provider)">–</td>`;
-  const fallback = route.fallback ? esc(modelName(route.fallback, input)) + tag : "none: add a model at another provider";
-  return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}</td><td data-l="Fallback (another provider)">${fallback}</td>`;
+  const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
+  const fromProposal = r.pending || r.current?.setHow === "accepted";
+  const note = (m: Offered, atAnotherProvider: boolean) => (fromProposal ? substituteNote(r.task, m, atAnotherProvider) : "");
+  const fallback = route.fallback
+    ? esc(modelName(route.fallback, input)) + tag + note(route.fallback, true)
+    : input.offered.some((m) => m.provider !== route.main.provider)
+      ? "none"
+      : "none: add a model at another provider";
+  return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another provider)">${fallback}</td>`;
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
@@ -80,10 +93,10 @@ export function renderPickerPage(input: PickerPageInput): string {
     : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another provider)</th><th></th>`;
   const body = input.routes
     .map((r) => {
-      const route = r.current ?? r.proposal;
-      const change = input.offered.length > 1 ? changeForm(r, input) : "";
+      const route = r.pending ? r.proposal : r.current;
+      const change = input.offered.length > 1 ? changeForm(r, route, input) : "";
       return `<tr><td data-l="Task">${esc(r.task.label)}</td><td data-l="Suggested strength">${r.task.tier}</td>
-${routeCells(route, !r.current && route !== undefined, input, single)}
+${routeCells(r, route, input, single)}
 <td data-l="">${change}</td></tr>`;
     })
     .join("\n");
@@ -93,7 +106,7 @@ ${routeCells(route, !r.current && route !== undefined, input, single)}
 ${body}
 </tbody></table></div>`
     : "";
-  const pending = input.routes.some((r) => !r.current && r.proposal);
+  const pending = input.routes.some((r) => r.pending);
   const accept = pending
     ? `<form method="post" action="${TASK_MODELS_PATH}/accept"><button type="submit" class="btn">Accept all with one tap</button></form>`
     : "";
