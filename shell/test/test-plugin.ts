@@ -3,7 +3,7 @@
 // like a secret (so tests can check it is never stored or logged), and
 // answers each call from a queue of scripted replies.
 import { env } from "cloudflare:test";
-import type { ConnectionFields, ProviderPlugin, ProviderReply } from "../src/proxy/plugin";
+import type { ConnectionFields, ProviderPlugin, ProviderReply, Usage } from "../src/proxy/plugin";
 import { writeSnapshot } from "../src/prices/store";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
@@ -30,7 +30,7 @@ export const testPlugin = (provider: Provider, opts: { failMint?: boolean } = {}
     },
     async call(input) {
       plugin.calls.push({ credential: input.credential, model: input.model, location: input.location, request: input.request });
-      const next = plugin.replies.shift() ?? ok({ input: 1000, cachedInput: 0, cacheWrite: 0, output: 100 });
+      const next = plugin.replies.shift() ?? ok({ input: 1000, output: 100 });
       if (next instanceof Error) throw next;
       return next;
     },
@@ -38,7 +38,11 @@ export const testPlugin = (provider: Provider, opts: { failMint?: boolean } = {}
   return plugin;
 };
 
-export const ok = (usage: ProviderReply["usage"], body: unknown = { reply: "a test reply" }): ProviderReply => ({ status: 200, body, usage });
+export const ok = (usage: Partial<Usage>, body: unknown = { reply: "a test reply" }): ProviderReply => ({
+  status: 200,
+  body,
+  usage: { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false, ...usage },
+});
 export const refused = (status: number, body: unknown = { error: "ThrottlingException" }): ProviderReply => ({ status, body });
 
 export const userFor = async (sub: string) => {
@@ -46,12 +50,14 @@ export const userFor = async (sub: string) => {
   return user!;
 };
 
-const row = (provider: Provider, model: string, tokenKind: PriceRow["tokenKind"], usdPerMTok: number): PriceRow => ({
-  provider, model, deployment: "global", region: "global", tokenKind, longPrompt: false, batch: false, usdPerMTok,
+const row = (provider: Provider, model: string, tokenKind: PriceRow["tokenKind"], usdPerMTok: number, longPrompt = false): PriceRow => ({
+  provider, model, deployment: "global", region: "global", tokenKind, longPrompt, batch: false, usdPerMTok,
   source: "maintainer-read", dateRead: "2026-11-24", stale: false, disagreement: false,
 });
 
 // Two priced models, one per provider, and one model with no price at all.
+// test-sonnet lists every kind at short- and long-prompt rates but has no
+// long-prompt 1-hour cache write; test-gemini lists only input and output.
 export const seedPrices = () =>
   writeSnapshot(env.DB, {
     takenAt: "2026-11-24T06:00:00Z",
@@ -61,7 +67,12 @@ export const seedPrices = () =>
       row("bedrock", "test-sonnet", "input", 3),
       row("bedrock", "test-sonnet", "cached_input", 0.3),
       row("bedrock", "test-sonnet", "cache_write", 3.75),
+      row("bedrock", "test-sonnet", "cache_write_1h", 6),
       row("bedrock", "test-sonnet", "output", 15),
+      row("bedrock", "test-sonnet", "input", 6, true),
+      row("bedrock", "test-sonnet", "cached_input", 0.6, true),
+      row("bedrock", "test-sonnet", "cache_write", 7.5, true),
+      row("bedrock", "test-sonnet", "output", 22.5, true),
       row("vertex", "test-gemini", "input", 0.25),
       row("vertex", "test-gemini", "output", 1),
     ],

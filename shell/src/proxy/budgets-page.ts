@@ -13,7 +13,6 @@ import { esc, nbDate, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
 import {
   DEFAULT_APPLICATIONS_A_DAY,
-  MAX_MONTHLY_USD,
   parseBudget,
   pickedModels,
   readBudget,
@@ -31,7 +30,8 @@ export const BUDGETS_PATH = "/models/setup/budgets";
 export interface ProviderBudgetCard {
   provider: Provider;
   budget?: Budget;
-  spentThisMonth: number;
+  // Undefined when a call this month has no cost (ledger.ts).
+  spentThisMonth: number | undefined;
   suggestion?: Suggestion;
 }
 
@@ -54,23 +54,31 @@ function card(c: ProviderBudgetCard, applicationsADay: number): string {
 <p class="small">Basis: ${applicationsADay} application${applicationsADay === 1 ? "" : "s"} a day, if this provider carried every task, at ${esc(s.model)}'s list prices from the app's price table and the design's tokens per application. Replaced by the figures measured in practice mode.</p>`
     : `<p class="small muted">No suggestion yet: it is worked out from the list price of a model you pick at this provider (Add a model).</p>`;
   const set = c.budget
-    ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month · ${cents(c.spentThisMonth)} spent since the 1st</p>`
+    ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month · ${
+        c.spentThisMonth === undefined ? "spend since the 1st not known: a call used tokens with no list price" : `${cents(c.spentThisMonth)} spent since the 1st`
+      }</p>`
     : "";
   const unset = c.budget ? "" : `<p class="small muted">Until it is set, this provider's models cannot be called.</p>`;
+  const hidden = `<input type="hidden" name="provider" value="${c.provider}">
+<input type="hidden" name="per_day" value="${applicationsADay}">`;
   const accept = s
-    ? `<button type="submit" class="btn small" name="accept" value="${s.monthlyUsd}">Accept the suggestion</button>`
+    ? `<form method="post" action="${BUDGETS_PATH}">
+${hidden}
+<button type="submit" class="btn small" name="accept" value="${s.monthlyUsd}">Accept the suggestion</button>
+</form>`
     : "";
   return `<section class="card"><h3>${name}</h3>
 ${set}
 ${suggestion}
-<form class="row" method="post" action="${BUDGETS_PATH}">
-<input type="hidden" name="provider" value="${c.provider}">
-<input type="hidden" name="per_day" value="${applicationsADay}">
+<div class="row">
 ${accept}
+<form class="row" method="post" action="${BUDGETS_PATH}">
+${hidden}
 <label class="visually-hidden" for="amount-${c.provider}">Your own monthly budget for ${name}, in dollars</label>
 <input class="f" id="amount-${c.provider}" name="amount" inputmode="decimal" style="max-width:9em" placeholder="or type your own">
 <button type="submit" class="btn small secondary">Set</button>
 </form>
+</div>
 ${unset}
 </section>`;
 }
@@ -101,7 +109,7 @@ ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</
 <button type="submit" class="btn small secondary">Work out</button>
 </form>
 ${cards}
-<p class="small muted">A budget is more than $0 and at most ${dollars(MAX_MONTHLY_USD)} a month.</p>
+<p class="small muted">A budget is any amount more than $0 a month.</p>
 </main>
 </body>
 </html>`;
@@ -152,8 +160,8 @@ async function pageInput(db: D1Database, userId: string, applicationsADay: numbe
 
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
-// GET shows the page; POST sets one provider's budget from the accepted
-// suggestion or the typed amount, then shows the page again. Scoped to the
+// GET shows the page; POST sets one provider's budget from the typed amount
+// or, when none is typed, the accepted suggestion, then shows the page again. Scoped to the
 // signed-in user throughout.
 export async function handleBudgets(request: Request, db: D1Database, userId: string, now: Date): Promise<Response> {
   const url = new URL(request.url);
@@ -175,11 +183,11 @@ export async function handleBudgets(request: Request, db: D1Database, userId: st
   if (!isProvider(provider) || !(await connectedProviders(db, userId)).includes(provider)) {
     return refuse("That provider is not connected.");
   }
-  const accepted = field("accept");
-  const amount = parseBudget(accepted || field("amount"));
+  const typed = field("amount").trim();
+  const amount = parseBudget(typed || field("accept"));
   if (amount === undefined) {
-    return refuse(`Type a budget in dollars, more than $0 and at most ${dollars(MAX_MONTHLY_USD)}, for example 30.`);
+    return refuse("Type a budget in dollars, more than $0, for example 30.");
   }
-  await setBudget(db, userId, provider, amount, accepted ? "accepted" : "typed", now);
+  await setBudget(db, userId, provider, amount, typed ? "typed" : "accepted", now);
   return Response.redirect(`${url.origin}${BUDGETS_PATH}?per_day=${applicationsADay}`, 303);
 }

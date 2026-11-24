@@ -97,8 +97,9 @@ push to `main` that touches `shell/`, it:
    (until T10), and refuses while `wrangler.jsonc` has the placeholder
    database id;
 3. lists the pending migrations and, when any may change or remove data
-   (anything but adding tables, indexes, views, columns or rows;
-   `src/release/migration-rules.ts`), records D1's restore bookmark with
+   (anything but adding tables, indexes, views, columns or rows, and any
+   upsert that updates existing rows; every `.sql` file wrangler would apply is
+   checked, whatever its name; `src/release/migration-rules.ts`), records D1's restore bookmark with
    `wrangler d1 time-travel info chief-of-staff` (`scripts/release-migrations.mjs`);
 4. runs `wrangler d1 migrations apply chief-of-staff --remote`; a failed file
    is rolled back by D1 and stops the release, so the Worker is not deployed;

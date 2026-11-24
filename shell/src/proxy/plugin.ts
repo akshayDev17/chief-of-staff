@@ -10,14 +10,19 @@ import type { Provider } from "../prices/types";
 // For the three v1 providers none of them is secret.
 export type ConnectionFields = Record<string, string>;
 
-// The provider's own usage figures from its reply. The four counts are
+// The provider's own usage figures from its reply. The five counts are
 // disjoint: `input` is uncached input only, as Claude's API reports it; a
 // plug-in whose provider reports total input subtracts the cached part.
+// `cacheWrite` is written to the 5-minute cache, `cacheWrite1h` to the
+// 1-hour one. `longPrompt` is true when the provider billed the call at its
+// long-prompt (long-context) rates, so every token is costed at those rows.
 export interface Usage {
   input: number;
   cachedInput: number;
   cacheWrite: number;
+  cacheWrite1h: number;
   output: number;
+  longPrompt: boolean;
 }
 
 // What one call to the provider returned. `body` is handed back to the

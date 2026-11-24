@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { readConnection, writeConnection } from "../src/proxy/connections";
-import { importVaultKey, itemNames, openItem, storeItem } from "../src/vault";
+import { importVaultKey, openItem, storeItem } from "../src/vault";
 import { dumpEveryTable, testPlugin, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-25T10:00:00Z");
@@ -23,7 +23,6 @@ describe("the per-user vault", () => {
   it("gives back what was stored, and stores it only sealed", async () => {
     await storeItem(env.DB, vaultKey, owner, "portal:jobs.example.com", PASTED, NOW);
     expect(await openItem(env.DB, vaultKey, owner, "portal:jobs.example.com")).toBe(PASTED);
-    expect(await itemNames(env.DB, owner)).toEqual(["portal:jobs.example.com"]);
     expect(JSON.stringify(await dumpEveryTable())).not.toContain(PASTED);
   });
 

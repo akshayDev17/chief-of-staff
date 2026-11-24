@@ -25,10 +25,14 @@ CREATE TABLE model_calls (
   fallback_reason TEXT CHECK (fallback_reason IN ('refused', 'budget_spent')),
   input_tokens INTEGER NOT NULL DEFAULT 0, -- uncached input
   cached_input_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,    -- written to the 5-minute cache
+  cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0, -- written to the 1-hour cache
   output_tokens INTEGER NOT NULL DEFAULT 0,
+  long_prompt INTEGER NOT NULL DEFAULT 0 CHECK (long_prompt IN (0, 1)), -- billed at long-prompt rates
   duration_ms INTEGER NOT NULL,
-  cost_usd REAL NOT NULL CHECK (cost_usd >= 0), -- tokens at the price table's list price
+  -- Tokens at the price table's list price; NULL when a kind of token the call
+  -- used had none, which stops the provider until the 1st rather than undercount.
+  cost_usd REAL CHECK (cost_usd >= 0),
   CHECK ((fallback = 0 AND fallback_reason IS NULL) OR (fallback = 1 AND fallback_reason IS NOT NULL))
 );
 

@@ -8,6 +8,9 @@
 // - no plug-in serves the provider (`no_plugin`);
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
+// - a call to the provider this month used a kind of token (a long-prompt
+//   rate, a 1-hour cache write) the price table has no list price for, so the
+//   month's spend there is not known (`no_price`), until the 1st of next month;
 // - the user has set no monthly budget for the provider (`no_budget`);
 // - the user's spend at the provider since the 1st has reached the budget
 //   (`budget_spent`), until the 1st of next month;
@@ -20,7 +23,11 @@
 // under all the same checks and within its own provider's budget. Any other
 // outcome is returned as it is.
 //
-// Every call sent to a provider writes one ledger row, answered or not. The
+// Every call sent to a provider writes one ledger row, answered or not, its
+// tokens costed at the price table's list price: at the long-prompt rows
+// when the provider billed the call at them, and each cache write at its own
+// 5-minute or 1-hour row. A row whose tokens cannot all be costed that way
+// has no cost, never a lower one, and stops the provider as above. The
 // request and reply bodies pass through untouched and are never logged or
 // stored; the credential lives only for the call.
 
@@ -59,18 +66,35 @@ export type ProxyOutcome =
   | { kind: "provider_error"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown }
   | { kind: "refused"; provider: Provider; model: string; fallback: boolean; reason: Refusal; detail: string; resumesOn?: string };
 
-const PRICED_KINDS: readonly TokenKind[] = ["input", "cached_input", "cache_write", "output"];
+// Each usage count and the price-table row it is costed at.
+const USAGE_KINDS: ReadonlyArray<readonly [Exclude<keyof Usage, "longPrompt">, TokenKind]> = [
+  ["input", "input"],
+  ["cachedInput", "cached_input"],
+  ["cacheWrite", "cache_write"],
+  ["cacheWrite1h", "cache_write_1h"],
+  ["output", "output"],
+];
 
 type Prices = Partial<Record<TokenKind, PriceAnswer>>;
 
-// Tokens at the price table's list price. A model with no cached-input or
-// cache-write row has those tokens costed at its input price.
-export function costOf(usage: Usage, prices: Prices): number {
-  const input = prices.input!.usdPerMTok;
-  const cached = prices.cached_input?.usdPerMTok ?? input;
-  const cacheWrite = prices.cache_write?.usdPerMTok ?? input;
-  const output = prices.output!.usdPerMTok;
-  return (usage.input * input + usage.cachedInput * cached + usage.cacheWrite * cacheWrite + usage.output * output) / 1_000_000;
+// Tokens at the price table's list price, each kind at its own row.
+// Undefined when a kind the call used has no row: no call is costed below
+// its list price.
+export function costOf(usage: Usage, prices: Prices): number | undefined {
+  let usd = 0;
+  for (const [count, kind] of USAGE_KINDS) {
+    if (!usage[count]) continue;
+    const price = prices[kind];
+    if (!price) return undefined;
+    usd += usage[count] * price.usdPerMTok;
+  }
+  return usd / 1_000_000;
+}
+
+// The model's list prices at its location, at the short- or long-prompt rows.
+async function listPrices(db: D1Database, { provider, model, location }: ModelChoice, longPrompt: boolean): Promise<Prices> {
+  const answers = await Promise.all(USAGE_KINDS.map(([, tokenKind]) => lookupPrice(db, { provider, model, location, tokenKind, longPrompt })));
+  return Object.fromEntries(USAGE_KINDS.map(([, kind], i) => [kind, answers[i]]));
 }
 
 const RESUMES = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", timeZone: "UTC" });
@@ -92,16 +116,22 @@ async function attempt(
   const plugin = plugins[provider];
   if (!plugin) return refuse("no_plugin", `${PROVIDER_NAMES[provider]} is not available yet`);
 
-  const prices: Prices = {};
-  const answers = await Promise.all(PRICED_KINDS.map((tokenKind) => lookupPrice(db, { provider, model, location, tokenKind })));
-  PRICED_KINDS.forEach((kind, i) => (prices[kind] = answers[i]));
+  const prices = await listPrices(db, choice, false);
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);
 
   const budget = await readBudget(db, call.userId, provider);
   if (!budget) return refuse("no_budget", `set a monthly budget for ${PROVIDER_NAMES[provider]} on Models › Setup › Budgets`);
   const startedAt = now();
-  if ((await monthSpend(db, call.userId, provider, startedAt)) >= budget.monthlyUsd) {
-    const resumesOn = RESUMES.format(nextMonthStart(startedAt));
+  const spent = await monthSpend(db, call.userId, provider, startedAt);
+  const resumesOn = RESUMES.format(nextMonthStart(startedAt));
+  if (spent === undefined) {
+    return refuse(
+      "no_price",
+      `a call to ${PROVIDER_NAMES[provider]} this month used tokens the price table has no list price for, so this month's spend is not known. Resumes ${resumesOn}`,
+      resumesOn,
+    );
+  }
+  if (spent >= budget.monthlyUsd) {
     return refuse("budget_spent", `model budget for ${PROVIDER_NAMES[provider]} this month reached. Resumes ${resumesOn}`, resumesOn);
   }
 
@@ -118,7 +148,7 @@ async function attempt(
   const t0 = Date.now();
   let status: number;
   let body: unknown;
-  let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, output: 0 };
+  let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
   try {
     const reply = await plugin.call({ credential, connection, model, location, request: choice.request });
     status = reply.status;
@@ -148,9 +178,11 @@ async function attempt(
     inputTokens: usage.input,
     cachedInputTokens: usage.cachedInput,
     cacheWriteTokens: usage.cacheWrite,
+    cacheWrite1hTokens: usage.cacheWrite1h,
     outputTokens: usage.output,
+    longPrompt: usage.longPrompt,
     durationMs,
-    costUsd: costOf(usage, prices),
+    costUsd: costOf(usage, usage.longPrompt ? await listPrices(db, choice, true) : prices),
   });
 
   const kind = status >= 200 && status < 300 ? "answered" : "provider_error";

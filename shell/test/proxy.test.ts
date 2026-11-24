@@ -44,27 +44,60 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("one ledger row per call", () => {
-  it("records provider, model, plug-in version, the four token counts, time and cost", async () => {
-    bedrock.replies.push(ok({ input: 2000, cachedInput: 5000, cacheWrite: 1000, output: 400 }));
+  it("records provider, model, plug-in version, the five token counts, time and cost", async () => {
+    bedrock.replies.push(ok({ input: 2000, cachedInput: 5000, cacheWrite: 1000, cacheWrite1h: 500, output: 400 }));
     const outcome = await callModel(env.DB, { bedrock, vertex }, call(), clock);
     expect(outcome).toMatchObject({ kind: "answered", provider: "bedrock", fallback: false, status: 200, body: { reply: "a test reply" } });
     const rows = await ledger();
     expect(rows).toHaveLength(1);
-    // 2000 × $3 + 5000 × $0.30 + 1000 × $3.75 + 400 × $15, per million.
-    const cost = (2000 * 3 + 5000 * 0.3 + 1000 * 3.75 + 400 * 15) / 1e6;
+    // 2000 × $3 + 5000 × $0.30 + 1000 × $3.75 (5-minute) + 500 × $6 (1-hour) + 400 × $15, per million.
+    const cost = (2000 * 3 + 5000 * 0.3 + 1000 * 3.75 + 500 * 6 + 400 * 15) / 1e6;
     expect(rows[0]).toMatchObject({
       user_id: userId, at: NOW.toISOString(), task: "fill", site: "jobs.example.com", run_id: "run-1",
       provider: "bedrock", model: "test-sonnet", region: "global", tier: "Strongest", plugin_version: "test-bedrock-1",
       status: 200, fallback: 0, fallback_reason: null, input_tokens: 2000, cached_input_tokens: 5000,
-      cache_write_tokens: 1000, output_tokens: 400,
+      cache_write_tokens: 1000, cache_write_1h_tokens: 500, output_tokens: 400, long_prompt: 0,
     });
     expect(rows[0]!.cost_usd).toBeCloseTo(cost, 12);
     expect(typeof rows[0]!.duration_ms).toBe("number");
   });
 
-  it("costs cached and cache-write tokens at the input price when the model lists none", () => {
-    const prices = { input: { usdPerMTok: 1, source: "azure-retail", dateRead: "", stale: false }, output: { usdPerMTok: 4, source: "azure-retail", dateRead: "", stale: false } } as const;
-    expect(costOf({ input: 1e6, cachedInput: 1e6, cacheWrite: 1e6, output: 1e6 }, prices)).toBe(7);
+  it("costs a call billed at long-prompt rates at the long-prompt rows", async () => {
+    bedrock.replies.push(ok({ input: 250_000, cachedInput: 10_000, cacheWrite: 2000, output: 1000, longPrompt: true }));
+    await callModel(env.DB, { bedrock, vertex }, call(), clock);
+    const [row] = await ledger();
+    expect(row).toMatchObject({ input_tokens: 250_000, long_prompt: 1 });
+    expect(row!.cost_usd).toBeCloseTo((250_000 * 6 + 10_000 * 0.6 + 2000 * 7.5 + 1000 * 22.5) / 1e6, 12);
+  });
+
+  it("costs nothing below list price: a kind used with no row leaves the cost unknown", () => {
+    const at = (usdPerMTok: number) => ({ usdPerMTok, source: "azure-retail", dateRead: "", stale: false }) as const;
+    const usage = { input: 1e6, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 1e6, longPrompt: false };
+    expect(costOf(usage, { input: at(1), output: at(4) })).toBe(5);
+    expect(costOf({ ...usage, cachedInput: 1 }, { input: at(1), output: at(4) })).toBeUndefined();
+    expect(costOf({ ...usage, cacheWrite1h: 1 }, { input: at(1), cache_write: at(1.25), output: at(4) })).toBeUndefined();
+  });
+
+  it("answers a call it cannot cost, then refuses the provider until the 1st rather than undercount", async () => {
+    // test-sonnet lists no long-prompt 1-hour cache write.
+    bedrock.replies.push(ok({ input: 250_000, cacheWrite1h: 4000, output: 1000, longPrompt: true }));
+    expect(await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
+    const rows = await ledger();
+    expect(rows).toEqual([expect.objectContaining({ provider: "bedrock", cache_write_1h_tokens: 4000, long_prompt: 1, cost_usd: null })]);
+    expect(await monthSpend(env.DB, userId, "bedrock", NOW)).toBeUndefined();
+
+    const next = await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock);
+    expect(next).toMatchObject({ kind: "refused", provider: "bedrock", reason: "no_price", resumesOn: "1 December" });
+    expect(bedrock.calls).toHaveLength(1);
+    expect(await monthSpend(env.DB, userId, "bedrock", new Date("2026-12-01T00:00:00Z"))).toBe(0);
+  });
+
+  it("leaves the cost unknown for cache tokens a model lists no price for", async () => {
+    vertex.replies.push(ok({ input: 800, cacheWrite: 200, output: 50 }));
+    expect(await callModel(env.DB, { bedrock, vertex }, call({ main: call().fallback!, fallback: undefined }), clock)).toMatchObject({
+      kind: "answered", provider: "vertex",
+    });
+    expect(await ledger()).toEqual([expect.objectContaining({ provider: "vertex", cache_write_tokens: 200, cost_usd: null })]);
   });
 
   it("sends the request untouched with a freshly minted credential", async () => {

@@ -58,10 +58,11 @@ describe("the suggested budget", () => {
     expect(await suggestBudget(env.DB, [{ provider: "vertex", model: "unpriced", location: "global" }], 10)).toBeUndefined();
   });
 
-  it("parses only a positive dollar amount up to the cap", () => {
+  it("parses any positive dollar amount, with no upper limit", () => {
     expect(parseBudget("30")).toBe(30);
     expect(parseBudget(" $1,250.50 ")).toBe(1250.5);
-    for (const bad of ["", "0", "-5", "abc", "1e3", "10.123", "10001"]) expect(parseBudget(bad)).toBeUndefined();
+    expect(parseBudget("25000")).toBe(25000);
+    for (const bad of ["", "0", "-5", "abc", "1e3", "10.123", "9".repeat(400)]) expect(parseBudget(bad)).toBeUndefined();
   });
 });
 
@@ -95,9 +96,35 @@ describe("Models › Setup › Budgets", () => {
     expect(html).not.toContain("Until it is set");
   });
 
-  it("sets the budget the user types", async () => {
+  it("sets the budget the user types, however large", async () => {
     expect((await post({ provider: "bedrock", amount: "12.50", per_day: "5" })).status).toBe(303);
     expect(await readBudget(env.DB, ownerId, "bedrock")).toMatchObject({ monthlyUsd: 12.5, setHow: "typed" });
+    expect((await post({ provider: "bedrock", amount: "25000", per_day: "5" })).status).toBe(303);
+    expect(await readBudget(env.DB, ownerId, "bedrock")).toMatchObject({ monthlyUsd: 25000, setHow: "typed" });
+  });
+
+  it("sets the typed amount, never the suggestion, when both arrive", async () => {
+    expect((await post({ provider: "bedrock", accept: "31", amount: "12", per_day: "5" })).status).toBe(303);
+    expect(await readBudget(env.DB, ownerId, "bedrock")).toMatchObject({ monthlyUsd: 12, setHow: "typed" });
+    const bad = await post({ provider: "bedrock", accept: "31", amount: "twelve", per_day: "5" });
+    expect(bad.status).toBe(400);
+    expect(await readBudget(env.DB, ownerId, "bedrock")).toMatchObject({ monthlyUsd: 12, setHow: "typed" });
+  });
+
+  it("submits the typed amount on Enter: the suggestion has a form of its own", async () => {
+    // Each post form's fields and buttons, as name=value, in page order.
+    const forms: string[][] = [];
+    const field = { element: (e: Element) => void forms.at(-1)!.push(`${e.getAttribute("name") ?? ""}=${e.getAttribute("value") ?? ""}`) };
+    await new HTMLRewriter()
+      .on('form[method="post"]', { element: () => void forms.push([]) })
+      .on('form[method="post"] input', field)
+      .on('form[method="post"] button', field)
+      .transform(await send("?per_day=5"))
+      .text();
+    expect(forms).toEqual([
+      ["provider=bedrock", "per_day=5", "accept=31"],
+      ["provider=bedrock", "per_day=5", "amount=", "="],
+    ]);
   });
 
   it("refuses an amount that is not a budget, and a provider not connected", async () => {

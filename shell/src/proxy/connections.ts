@@ -50,7 +50,3 @@ export async function connectedProviders(db: D1Database, userId: string): Promis
     .all<{ provider: string }>();
   return results.map((r) => r.provider);
 }
-
-export async function deleteConnection(db: D1Database, userId: string, provider: string): Promise<void> {
-  await db.prepare("DELETE FROM provider_connections WHERE user_id = ? AND provider = ?").bind(userId, provider).run();
-}

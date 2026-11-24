@@ -14,8 +14,9 @@ The core knows no provider. A plug-in (`plugin.ts`) supplies:
 - `mintCredential(connection)`: a short-lived credential from that record,
   kept in memory for one call and never stored or logged;
 - `call(...)`: the provider's own request, returning the status, the body
-  untouched and the usage figures (uncached input, cached input, cache write,
-  output; disjoint counts);
+  untouched and the usage figures (uncached input, cached input, 5-minute and
+  1-hour cache writes, output; disjoint counts) and whether the provider billed
+  the call at its long-prompt rates;
 - `version`: recorded on every ledger row.
 
 T16 writes the three real plug-ins and the OpenID Connect issuer they mint
@@ -26,8 +27,12 @@ registered until then, so every call is refused `no_plugin`.
 
 1. Prices it: the model needs an input and an output list price at its
    location in the current price table (`lookupPrice`, T11), else it is refused
-   (`no_price`). Cached-input and cache-write tokens are costed at their own
-   price, or at the input price when the model lists none.
+   (`no_price`). Once the reply is in, every kind of token it used is costed
+   at its own row: the long-prompt rows when the provider billed at them, and
+   the 5-minute and 1-hour cache writes each at theirs. A call that used a kind
+   with no row is never costed lower: its ledger row has no cost, and the
+   provider's calls are refused (`no_price`) until the 1st, since that
+   month's spend there is not known.
 2. Enforces the provider's monthly budget: none set is refused (`no_budget`);
    the user's spend at that provider since 00:00 UTC on the 1st reaching it is
    refused (`budget_spent`) until the 1st, with the date it resumes. The call

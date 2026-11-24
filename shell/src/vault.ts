@@ -96,13 +96,3 @@ export async function openItem(db: D1Database, vaultKey: CryptoKey, userId: stri
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: encode(itemAad(userId, name)) }, key, data);
   return new TextDecoder().decode(plain);
 }
-
-// The names of the user's items, for "saved" marks on screens; never values.
-export async function itemNames(db: D1Database, userId: string): Promise<string[]> {
-  const { results } = await db.prepare("SELECT name FROM vault_items WHERE user_id = ? ORDER BY name").bind(userId).all<{ name: string }>();
-  return results.map((r) => r.name);
-}
-
-export async function deleteItem(db: D1Database, userId: string, name: string): Promise<void> {
-  await db.prepare("DELETE FROM vault_items WHERE user_id = ? AND name = ?").bind(userId, name).run();
-}

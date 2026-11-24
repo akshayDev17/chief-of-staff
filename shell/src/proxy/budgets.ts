@@ -14,9 +14,6 @@ export interface Budget {
   setAt: string;
 }
 
-// The highest budget the field accepts, to catch a mistyped extra zero or two.
-export const MAX_MONTHLY_USD = 10_000;
-
 export async function readBudget(db: D1Database, userId: string, provider: string): Promise<Budget | undefined> {
   const row = await db
     .prepare("SELECT monthly_usd, set_how, set_at FROM provider_budgets WHERE user_id = ? AND provider = ?")
@@ -26,13 +23,15 @@ export async function readBudget(db: D1Database, userId: string, provider: strin
 }
 
 // A typed or accepted amount, in dollars, as a number the store accepts;
-// undefined for anything else (empty, not a number, zero, negative, too big).
+// undefined for anything else (empty, not a number, zero, negative).
 export function parseBudget(text: string): number | undefined {
   const cleaned = text.trim().replace(/^\$/, "").replace(/,/g, "");
   if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return undefined;
   const usd = Number(cleaned);
-  return usd > 0 && usd <= MAX_MONTHLY_USD ? usd : undefined;
+  return isBudget(usd) ? usd : undefined;
 }
+
+const isBudget = (usd: number): boolean => Number.isFinite(usd) && usd > 0;
 
 export async function setBudget(
   db: D1Database,
@@ -42,7 +41,7 @@ export async function setBudget(
   setHow: Budget["setHow"],
   now: Date,
 ): Promise<void> {
-  if (!(monthlyUsd > 0 && monthlyUsd <= MAX_MONTHLY_USD)) throw new Error(`a monthly budget is more than $0 and at most $${MAX_MONTHLY_USD}`);
+  if (!isBudget(monthlyUsd)) throw new Error("a monthly budget is more than $0");
   await db
     .prepare(
       `INSERT INTO provider_budgets (user_id, provider, monthly_usd, set_how, set_at) VALUES (?1, ?2, ?3, ?4, ?5)
