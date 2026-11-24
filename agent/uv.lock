@@ -147,7 +147,7 @@ wheels = [
 [[package]]
 name = "chief-of-staff-agent"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "google-adk" },
 ]

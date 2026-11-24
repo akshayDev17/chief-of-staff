@@ -12,12 +12,9 @@ dev = [
     "pytest==9.2.0",
 ]
 
-[build-system]
-requires = ["hatchling==1.33.0"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/chief_of_staff_agent"]
+[tool.uv]
+package = false
+required-version = "==0.11.29"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

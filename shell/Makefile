@@ -4,14 +4,16 @@
 # resolve this dependency tree).
 
 NPM := npx --yes npm@11.21.3
+INSTALLED := node_modules/.package-lock.json
 
-.PHONY: test check install
+.PHONY: test check
 
-install:
+$(INSTALLED): package.json package-lock.json
 	$(NPM) ci
+	touch $@
 
-check: install
+check: $(INSTALLED)
 	$(NPM) run typecheck
 
-test: install
+test: $(INSTALLED)
 	$(NPM) test
