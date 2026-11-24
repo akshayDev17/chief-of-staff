@@ -103,6 +103,13 @@ describe("two sources disagreeing", () => {
     expect(disagreements).toHaveLength(1);
   });
 
+  it("names each disagreeing row once, however many listings give it", () => {
+    const { rows, disagreements } = mergeRows([row(0.8, "aws-price-list"), row(3.26, "aws-price-list"), row(0.8, "aws-price-list")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ usdPerMTok: 3.26, disagreement: true });
+    expect(disagreements).toEqual(["vertex Gemini 3.8 Flash global input: 0.8 vs 3.26"]);
+  });
+
   it("leaves agreeing rows unflagged", () => {
     const { rows, disagreements } = mergeRows([row(1.5, "maintainer-read"), row(1.5, "google-catalog")]);
     expect(rows[0]?.disagreement).toBe(false);

@@ -77,6 +77,39 @@ describe("AWS price-list files (saved, us-east-1, publication 2026-11-23)", () =
     expect(input.every((r) => r.usdPerMTok > 0 && r.usdPerMTok < 1)).toBe(true);
   });
 
+  it("reads Claude 2.0 and Instant at the Bedrock list price, leaving out the Marketplace 100K editions", () => {
+    // Products as AWS lists them in AmazonBedrockFoundationModels us-east-1 (read 2026-11-25).
+    const product = (sku: string, model: string, servicename: string, kind: "Input" | "Output", usd: string) => ({
+      product: {
+        sku,
+        attributes: { model, servicename, regionCode: "us-east-1", inferenceType: `${kind} tokens`, usagetype: `USE1-MP:USE1_${kind}TokenCount-Units` },
+      },
+      term: { [`${sku}.T`]: { priceDimensions: { [`${sku}.T.D`]: { unit: "1M tokens", pricePerUnit: { USD: usd } } } } },
+    });
+    const listed = [
+      product("A", "Claude 2.0", "Claude (Amazon Bedrock Edition)", "Input", "8.0000000000"),
+      product("B", "Claude 2.0", "Claude (Amazon Bedrock Edition)", "Output", "24.0000000000"),
+      product("C", "Claude 2.0", "Claude (100K) (Amazon Bedrock Edition)", "Input", "22.0400000000"),
+      product("D", "Claude 2.0", "Claude (100K) (Amazon Bedrock Edition)", "Output", "65.3600000000"),
+      product("E", "Claude Instant", "Claude Instant (Amazon Bedrock Edition)", "Input", "0.8000000000"),
+      product("F", "Claude Instant", "Claude Instant (Amazon Bedrock Edition)", "Output", "2.4000000000"),
+      product("G", "Claude Instant", "Claude Instant (100K) (Amazon Bedrock Edition)", "Input", "3.2600000000"),
+      product("H", "Claude Instant", "Claude Instant (100K) (Amazon Bedrock Edition)", "Output", "11.0200000000"),
+    ];
+    const offer = {
+      publicationDate: "2026-11-23",
+      products: Object.fromEntries(listed.map((l) => [l.product.sku, l.product])),
+      terms: { OnDemand: Object.fromEntries(listed.map((l) => [l.product.sku, l.term])) },
+    } as AwsOfferFile;
+    const rows = rowsFromAwsOffer(offer, "2026-11-25").rows;
+    expect(rows.map((r) => [r.model, r.tokenKind, r.usdPerMTok])).toEqual([
+      ["Claude 2.0", "input", 8],
+      ["Claude 2.0", "output", 24],
+      ["Claude Instant", "input", 0.8],
+      ["Claude Instant", "output", 2.4],
+    ]);
+  });
+
   it("parses usage types, skipping flex and priority", () => {
     expect(parseAwsUsageType("USE1-MP:USE1_InputTokenCount_Batch-Units")).toEqual({ tokenKind: "input", deployment: "regional", longPrompt: false, batch: true });
     expect(parseAwsUsageType("USE1-MP:USE1_CacheWriteInputTokenCount_Global-Units")?.tokenKind).toBe("cache_write");
