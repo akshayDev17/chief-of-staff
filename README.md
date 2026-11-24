@@ -62,7 +62,7 @@ that allows only the owner's email (T15, design-v3 section 10.3). Two parts:
 - **The Access application itself**, created or updated by
   `node shell/scripts/sync-access-app.mjs` at deploy time. It reads
   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `ACCESS_APP_DOMAIN` (the
-  app's host name, no scheme) and `OWNER_EMAIL` from the environment, makes
+  app's host name only, no scheme or path) and `OWNER_EMAIL` from the environment, makes
   one reusable policy, `chief-of-staff: owner only`, that allows only
   `OWNER_EMAIL`, attaches it to the self-hosted application `chief-of-staff`
   covering `ACCESS_APP_DOMAIN`, and prints the application id and AUD tag. It
