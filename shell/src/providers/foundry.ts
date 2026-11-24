@@ -101,16 +101,21 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim());
 
 // Foundry's own IDs for the models the app knows, by the price table's names,
-// from Microsoft's catalog pages (ms.date 2026-09-21, updated 2026-11-24,
-// read 2026-11-25):
+// from Microsoft's catalog pages, each ID as the page prints it (ms.date
+// 2026-09-21, updated 2026-11-24, read in full 2026-11-25):
 // - Claude: "Foundry Models from partners and community", the Claude table.
 //   https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-from-partners
 // - Every other model: "Foundry Models sold directly by Azure".
 //   https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-sold-directly-by-azure
 // The ID is the deployment name the guide asks the user to keep ("By
-// default, the deployment uses the model name"). A model the table prices
-// but this map leaves out (a Fireworks or Baseten row, a retired or dated
-// version, a meter that names no one catalog ID) cannot be picked.
+// default, the deployment uses the model name"). A price-table name is mapped
+// only where the page names exactly one ID plainly for the same model. A
+// model the table prices but this map leaves out cannot be picked: a
+// Fireworks or Baseten row, a retired or dated version, and a meter whose
+// catalog ID would be a guess ("DeepSeek V3.2 SP", "Mistral MM3.5",
+// "Mistral Codestral", "Grok 4.1", "Grok 4.2", "Grok4 Fast",
+// "Kimi K2.5 Thinking", "Kimi K2.6 Thinking", "GPT 5.2 pro", the dated
+// gpt-4o and GPT-chat-latest rows).
 export const FOUNDRY_MODEL_IDS: Readonly<Record<string, string>> = {
   "Claude Haiku 5.5": "claude-haiku-5-5",
   "Claude Sonnet 5.5": "claude-sonnet-5-5",
@@ -174,6 +179,8 @@ export const FOUNDRY_MODEL_IDS: Readonly<Record<string, string>> = {
   "Grok Code Fast 1": "grok-code-fast-1",
   "Kimi 3.1 Pro": "Kimi-K3.1-Pro",
   "Kimi K2.7 Code": "Kimi-K2.7-Code",
+  "Kimi K2.6": "Kimi-K2.6",
+  "Kimi K2.5": "Kimi-K2.5",
   "Mistral Large 4": "mistral-large-4-latest",
   "Mistral Large 3": "Mistral-Large-3",
   "Llama 4 Maverick 17B": "Llama-4-Maverick-17B-128E-Instruct-FP8",
@@ -181,6 +188,7 @@ export const FOUNDRY_MODEL_IDS: Readonly<Record<string, string>> = {
   "Cohere Command A Plus": "Cohere-command-a-plus-05-2026",
   "Cohere Command A": "Cohere-command-a",
   "MAI-Thinking-1": "MAI-Thinking-1",
+  "Code 1.1 Flash": "MAI-Code-1.1-Flash",
 };
 
 // The deployment name the guide asks the user to keep: the model's ID.

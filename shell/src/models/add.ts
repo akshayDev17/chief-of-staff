@@ -201,8 +201,8 @@ const comparable = (id: string): string =>
     .replace(/[\s._]+/g, "-");
 
 // A date or version stamp a provider puts after a model's ID: "20261001",
-// "2026-10-01", "001", "v1:0", one or more of them.
-const STAMP_PART = String.raw`(?:\d{8}|\d{4}-\d{2}-\d{2}|\d{3}|v\d+(?::\d+)?)`;
+// "2026-10-01", "0709" or "2501", "001", "v1:0", one or more of them.
+const STAMP_PART = String.raw`(?:\d{8}|\d{4}-\d{2}-\d{2}|\d{4}|\d{3}|v\d+(?::\d+)?)`;
 const STAMP = new RegExp(`^${STAMP_PART}(?:-${STAMP_PART})*$`);
 
 // Whether the model a reply names is the one picked: its ID, or that ID with
