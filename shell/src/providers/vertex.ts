@@ -131,13 +131,13 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
       },
     ],
     start: (typed) => ({ kind: "connection", fields: { projectId: typed.projectId! } }),
-    beforeConnect() {
+    grantHelp(connection) {
       const account = serviceAccount
         ? `<span class="mono">${esc(serviceAccount)}</span> <button type="button" class="btn small ghost" data-copy="${esc(serviceAccount)}">Copy</button>`
         : `<span class="muted">shown once Admin has set up the app's Google identity</span>`;
       return `<p class="small">The app's service account: ${account}</p>
-<p class="small">The Cloud Shell command (put your project ID in it):</p>
-<pre class="cmd">${esc(customRoleCommand("YOUR_PROJECT_ID"))}</pre>`;
+<p class="small">The Cloud Shell command${connection?.projectId ? "" : " (put your project ID in it)"}:</p>
+<pre class="cmd">${esc(customRoleCommand(connection?.projectId ?? "YOUR_PROJECT_ID"))}</pre>`;
     },
     testModel: "Claude Haiku 5.5",
     locations: (model) => [...(VERTEX_LOCATIONS[model] ?? ["global"])],

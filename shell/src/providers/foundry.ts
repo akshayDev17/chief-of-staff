@@ -142,7 +142,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
         { label: "Add a role assignment", href: "https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-portal" },
         { label: "Disable key authentication", href: "https://learn.microsoft.com/en-us/azure/ai-services/disable-local-auth" },
       ],
-      revoke: "remove “Chief of staff”'s role on your resource, or the app from your Enterprise applications.",
+      revoke: "remove “Chief of staff”’s role on your resource, or the app from your Enterprise applications.",
       // The deployment type is chosen when the model is deployed in Foundry.
       regionChoice: false,
     },

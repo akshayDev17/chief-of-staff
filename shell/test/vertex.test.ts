@@ -31,7 +31,7 @@ describe("Connect Google Vertex AI", () => {
     const plugin = vertexPlugin(envWith());
     expect(plugin.connectionFields).toEqual(["projectId"]);
     expect(plugin.connect.start({ projectId: "example-project-123" }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" })).toEqual({ kind: "connection", fields: connection });
-    const shown = plugin.connect.beforeConnect!();
+    const shown = plugin.connect.grantHelp!();
     expect(shown).toContain(SA);
     expect(shown).toContain('data-copy="chief-of-staff-models@cos-owner-project.iam.gserviceaccount.com"');
     expect(customRoleCommand("p-1")).toBe('gcloud iam roles create chiefOfStaffModelCaller --project=p-1 --title="Chief of staff model caller" --permissions=aiplatform.endpoints.predict');

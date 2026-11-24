@@ -163,6 +163,35 @@ describe("Models › Setup › Providers", () => {
     expect(page).not.toContain('target="_blank" data-reload');
   });
 
+  it("keeps the Vertex AI service account and the role command, with the project ID, on screen after Connect until the test call passes", async () => {
+    const vertexRow = (tokenKind: "input" | "output", usdPerMTok: number) => ({
+      provider: "vertex" as const, model: "Claude Haiku 5.5", deployment: "regional" as const, region: "us", tokenKind, longPrompt: false, batch: false,
+      usdPerMTok, source: "google-catalog" as const, dateRead: "2026-11-24", stale: false, disagreement: false,
+    });
+    await writeSnapshot(env.DB, { takenAt: "2026-11-24T07:00:00Z", status: "good", results: [], rows: [vertexRow("input", 0.1), vertexRow("output", 0.5)] });
+    let granted = false;
+    const { fetcher } = scriptedFetch([
+      [/^https:\/\/sts\.googleapis\.com\//, () => Response.json({ access_token: "federated-token", token_type: "Bearer", expires_in: 3599 })],
+      [/^https:\/\/iamcredentials\.googleapis\.com\//, () => Response.json({ accessToken: "sa-token", expireTime: "2026-11-25T11:00:00Z" })],
+      [/aiplatform/, () =>
+        granted
+          ? Response.json({ content: [{ type: "text", text: "OK" }], usage: { input_tokens: 11, output_tokens: 2 } })
+          : Response.json({ error: { code: 403, message: "Permission 'aiplatform.endpoints.predict' denied", status: "PERMISSION_DENIED" } }, { status: 403 })],
+    ]);
+    const vertex = vertexPlugin({ APP_ORIGIN, ISSUER_KEYS, GOOGLE_WIF_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/w", GOOGLE_SERVICE_ACCOUNT: "chief-of-staff-models@owner.iam.gserviceaccount.com" }, fetcher, () => NOW);
+    const plugins = { ...world(), vertex };
+    await post(plugins, "/vertex/connect", { projectId: "example-project-123" });
+    const waiting = await text(await open(plugins, "?provider=vertex"));
+    expect(waiting).toContain("Vertex AI replied: 403 · PERMISSION_DENIED");
+    expect(waiting).toContain('data-copy="chief-of-staff-models@owner.iam.gserviceaccount.com">Copy</button>');
+    expect(waiting).toContain("gcloud iam roles create chiefOfStaffModelCaller --project=example-project-123");
+    granted = true;
+    await post(plugins, "/vertex/retry");
+    const passed = await text(await open(plugins, "?provider=vertex"));
+    expect(passed).toContain("Test call passed");
+    expect(passed).not.toContain("gcloud iam roles create");
+  });
+
   it("sends Foundry to Microsoft's consent page and says so while waiting", async () => {
     const plugins = world();
     const response = await post(plugins, "/foundry/connect", { endpoint: "https://example-resource.services.ai.azure.com" });

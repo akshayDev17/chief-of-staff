@@ -148,9 +148,10 @@ export interface ConnectMethod {
   // After the consent page: the record, from the fields typed before it and
   // what the page returned. Throws a plain message when consent was refused.
   finish?(pending: Record<string, string>, returned: URLSearchParams): ConnectionFields;
-  // What the screen shows with the fields before connecting, as trusted HTML
-  // (Vertex AI: the app's service-account email and the role command).
-  beforeConnect?(): string;
+  // What the user needs to make the grant, as trusted HTML, shown beside the
+  // fields and, once connected, until the test call passes (Vertex AI: the
+  // app's service-account email and the role command for the stored project).
+  grantHelp?(connection?: ConnectionFields): string;
   // The setup link again, for a record already stored (Bedrock's stack).
   setupLink?(connection: ConnectionFields): string | undefined;
   // The test call's model when the user has picked none at this provider,

@@ -141,7 +141,7 @@ function connectForm(panel: ProviderPanel): string {
     : "";
   return `${waitingConsent}<form method="post" action="${action(plugin.provider, "connect")}"${opensNewTab ? ' target="_blank" data-reload' : ""}>
 ${fields}
-${c.beforeConnect ? c.beforeConnect() : ""}
+${c.grantHelp ? c.grantHelp() : ""}
 <div class="row" style="margin-top:8px"><button type="submit" class="btn small">Connect ${esc(c.guide.name)}</button></div>
 </form>`;
 }
@@ -192,7 +192,8 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
     input.viewer === "friend"
       ? `<p class="small muted" style="margin-top:6px">Only you see the provider's reply. “Ask Admin for help” sends only this item's name and the plain reason.</p>`
       : "";
-  return `${head}${disconnect}${dialog}${regionLine(panel, input.changeRegion)}${budget}${resultBox(panel, input.viewer)}${template}${note}`;
+  const grantHelp = plugin.connect.grantHelp && check?.state !== "passed" ? plugin.connect.grantHelp(connection) : "";
+  return `${head}${disconnect}${grantHelp}${dialog}${regionLine(panel, input.changeRegion)}${budget}${resultBox(panel, input.viewer)}${template}${note}`;
 }
 
 export function renderProvidersPage(input: ProvidersPageInput): string {
