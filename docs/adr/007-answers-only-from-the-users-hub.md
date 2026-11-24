@@ -12,7 +12,7 @@ Applications are submitted without review, on LinkedIn and on employers' portals
 
 ## Considered options
 
-design-v3 compares no alternatives for this decision. Its text names these, in sections 2.6, 6.5, 8.1 and 8.3:
+design-v3 compares no alternatives for this decision. Its text names these, in sections 2.6, 6.5, 8.1, 8.3 and 8.6:
 
 - **A confirmation step** before an answer is used or an application is sent (sections 8.1 and 8.6).
 - **ADK's tool confirmation** (`require_confirmation=True`) (section 2.6).
