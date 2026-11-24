@@ -14,7 +14,13 @@
 // app picks: `https://aiplatform.googleapis.com` for `global`,
 // `https://aiplatform.<us|eu>.rep.googleapis.com` for the multi-regions,
 // `https://<region>-aiplatform.googleapis.com` for a region. The reply is in
-// Anthropic's Messages format (anthropic.ts).
+// Anthropic's Messages format (anthropic.ts). Gemini (T17): `generateContent`
+// at `publishers/google/models/<id>` on the same hosts, its usage in
+// `usageMetadata` (`promptTokenCount` with the cached part in
+// `cachedContentTokenCount`, `candidatesTokenCount` and `thoughtsTokenCount`
+// for output) and the model that answered in `modelVersion`. The Gemini
+// caller follows Gemini's generateContent format and is checked live in M2
+// step 3 (T10); a model of any other publisher is not called yet.
 //
 // Pages read 2026-11-25 (Google shows no page dates; every
 // cloud.google.com address redirects to docs.cloud.google.com):
@@ -49,7 +55,8 @@ import type { ConnectionFields, ConnectMethod, Failure, Link, ProviderPlugin } f
 import { ProviderRefusal } from "../proxy/plugin";
 import { esc } from "../prices/page";
 import { VERTEX_LOCATIONS } from "./vertex-locations";
-import { errorFromBody, messagesText, readBody, TEST_MAX_TOKENS, TEST_PROMPT, usageFromMessages } from "./anthropic";
+import type { Usage } from "../proxy/plugin";
+import { errorFromBody, messagesModel, messagesText, readBody, TEST_MAX_TOKENS, TEST_PROMPT, usageFromMessages } from "./anthropic";
 
 export interface VertexEnv {
   APP_ORIGIN?: string;
@@ -73,9 +80,49 @@ export const wifAudience = (provider: string): string => `https:${provider}`;
 // "claude-sonnet-5-5").
 export const vertexModelId = (model: string): string => model.trim().toLowerCase().replace(/[\s.]+/g, "-");
 
+// Gemini's IDs keep the version's dots ("Gemini 3.5 Flash" -> "gemini-3.5-flash").
+export const geminiModelId = (model: string): string => model.trim().toLowerCase().replace(/\s+/g, "-");
+
+export const isGemini = (model: string): boolean => /^gemini\b/i.test(model.trim());
+const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim());
+
+const host = (location: string): string =>
+  location === "global" ? "aiplatform.googleapis.com" : location === "us" || location === "eu" ? `aiplatform.${location}.rep.googleapis.com` : `${location}-aiplatform.googleapis.com`;
+
+export const generateContentUrl = (projectId: string, location: string, modelId: string): string =>
+  `https://${host(location)}/v1/projects/${encodeURIComponent(projectId)}/locations/${location}/publishers/google/models/${encodeURIComponent(modelId)}:generateContent`;
+
+const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
+
+// Gemini's long-context threshold was not read for this ticket: a prompt
+// over 200,000 tokens is costed at the long-prompt rows (or, where the table
+// lists none, at the dearest rate, proxy.ts), so a call is never costed
+// below what Google can charge. Checked live in M2 step 3 (T10).
+const GEMINI_LONG_PROMPT_OVER = 200_000;
+
+export function usageFromGemini(body: unknown): Usage | undefined {
+  const u = (body as { usageMetadata?: Record<string, unknown> } | null)?.usageMetadata;
+  if (!u || typeof u !== "object") return undefined;
+  const prompt = count(u.promptTokenCount);
+  const cachedInput = Math.min(prompt, count(u.cachedContentTokenCount));
+  return {
+    input: prompt - cachedInput,
+    cachedInput,
+    cacheWrite: 0,
+    cacheWrite1h: 0,
+    output: count(u.candidatesTokenCount) + count(u.thoughtsTokenCount),
+    longPrompt: prompt > GEMINI_LONG_PROMPT_OVER,
+  };
+}
+
+export function geminiText(body: unknown): string | undefined {
+  const parts = (body as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> } | null)?.candidates?.[0]?.content?.parts;
+  const text = Array.isArray(parts) ? parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("").trim() : "";
+  return text || undefined;
+}
+
 export function rawPredictUrl(projectId: string, location: string, modelId: string): string {
-  const host = location === "global" ? "aiplatform.googleapis.com" : location === "us" || location === "eu" ? `aiplatform.${location}.rep.googleapis.com` : `${location}-aiplatform.googleapis.com`;
-  return `https://${host}/v1/projects/${encodeURIComponent(projectId)}/locations/${location}/publishers/anthropic/models/${encodeURIComponent(modelId)}:rawPredict`;
+  return `https://${host(location)}/v1/projects/${encodeURIComponent(projectId)}/locations/${location}/publishers/anthropic/models/${encodeURIComponent(modelId)}:rawPredict`;
 }
 
 // The one-line Cloud Shell command that makes the role holding only the
@@ -140,11 +187,20 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
 <pre class="cmd">${esc(customRoleCommand(connection?.projectId ?? "YOUR_PROJECT_ID"))}</pre>`;
     },
     testModel: "Claude Haiku 5.5",
+    knownModels: Object.keys(VERTEX_LOCATIONS),
+    canCall: (model) => isClaude(model) || isGemini(model),
     locations: (model) => [...(VERTEX_LOCATIONS[model] ?? ["global"])],
     locationLabel: (location) => (location === "global" ? "Global" : location === "us" ? "US multi-region" : location === "eu" ? "EU multi-region" : location),
-    modelId: (model) => vertexModelId(model),
-    testRequest: () => ({ anthropic_version: ANTHROPIC_VERSION, max_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] }),
-    replyText: messagesText,
+    modelId: (model) => (isGemini(model) ? geminiModelId(model) : vertexModelId(model)),
+    testRequest: (model) =>
+      isGemini(model)
+        ? { contents: [{ role: "user", parts: [{ text: TEST_PROMPT }] }], generationConfig: { maxOutputTokens: TEST_MAX_TOKENS } }
+        : { anthropic_version: ANTHROPIC_VERSION, max_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] },
+    replyText: (body) => messagesText(body) ?? geminiText(body),
+    replyModel: (body) => {
+      const version = (body as { modelVersion?: unknown } | null)?.modelVersion;
+      return typeof version === "string" && version ? version : messagesModel(body);
+    },
     classify(f: Failure, connection) {
       const said = `${f.errorName} ${f.message}`;
       if (f.step === "credential") {
@@ -217,13 +273,24 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
       return { accessToken: token.accessToken, expireTime: token.expireTime };
     },
     async call({ credential, connection, model, location, request }) {
+      const authorization = `Bearer ${(credential as { accessToken: string }).accessToken}`;
+      if (isGemini(model)) {
+        const response = await fetcher(generateContentUrl(connection.projectId!, location, geminiModelId(model)), {
+          method: "POST",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify(request),
+        });
+        const reply = await readBody(response);
+        if (!response.ok) return { status: response.status, body: reply, error: errorFromBody(response.status, reply) };
+        return { status: response.status, body: reply, usage: usageFromGemini(reply) };
+      }
       const id = vertexModelId(model);
       // The model is in the address, not the body.
       const body: Record<string, unknown> = { anthropic_version: ANTHROPIC_VERSION, ...(request as Record<string, unknown>) };
       delete body.model;
       const response = await fetcher(rawPredictUrl(connection.projectId!, location, id), {
         method: "POST",
-        headers: { authorization: `Bearer ${(credential as { accessToken: string }).accessToken}`, "content-type": "application/json" },
+        headers: { authorization, "content-type": "application/json" },
         body: JSON.stringify(body),
       });
       const reply = await readBody(response);

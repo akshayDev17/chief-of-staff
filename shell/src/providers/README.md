@@ -23,10 +23,12 @@ plug-in. Each plug-in's file cites the vendor pages it follows, read
 2026-11-25.
 
 The callers speak each provider's own format: Converse on Bedrock (every
-model family), Anthropic's Messages format for Claude on Foundry
-(`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`). Foundry's
-OpenAI-family and Vertex AI's Gemini callers come with the ticket that adds
-those models (T17).
+model family Bedrock's own ID is known for), Anthropic's Messages format for
+Claude on Foundry (`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`),
+Chat Completions for every other Foundry model
+(`/openai/v1/chat/completions`, by the user's deployment name) and
+`generateContent` for Gemini on Vertex AI. The last two came with Add a model
+(T17, `src/models/README.md`) and are checked live in M2 step 3.
 
 ## The issuer (`src/issuer.ts`)
 

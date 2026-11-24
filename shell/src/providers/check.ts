@@ -169,15 +169,15 @@ export function verdictText(result: CheckResult, plugin: ProviderPlugin): string
 // The test call's model and location: the first model the user picked at
 // this provider, else the plug-in's own test model, at the region the user
 // chose or else the app's default for that model.
-async function testChoice(db: D1Database, userId: string, plugin: ProviderPlugin, check: Check | undefined): Promise<{ model: string; location: string }> {
+async function testChoice(db: D1Database, userId: string, plugin: ProviderPlugin, check: Check | undefined): Promise<{ model: string; location: string; deployment?: string }> {
   const picked = await db
-    .prepare("SELECT model, location FROM user_models WHERE user_id = ? AND provider = ? ORDER BY added_at LIMIT 1")
+    .prepare("SELECT model, location, deployment FROM user_models WHERE user_id = ? AND provider = ? ORDER BY added_at LIMIT 1")
     .bind(userId, plugin.provider)
-    .first<{ model: string; location: string }>();
+    .first<{ model: string; location: string; deployment: string | null }>();
   const model = picked?.model ?? plugin.connect.testModel;
   const locations = plugin.connect.locations(model);
   const location = check?.region && locations.includes(check.region) ? check.region : picked && locations.includes(picked.location) ? picked.location : locations[0]!;
-  return { model, location };
+  return { model, location, deployment: picked?.deployment ?? undefined };
 }
 
 // Makes the test call through the proxy, then records the result.
@@ -186,7 +186,7 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
   const connection = await readConnection(db, userId, provider);
   const before = await readCheck(db, userId, provider);
   if (!plugin || !connection) return before;
-  const { model, location } = await testChoice(db, userId, plugin, before);
+  const { model, location, deployment } = await testChoice(db, userId, plugin, before);
   const modelId = plugin.connect.modelId(model, location);
   const base: Check = {
     ...(before ?? { provider, state: "checking" }),
@@ -205,7 +205,7 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
     await saveCheck(db, userId, c);
     return c;
   };
-  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, request: plugin.connect.testRequest(model, location) }, () => now);
+  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, deployment, request: plugin.connect.testRequest(model, location) }, () => now);
   if (outcome.kind === "refused" && outcome.reason === "budget_spent") return wait("budget_spent", nextMonthStart(now).toISOString());
   if (outcome.kind === "refused" && outcome.reason === "no_price") return wait("no_price", minutesAfter(now, RETRY_MINUTES));
 

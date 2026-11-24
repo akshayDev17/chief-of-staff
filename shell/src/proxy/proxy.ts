@@ -52,6 +52,9 @@ export interface ModelChoice {
   model: string;
   // The region or deployment type, as the price table names it.
   location: string;
+  // Foundry only: the user's deployment name for the model (Add a model,
+  // T17); the plug-in's own default, the model ID, when absent.
+  deployment?: string;
   // The request in this provider's own format.
   request: ModelRequest;
 }
@@ -201,7 +204,7 @@ async function attempt(
   let failure: Failure | undefined;
   let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
   try {
-    const reply = await plugin.call({ credential, connection, model, location, request: choice.request });
+    const reply = await plugin.call({ credential, connection, model, location, deployment: choice.deployment, request: choice.request });
     status = reply.status;
     body = reply.body;
     if (reply.usage) usage = reply.usage;
