@@ -19,17 +19,21 @@ every component directory that exists and skip one that does not yet exist.
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`.
-A component's job runs only when that component's files change (`agent/**`,
-`shell/**`); each component's build ticket adds its own filter and job. The
-`ci` job runs `make check` and `make test` on every change and is the one
-check to require. Third-party actions are pinned to full commit SHAs.
+`.github/workflows/ci.yml` runs on every pull request. A component's check and
+tests run only in that component's job, and only when that component's files
+change (`agent/**`, `shell/**`) or the shared `Makefile` or `ci.yml` change;
+each component's build ticket adds its own filter and job. The `ci` job runs
+no commands of its own: it fails when a component job failed and passes when
+a component job was skipped. Require the `ci` and `secret-scan` checks.
+Third-party actions are pinned to full commit SHAs.
 
 ### Secret scan
 
 [gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 scans the full history
-and the tree in CI (`make secret-scan`) and fails the build on a match. The same
-scanner runs as a pre-commit hook on staged changes. To set it up once per clone:
+and the tree (`make secret-scan`) and fails the build on a match. Its workflow,
+`.github/workflows/secret-scan.yml`, runs on every pull request and on a push
+to any branch. The same scanner runs as a pre-commit hook on staged changes.
+To set it up once per clone:
 
 ```sh
 brew install gitleaks   # or a release binary from GitHub
