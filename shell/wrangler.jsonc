@@ -1,5 +1,10 @@
 // The shell Worker. Local development and tests only: no account, routes or
 // secrets here; the deploy ticket adds them.
+//
+// Variables the deploy sets (never committed): ACCESS_TEAM_DOMAIN
+// (`https://<team>.cloudflareaccess.com`) and ACCESS_AUD (the Access
+// application's AUD tag, printed by scripts/sync-access-app.mjs). Without
+// both, the Worker refuses every request (src/access.ts).
 {
   "name": "chief-of-staff-shell",
   "main": "src/index.ts",

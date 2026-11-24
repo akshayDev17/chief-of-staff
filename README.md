@@ -43,6 +43,34 @@ every component directory that exists and skip one that does not yet exist.
 `make test COMPONENTS=agent` runs one component; a named component without a
 `Makefile` is skipped.
 
+### Cloudflare Access
+
+Until the site's own sign-in exists (T45, T47), the shell Worker sits behind
+one Cloudflare Access application covering its whole address, with one rule
+that allows only the owner's email (T15, design-v3 section 10.3). Two parts:
+
+- **The check in the Worker** (`shell/src/access.ts`), run first on every
+  request, HTTP and WebSocket upgrade alike. It reads the
+  `Cf-Access-Jwt-Assertion` header only (a `CF_Authorization` cookie
+  without the header is refused), verifies the RS256 signature against the team's keys at
+  `<team domain>/cdn-cgi/access/certs` (cached; refetched on an unknown key
+  id, at most every 30 seconds), and checks `iss`, `aud`, `exp` and `nbf`.
+  Anything else, including a Worker without its configuration, gets a bare
+  403. Configuration is two Worker variables set at deploy:
+  `ACCESS_TEAM_DOMAIN` (`https://<team>.cloudflareaccess.com`) and
+  `ACCESS_AUD` (the application's AUD tag).
+- **The Access application itself**, created or updated by
+  `node shell/scripts/sync-access-app.mjs` at deploy time. It reads
+  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `ACCESS_APP_DOMAIN` (the
+  app's host name only, no scheme or path) and `OWNER_EMAIL` from the environment, makes
+  one reusable policy, `chief-of-staff: owner only`, that allows only
+  `OWNER_EMAIL`, attaches it to the self-hosted application `chief-of-staff`
+  covering `ACCESS_APP_DOMAIN`, and prints the application id and AUD tag. It
+  is idempotent: a second run updates both in place. The owner's email is
+  personal data: it lives only in the GitHub Actions secret `OWNER_EMAIL`,
+  never in the repository, and the script never prints it. No pipeline runs
+  the script yet; the deploy wires it in once T10's Cloudflare token exists.
+
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request. A component's check and
