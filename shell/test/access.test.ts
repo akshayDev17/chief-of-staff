@@ -58,9 +58,10 @@ describe.each([
     expect(response.status).toBe(200);
   });
 
-  it("lets a valid token in the CF_Authorization cookie through", async () => {
+  it("refuses a valid token sent only in the CF_Authorization cookie", async () => {
     const response = await call({ cookie: `other=1; CF_Authorization=${await signToken(key)}` });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("");
   });
 
   it("refuses a request without a token, with no body detail", async () => {

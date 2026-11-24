@@ -76,6 +76,11 @@ describe("readInputs", () => {
   it("refuses a domain with a scheme", () => {
     expect(() => readInputs({ ...env, ACCESS_APP_DOMAIN: "https://cos.example.com" })).toThrow(/without a scheme/);
   });
+
+  it("refuses a domain with a path, so the application covers the whole address", () => {
+    expect(() => readInputs({ ...env, ACCESS_APP_DOMAIN: "cos.example.com/app" })).toThrow(/host name only/);
+    expect(readInputs(env).domain).toBe("cos.example.com");
+  });
 });
 
 describe("cloudflareApi", () => {

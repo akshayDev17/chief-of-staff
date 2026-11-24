@@ -51,8 +51,8 @@ that allows only the owner's email (T15, design-v3 section 10.3). Two parts:
 
 - **The check in the Worker** (`shell/src/access.ts`), run first on every
   request, HTTP and WebSocket upgrade alike. It reads the
-  `Cf-Access-Jwt-Assertion` header (or the `CF_Authorization` cookie when the
-  header is absent), verifies the RS256 signature against the team's keys at
+  `Cf-Access-Jwt-Assertion` header only (a `CF_Authorization` cookie
+  without the header is refused), verifies the RS256 signature against the team's keys at
   `<team domain>/cdn-cgi/access/certs` (cached; refetched on an unknown key
   id, at most every 30 seconds), and checks `iss`, `aud`, `exp` and `nbf`.
   Anything else, including a Worker without its configuration, gets a bare

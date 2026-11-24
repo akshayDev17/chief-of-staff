@@ -45,14 +45,14 @@ export const appBody = (domain, policyId) => ({
 });
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const HOST = /^[a-z0-9.-]+\.[a-z]{2,}(\/[^\s]*)?$/;
+const HOST = /^[a-z0-9.-]+\.[a-z]{2,}$/;
 
 export const readInputs = (env) => {
   const missing = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "ACCESS_APP_DOMAIN", "OWNER_EMAIL"]
     .filter((name) => !env[name]?.trim());
   if (missing.length) throw new Error(`missing: ${missing.join(", ")}`);
   const domain = env.ACCESS_APP_DOMAIN.trim();
-  if (!HOST.test(domain)) throw new Error("ACCESS_APP_DOMAIN must be a host name, optionally with a path, without a scheme");
+  if (!HOST.test(domain)) throw new Error("ACCESS_APP_DOMAIN must be a host name only, without a scheme or path");
   const ownerEmail = env.OWNER_EMAIL.trim();
   // The address itself is never echoed.
   if (!EMAIL.test(ownerEmail)) throw new Error("OWNER_EMAIL is not an email address");

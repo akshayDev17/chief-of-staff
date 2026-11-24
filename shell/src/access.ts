@@ -5,9 +5,9 @@
 // Follows Cloudflare's "Validate JWTs" page for Access, read 2026-11-24
 // (page metadata dateModified 2026-11-17):
 // https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/validating-json/
-// - The token is in the `Cf-Access-Jwt-Assertion` header; the page
-//   recommends it over the `CF_Authorization` cookie, "since the cookie is
-//   not guaranteed to be passed", so the cookie is read only without it.
+// - The token is read only from the `Cf-Access-Jwt-Assertion` header; the
+//   page recommends it over the `CF_Authorization` cookie, "since the cookie
+//   is not guaranteed to be passed".
 // - Keys come from `<team domain>/cdn-cgi/access/certs` (RS256), matched by
 //   the token's `kid` in `keys`, never hard-coded: Access rotates its key
 //   every 6 weeks and keeps the previous one valid for 7 days, so an
@@ -58,16 +58,8 @@ export const readAccessConfig = (env: {
 };
 
 export const readAccessToken = (request: Request): string | null => {
-  const header = request.headers.get("cf-access-jwt-assertion");
-  if (header) return header.trim();
-  const cookies = request.headers.get("cookie") ?? "";
-  for (const part of cookies.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq > 0 && part.slice(0, eq).trim() === "CF_Authorization") {
-      return part.slice(eq + 1).trim() || null;
-    }
-  }
-  return null;
+  const header = request.headers.get("cf-access-jwt-assertion")?.trim();
+  return header || null;
 };
 
 const decodeBase64Url = (text: string): Uint8Array<ArrayBuffer> => {
