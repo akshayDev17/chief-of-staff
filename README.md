@@ -13,7 +13,8 @@ file and version, so a component's CI job sees only its own changes:
   [uv](https://docs.astral.sh/uv/) (version pinned by `required-version`);
   `uv.lock` pins every dependency to an exact version with hashes. Version in
   `agent/pyproject.toml`.
-- `shell/`: the TypeScript Cloudflare Worker, with `GET /health`. Managed with
+- `shell/`: the TypeScript Cloudflare Worker, with `GET /health` and the
+  price table (D1 migrations in `shell/migrations/`; see `shell/prices/README.md`). Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
 - `testdata/persona/`: Morgan Sample, a made-up test persona with invented

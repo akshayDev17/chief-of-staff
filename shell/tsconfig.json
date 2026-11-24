@@ -7,7 +7,8 @@
     "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "resolveJsonModule": true
   },
-  "include": ["src", "test", "vitest.config.ts"]
+  "include": ["src", "test", "prices", "vitest.config.ts"]
 }

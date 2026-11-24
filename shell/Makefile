@@ -6,7 +6,7 @@
 NPM := npx --yes npm@11.21.3
 INSTALLED := node_modules/.package-lock.json
 
-.PHONY: test check
+.PHONY: test check migrations
 
 $(INSTALLED): package.json package-lock.json
 	$(NPM) ci
@@ -15,5 +15,12 @@ $(INSTALLED): package.json package-lock.json
 check: $(INSTALLED)
 	$(NPM) run typecheck
 
-test: $(INSTALLED)
+test: $(INSTALLED) migrations
 	$(NPM) test
+
+# Apply every migration, in order, to a fresh local D1 database with
+# Cloudflare's own tool (design-v3 8.4); a failing file fails the build.
+MIGRATIONS_CHECK_DB := .wrangler/migrations-check
+migrations: $(INSTALLED)
+	rm -rf $(MIGRATIONS_CHECK_DB)
+	CI=1 npx wrangler d1 migrations apply chief-of-staff --local --persist-to $(MIGRATIONS_CHECK_DB) < /dev/null
