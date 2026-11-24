@@ -6,8 +6,8 @@
 // from the list price of the dearest model the user picked there and the
 // design's tokens per application (budgets.ts) at the volume the user plans.
 // The user accepts it with one tap or types their own; until then the card
-// says the provider's models cannot be called. Pages not built yet (Usage,
-// Model for each task) are named but not linked.
+// says the provider's models cannot be called. The Usage page, not built
+// yet, is named but not linked.
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
@@ -98,7 +98,7 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><a href="/models/setup/providers">Providers</a> · <strong>Budgets</strong> · <a href="/models/setup/add">Add a model</a> · Model for each task</p>
+<p class="small" style="margin:-4px 0 10px"><a href="/models/setup/providers">Providers</a> · <strong>Budgets</strong> · <a href="/models/setup/add">Add a model</a> · <a href="/models/setup/tasks">Model for each task</a></p>
 <h2>Budgets, one per provider</h2>
 <p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st; a task's fallback on another provider carries on within that provider's own budget.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}

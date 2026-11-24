@@ -54,3 +54,32 @@ Nothing here has called a real provider. Foundry's Chat Completions caller
 vendor's reply names (and whether Foundry's names the model or echoes the
 deployment), and Gemini's long-prompt threshold are built from the formats
 and checked live in M2 step 3 on the owner's accounts.
+
+# Model for each task (T18, design-v3 1.5 and decision 6)
+
+Models › Setup › Model for each task (`GET /models/setup/tasks`,
+`picker-page.ts`; logic in `tasks.ts`). `TASKS` is the list the app routes
+model calls by, each with the owner's tier (2026-11-24): Smallest for
+matching, extraction and LinkedIn invitations and messages; Middle for
+scoring, filling and checking forms, cover letters and free-text answers. No
+task defaults to Strongest.
+
+Only the user's own passed models (`readUserModels`) are offered:
+
+- one passed model: every task uses it, with nothing to tap;
+- more: each task is proposed the cheapest model at its tier (each model's
+  tier from its price, `lookupTier`) and a fallback at that tier on another
+  provider; where the user has none at the task's tier, the other
+  non-Strongest tier. **Accept all with one tap** saves every proposal
+  (`task_models`, `set_how` `accepted`); a task the user changed is kept;
+- any task can be changed to any of the user's models, the Strongest
+  included, the fallback on another provider or none.
+
+Until a proposal is accepted or a model chosen, a task with several models
+has none, and `callTask` refuses it (`no_model`) without sending anything.
+`callTask` sends a task's call through `callModel` with its main model and
+fallback, so a refusal (429, 408, 5xx, no reply), a failed credential or a
+spent budget at the main provider is answered by the fallback, named in its
+ledger row. Every query is scoped to the signed-in user.
+
+Checked live in M2 steps 4 and 8 on the owner's accounts after T10.
