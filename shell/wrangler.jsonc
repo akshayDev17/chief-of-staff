@@ -9,5 +9,23 @@
   "name": "chief-of-staff-shell",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
-  "workers_dev": false
+  "workers_dev": false,
+  // The app's one D1 database. The id is a placeholder until T12 creates the
+  // database on the owner's account; local runs and tests never use it.
+  // Migrations are numbered .sql files in migrations/ (design-v3 8.4).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "chief-of-staff",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // 06:00 UTC daily: refresh the price table from the vendors' price sources.
+  // 07:00 UTC Mondays: remind the maintainers to re-read the listing prices.
+  "triggers": { "crons": ["0 6 * * *", "0 7 * * 1"] },
+  // A refresh reads every region's AWS price-list files; give it room.
+  "limits": { "cpu_ms": 300000 }
+  // GOOGLE_BILLING_API_KEY arrives as a Worker secret with T10; it is never
+  // written here.
 }

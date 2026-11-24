@@ -1,0 +1,59 @@
+{
+  "_about": "Shaped from Google's documented services.skus.list response format (https://docs.cloud.google.com/billing/docs/reference/rest/v1/services.skus/list, read 2026-11-24) until the maintainers' API key exists (T10). Prices follow the price report of 2026-11-24; the SKU ids and descriptions are illustrative, not read from the API.",
+  "skus": [
+    {
+      "name": "services/C7E2-9256-1C43/skus/0000-0000-0001",
+      "skuId": "0000-0000-0001",
+      "description": "Claude Sonnet 5.5 Input Tokens",
+      "category": { "serviceDisplayName": "Vertex AI", "resourceFamily": "ApplicationServices", "resourceGroup": "Anthropic", "usageType": "OnDemand" },
+      "serviceRegions": ["global"],
+      "pricingInfo": [{ "pricingExpression": { "usageUnit": "count", "tieredRates": [{ "startUsageAmount": 0, "unitPrice": { "currencyCode": "USD", "units": "0", "nanos": 2000 } }] } }],
+      "serviceProviderName": "Anthropic"
+    },
+    {
+      "name": "services/C7E2-9256-1C43/skus/0000-0000-0002",
+      "skuId": "0000-0000-0002",
+      "description": "Claude Sonnet 5.5 Output Tokens",
+      "category": { "serviceDisplayName": "Vertex AI", "resourceFamily": "ApplicationServices", "resourceGroup": "Anthropic", "usageType": "OnDemand" },
+      "serviceRegions": ["global"],
+      "pricingInfo": [{ "pricingExpression": { "usageUnit": "count", "tieredRates": [{ "startUsageAmount": 0, "unitPrice": { "currencyCode": "USD", "units": "0", "nanos": 10000 } }] } }],
+      "serviceProviderName": "Anthropic"
+    },
+    {
+      "name": "services/C7E2-9256-1C43/skus/0000-0000-0003",
+      "skuId": "0000-0000-0003",
+      "description": "Claude Sonnet 5.5 Input Tokens",
+      "category": { "serviceDisplayName": "Vertex AI", "resourceFamily": "ApplicationServices", "resourceGroup": "Anthropic", "usageType": "OnDemand" },
+      "serviceRegions": ["us-east5", "europe-west1"],
+      "pricingInfo": [{ "pricingExpression": { "usageUnit": "count", "tieredRates": [{ "startUsageAmount": 0, "unitPrice": { "currencyCode": "USD", "units": "0", "nanos": 2200 } }] } }],
+      "serviceProviderName": "Anthropic"
+    },
+    {
+      "name": "services/C7E2-9256-1C43/skus/0000-0000-0004",
+      "skuId": "0000-0000-0004",
+      "description": "Gemini 3.8 Flash Text Input - Predictions",
+      "category": { "serviceDisplayName": "Vertex AI", "resourceFamily": "ApplicationServices", "resourceGroup": "Gemini", "usageType": "OnDemand" },
+      "serviceRegions": ["global"],
+      "pricingInfo": [{ "pricingExpression": { "usageUnit": "M{count}", "tieredRates": [{ "startUsageAmount": 0, "unitPrice": { "currencyCode": "USD", "units": "1", "nanos": 500000000 } }] } }],
+      "serviceProviderName": "Google"
+    },
+    {
+      "name": "services/C7E2-9256-1C43/skus/0000-0000-0005",
+      "skuId": "0000-0000-0005",
+      "description": "Gemini 3.8 Flash Batch Text Output - Predictions",
+      "category": { "serviceDisplayName": "Vertex AI", "resourceFamily": "ApplicationServices", "resourceGroup": "Gemini", "usageType": "OnDemand" },
+      "serviceRegions": ["global"],
+      "pricingInfo": [{ "pricingExpression": { "usageUnit": "M{count}", "tieredRates": [{ "startUsageAmount": 0, "unitPrice": { "currencyCode": "USD", "units": "3", "nanos": 750000000 } }] } }],
+      "serviceProviderName": "Google"
+    },
+    {
+      "name": "services/C7E2-9256-1C43/skus/0000-0000-0006",
+      "skuId": "0000-0000-0006",
+      "description": "Gemini 3.8 Flash Image Input - Predictions",
+      "category": { "serviceDisplayName": "Vertex AI", "resourceFamily": "ApplicationServices", "resourceGroup": "Gemini", "usageType": "OnDemand" },
+      "serviceRegions": ["global"],
+      "pricingInfo": [{ "pricingExpression": { "usageUnit": "M{count}", "tieredRates": [{ "startUsageAmount": 0, "unitPrice": { "currencyCode": "USD", "units": "1", "nanos": 0 } }] } }],
+      "serviceProviderName": "Google"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
@@ -14,7 +15,7 @@ afterEach(() => vi.restoreAllMocks());
 const get = async (path: string): Promise<Response> => {
   serveCerts(() => [key]);
   const headers = { "cf-access-jwt-assertion": await signToken(key) };
-  return worker.fetch(new Request(`https://shell.test${path}`, { headers }), ENV);
+  return worker.fetch(new Request(`https://shell.test${path}`, { headers }), { ...ENV, DB: env.DB });
 };
 
 describe("GET /health", () => {
