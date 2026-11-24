@@ -12,8 +12,7 @@
 // ([Open that page] [Try again], and [Ask Admin for help] on friend screens
 // only). There is no table of failure messages: the plug-in's mapping picks
 // the wording. The reply is shown only to the user who made the call.
-// Pages not built yet (Usage, Model for each task) are named
-// but not linked.
+// The Usage page, not built yet, is named but not linked.
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
@@ -229,7 +228,7 @@ ${refresh}
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><strong>Providers</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="/models/setup/add">Add a model</a> · Model for each task</p>
+<p class="small" style="margin:-4px 0 10px"><strong>Providers</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="/models/setup/add">Add a model</a> · <a href="/models/setup/tasks">Model for each task</a></p>
 <h2>Model providers</h2>
 <p>Foundry, Bedrock and Vertex AI are the only providers. You never give the app a key: you let it call your models from inside your own account, and you can take that back there at any time.</p>
 ${intro}
