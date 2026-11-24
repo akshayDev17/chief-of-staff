@@ -37,7 +37,7 @@ export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: 
   }
   const disagreements = [...disagreeing.values()].map(
     ({ row, prices }) =>
-      `${row.provider} ${row.model} ${row.region} ${row.tokenKind}: ${[...prices].sort((a, b) => a - b).join(" vs ")}`,
+      `${row.provider} ${row.model} ${row.deployment} ${row.region} ${row.tokenKind}${row.batch ? " batch" : ""}${row.longPrompt ? " long prompt" : ""}: ${[...prices].sort((a, b) => a - b).join(" vs ")}`,
   );
   return { rows: [...byKey.values()], disagreements };
 }
