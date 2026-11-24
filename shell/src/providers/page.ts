@@ -108,9 +108,11 @@ ${replyLine(result, plugin)}
   const waiting = result.verdict === "switching_on" || result.reason === "budget_spent" || result.reason === "no_price";
   const next = check?.nextTryAt ? `Next try at ${hhmm(check.nextTryAt)} · you can move on to the next item.` : "";
   if (waiting) {
+    // A spent budget can be raised on the Budgets page; Try again then calls at once.
+    const retry = result.reason === "budget_spent" ? `\n<div class="row">${postButton(action(provider, "retry"), "Try again")}</div>` : "";
     return `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>${esc(verdictText(result, plugin))}</strong></p>
 ${replyLine(result, plugin)}
-<p class="tc-fix small">${next}</p></div>`;
+<p class="tc-fix small">${next}</p>${retry}</div>`;
   }
   const polling = check?.state === "checking" && check.nextTryAt ? ` The app checks again every minute for an hour after Connect; next try at ${hhmm(check.nextTryAt)}.` : "";
   const links = (result.links ?? []).map((l) => linkButton(l.href, l.label)).join("");

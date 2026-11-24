@@ -353,6 +353,14 @@ export async function finishConsent(
   return { check: await runCheck(db, plugins, input.userId, input.provider, input.now) };
 }
 
+// Saving a budget: a test call waiting for this provider's spent budget
+// runs again at once, so a raised budget lets it through without waiting for
+// the 1st (one still spent waits as before, with no call made).
+export async function rerunBudgetWait(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date): Promise<void> {
+  const check = await readCheck(db, userId, provider);
+  if (check?.result?.reason === "budget_spent") await runCheck(db, plugins, userId, provider, now);
+}
+
 // The user's own choice of region for the test call (and the picker's default).
 export async function chooseRegion(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, region: string, now: Date): Promise<string | undefined> {
   const plugin = plugins[provider];

@@ -8,6 +8,7 @@ import { formatCost, handleProviders, PROVIDERS_PATH, type Viewer } from "../src
 import { vertexPlugin } from "../src/providers/vertex";
 import { writeSnapshot } from "../src/prices/store";
 import { setBudget } from "../src/proxy/budgets";
+import { handleBudgets } from "../src/proxy/budgets-page";
 import { readConnection } from "../src/proxy/connections";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
 import { APP_ORIGIN, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
@@ -116,6 +117,38 @@ describe("Models › Setup › Providers", () => {
     expect(page).toContain("<strong>AWS is still switching this on; we&#39;ll keep retrying and tick this item by ourselves.</strong>");
     expect(page).toContain("Bedrock replied: 403 · AccessDeniedException · “Marketplace Agreement Pending”");
     expect(page).toContain("Next try at 10:15 UTC · you can move on to the next item.");
+  });
+
+  it("re-runs a test call waiting for a spent budget when the budget is raised, and offers Try again meanwhile", async () => {
+    let calls = 0;
+    // 300,000 input tokens at $0.10 per 1M: each test call costs $0.03.
+    const plugins = world(() => {
+      calls += 1;
+      return Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 300_000, outputTokens: 0 } });
+    });
+    const saveBudget = (amount: string) =>
+      handleBudgets(
+        new Request(`${APP_ORIGIN}/models/setup/budgets`, { method: "POST", body: new URLSearchParams({ provider: "bedrock", amount, per_day: "5" }), headers: { origin: APP_ORIGIN } }),
+        env.DB, plugins, userId, NOW,
+      );
+    await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
+    expect(calls).toBe(1);
+    // A $0.01 budget the connect's own test call already spent: Try again waits, calling nothing.
+    expect((await saveBudget("0.01")).status).toBe(303);
+    await post(plugins, "/bedrock/retry");
+    expect(calls).toBe(1);
+    const waiting = await text(await open(plugins, "?provider=bedrock"));
+    expect(waiting).toContain("This month&#39;s budget for Amazon Bedrock is spent, so the test call waits until the 1st.");
+    expect(waiting).toContain('<form method="post" action="/models/setup/providers/bedrock/retry"><button type="submit" class="btn small">Try again</button></form>');
+    // Raised but still spent: the test call keeps waiting and nothing reaches the provider.
+    expect((await saveBudget("0.02")).status).toBe(303);
+    expect(calls).toBe(1);
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ result: { reason: "budget_spent" }, nextTryAt: "2026-12-01T00:00:00.000Z" });
+    // Raised past this month's spend: the test call runs at once and passes.
+    expect((await saveBudget("5")).status).toBe(303);
+    expect(calls).toBe(2);
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", result: { verdict: "passed" } });
+    expect(await text(await open(plugins, "?provider=bedrock"))).toContain('<p class="tc-verdict"><strong>Test call passed</strong> (ran by itself)</p>');
   });
 
   it("escapes the provider's own words", async () => {

@@ -11,6 +11,7 @@
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
+import { rerunBudgetWait } from "../providers/check";
 import {
   DEFAULT_APPLICATIONS_A_DAY,
   parseBudget,
@@ -22,6 +23,7 @@ import {
   type Suggestion,
 } from "./budgets";
 import { connectedProviders } from "./connections";
+import type { PluginRegistry } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
 
@@ -146,9 +148,10 @@ async function pageInput(db: D1Database, userId: string, applicationsADay: numbe
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
 // GET shows the page; POST sets one provider's budget from the typed amount
-// or, when none is typed, the accepted suggestion, then shows the page again. Scoped to the
-// signed-in user throughout.
-export async function handleBudgets(request: Request, db: D1Database, userId: string, now: Date): Promise<Response> {
+// or, when none is typed, the accepted suggestion, re-runs that provider's
+// test call if it was waiting for a spent budget, then shows the page again.
+// Scoped to the signed-in user throughout.
+export async function handleBudgets(request: Request, db: D1Database, plugins: PluginRegistry, userId: string, now: Date): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET") {
     return html(renderBudgetsPage(await pageInput(db, userId, parseApplicationsADay(url.searchParams.get("per_day")), now)));
@@ -174,5 +177,6 @@ export async function handleBudgets(request: Request, db: D1Database, userId: st
     return refuse("Type a budget in dollars, more than $0, for example 30.");
   }
   await setBudget(db, userId, provider, amount, typed ? "typed" : "accepted", now);
+  await rerunBudgetWait(db, plugins, userId, provider, now);
   return Response.redirect(`${url.origin}${BUDGETS_PATH}?per_day=${applicationsADay}`, 303);
 }
