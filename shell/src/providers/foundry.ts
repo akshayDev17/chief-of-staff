@@ -16,7 +16,19 @@
 // refresh token.
 //
 // Caller: Claude at `<endpoint>/anthropic/v1/messages`, the deployment name as
-// `model`, `Authorization: Bearer`, `anthropic-version: 2023-06-01`.
+// `model`, `Authorization: Bearer`, `anthropic-version: 2023-06-01`. Every
+// other chat model Foundry sells (GPT, gpt-oss, DeepSeek, Grok, Llama,
+// Mistral and the rest, T17) at `<endpoint>/openai/v1/chat/completions`, the
+// deployment name as `model`, in OpenAI's Chat Completions format: usage
+// `prompt_tokens` with the cached part in `prompt_tokens_details.cached_tokens`,
+// `completion_tokens` with any reasoning tokens in it, and
+// `max_completion_tokens` (reasoning models refuse `max_tokens`). This
+// caller was built from that format, not yet from a Foundry page read for
+// this ticket: its address and fields are checked live in M2 step 3 (T10).
+//
+// The deployment name is the user's: the guide asks them to keep the
+// suggested one, the model ID, which Add a model fills in; a user who named
+// the deployment differently changes it there (T17).
 //
 // Pages read 2026-11-25 (ms.date in brackets):
 // - Client credentials [2026-01-30]: POST /{tenant}/oauth2/v2.0/token;
@@ -55,7 +67,8 @@
 import { AppNotConfigured, mintIdToken, readIssuer, signJwt } from "../issuer";
 import type { ConnectMethod, Failure, Link, ProviderPlugin } from "../proxy/plugin";
 import { ConnectProblem, ProviderRefusal } from "../proxy/plugin";
-import { errorFromBody, messagesText, readBody, TEST_MAX_TOKENS, TEST_PROMPT, usageFromMessages } from "./anthropic";
+import type { Usage } from "../proxy/plugin";
+import { errorFromBody, messagesModel, messagesText, readBody, TEST_MAX_TOKENS, TEST_PROMPT, usageFromMessages } from "./anthropic";
 
 export interface FoundryEnv {
   APP_ORIGIN?: string;
@@ -86,6 +99,37 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The deployment name the guide asks the user to keep: the model's ID, from
 // its catalog name ("Claude Haiku 5.5" -> "claude-haiku-5-5").
 export const deploymentName = (model: string): string => model.trim().toLowerCase().replace(/[\s.]+/g, "-");
+
+// Claude is called in Anthropic's Messages format; every other model in
+// Chat Completions.
+export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim());
+
+// The Claude models Foundry sells (through Azure Marketplace, priced by the
+// maintainers' reading of each listing, shell/prices/maintainer-read.json):
+// offered on Add a model, as "no price yet" until that reading is recorded.
+export const FOUNDRY_CLAUDE_MODELS: readonly string[] = [
+  "Claude Haiku 5.5", "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude Sonnet 5", "Claude Opus 5", "Claude Fable 5.1", "Claude Fable 5",
+  "Claude Opus 4.8", "Claude Opus 4.7", "Claude Opus 4.6", "Claude Sonnet 4.6", "Claude Haiku 4.5",
+];
+
+const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
+
+// Usage from a Chat Completions reply: `prompt_tokens` includes the cached
+// part, which the proxy counts on its own. Foundry lists no long-prompt rate
+// for these models.
+export function usageFromChatCompletions(body: unknown): Usage | undefined {
+  const u = (body as { usage?: Record<string, unknown> } | null)?.usage;
+  if (!u || typeof u !== "object") return undefined;
+  const prompt = count(u.prompt_tokens);
+  const cachedInput = Math.min(prompt, count((u.prompt_tokens_details as Record<string, unknown> | undefined)?.cached_tokens));
+  return { input: prompt - cachedInput, cachedInput, cacheWrite: 0, cacheWrite1h: 0, output: count(u.completion_tokens), longPrompt: false };
+}
+
+export function chatCompletionsText(body: unknown): string | undefined {
+  const choices = (body as { choices?: Array<{ message?: { content?: unknown } }> } | null)?.choices;
+  const content = Array.isArray(choices) ? choices[0]?.message?.content : undefined;
+  return typeof content === "string" && content.trim() ? content.trim() : undefined;
+}
 
 export function adminConsentLink(input: { clientId: string; appOrigin: string; state: string }): string {
   // `organizations`, never `common`: admin consent happens in a tenant.
@@ -174,11 +218,19 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       return { tenantId: tenantId.toLowerCase(), endpoint: pending.endpoint! };
     },
     testModel: "Claude Haiku 5.5",
+    knownModels: FOUNDRY_CLAUDE_MODELS,
+    // Foundry calls any deployment by its name, Claude or not.
+    canCall: () => true,
+    deploymentName,
     locations: () => ["global", "data-zone"],
     locationLabel: (location) => (location === "global" ? "Global Standard" : location === "data-zone" ? "Data Zone Standard" : location),
     modelId: (model) => deploymentName(model),
-    testRequest: (model) => ({ model: deploymentName(model), max_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] }),
-    replyText: messagesText,
+    testRequest: (model) =>
+      isClaude(model)
+        ? { model: deploymentName(model), max_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] }
+        : { model: deploymentName(model), max_completion_tokens: TEST_MAX_TOKENS, messages: [{ role: "user", content: TEST_PROMPT }] },
+    replyText: (body) => messagesText(body) ?? chatCompletionsText(body),
+    replyModel: messagesModel,
     classify(f: Failure) {
       const said = `${f.errorName} ${f.message}`;
       if (f.step === "credential") {
@@ -215,7 +267,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
         return { reason: "not_set_up", fix: "Give “Chief of staff” its role on your Foundry resource, then try again.", links: [PORTAL_RESOURCES] };
       }
       if (f.status === 404) {
-        return { reason: "no_such_model", fix: "Deploy the model from the catalog and keep its suggested deployment name, then try again.", links: [] };
+        return { reason: "no_such_model", fix: "Deploy the model from the catalog and keep the name Foundry suggests for it, then try again.", links: [] };
       }
       if (f.status === 429 || f.status === 503) return { reason: "busy", fix: "Nothing to set up: try again in a minute.", links: [] };
       return { reason: "refused", fix: "Foundry's own words above say why.", links: [] };
@@ -257,19 +309,20 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       if (!response.ok || typeof token !== "string") throw entraRefusal(response.status, body);
       return { accessToken: token, expiresIn: (body as { expires_in?: number }).expires_in };
     },
-    async call({ credential, connection, model, request }) {
-      const response = await fetcher(`${connection.endpoint}/anthropic/v1/messages`, {
+    async call({ credential, connection, model, deployment, request }) {
+      const name = deployment ?? deploymentName(model);
+      const claude = isClaude(model);
+      const headers: Record<string, string> = { authorization: `Bearer ${(credential as { accessToken: string }).accessToken}`, "content-type": "application/json" };
+      if (claude) headers["anthropic-version"] = ANTHROPIC_VERSION;
+      const response = await fetcher(`${connection.endpoint}${claude ? "/anthropic/v1/messages" : "/openai/v1/chat/completions"}`, {
         method: "POST",
-        headers: {
-          authorization: `Bearer ${(credential as { accessToken: string }).accessToken}`,
-          "anthropic-version": ANTHROPIC_VERSION,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ ...(request as object), model: deploymentName(model) }),
+        headers,
+        body: JSON.stringify({ ...(request as object), model: name }),
       });
       const reply = await readBody(response);
       if (!response.ok) return { status: response.status, body: reply, error: errorFromBody(response.status, reply) };
-      return { status: response.status, body: reply, usage: usageFromMessages(reply, deploymentName(model)) };
+      // The long-prompt rule is keyed by the model's own ID, not the user's name for it.
+      return { status: response.status, body: reply, usage: claude ? usageFromMessages(reply, deploymentName(model)) : usageFromChatCompletions(reply) };
     },
   };
 }

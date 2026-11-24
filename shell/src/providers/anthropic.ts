@@ -60,6 +60,12 @@ export function messagesText(body: unknown): string | undefined {
   return text.trim() || undefined;
 }
 
+// The model a Messages reply says answered (its `model` field).
+export function messagesModel(body: unknown): string | undefined {
+  const model = (body as { model?: unknown } | null)?.model;
+  return typeof model === "string" && model ? model : undefined;
+}
+
 // The provider's own error name and message from a refusal's body: Anthropic's
 // `{"type":"error","error":{"type","message"}}`, Azure's and Google's
 // `{"error":{"code","message","status"}}` (Google may wrap it in an array).

@@ -164,6 +164,13 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     },
     setupLink: (connection) => setupLink(connection.externalId!),
     testModel: "Claude Haiku 5.5",
+    knownModels: Object.keys(BEDROCK_MODEL_IDS),
+    // Converse speaks every model family, but the call needs Bedrock's own ID
+    // for the model, read from its model card: a model the app has no ID for
+    // is not offered until its ID is added above.
+    canCall: (model) => model in BEDROCK_MODEL_IDS,
+    // Converse's reply does not name the model.
+    replyModel: () => undefined,
     // The 5.5 models have no in-Region ID ("N/A" on their cards): Global, or
     // the cross-Region profile of the app's own geography.
     locations: () => ["global", "cross-region"],

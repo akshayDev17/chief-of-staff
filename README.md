@@ -18,7 +18,8 @@ file and version, so a component's CI job sees only its own changes:
   usage ledger, per-provider budgets and per-user vault (see
   `shell/src/proxy/README.md`), and "Connect <Provider>" for Bedrock, Foundry
   and Vertex AI with the app's own OpenID Connect issuer (see
-  `shell/src/providers/README.md`). D1 migrations are in `shell/migrations/`. Managed with
+  `shell/src/providers/README.md`), and Add a model (see
+  `shell/src/models/README.md`). D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
 - `shell/bedrock-template/`: the CloudFormation template a user's "Connect

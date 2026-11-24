@@ -8,6 +8,7 @@ import { handleIssuerRequest, PUBLIC_ISSUER_PATHS, readAppOrigin } from "./issue
 import { runDueChecks } from "./providers/check";
 import { providerPlugins, type ProvidersEnv } from "./providers/index";
 import { handleProviders, isProvidersPath } from "./providers/page";
+import { handleAddModel, isAddModelPath } from "./models/page";
 import { BUDGETS_PATH, handleBudgets } from "./proxy/budgets-page";
 import { userFromAccess } from "./users";
 
@@ -72,6 +73,14 @@ export default {
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
       return handleProviders(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", appOrigin: readAppOrigin(env), now });
+    }
+    // Models › Setup › Add a model, for the signed-in user (T17); every
+    // viewer is the owner until invitations bring friends (T45).
+    if (isAddModelPath(url.pathname)) {
+      const now = new Date();
+      const user = await userFromAccess(env.DB, claims, now);
+      if (!user) return accessDenied();
+      return handleAddModel(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", now });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === "/admin/price-table" && request.method === "GET") {

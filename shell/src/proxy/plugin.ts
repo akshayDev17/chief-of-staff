@@ -157,6 +157,20 @@ export interface ConnectMethod {
   // The test call's model when the user has picked none at this provider,
   // as the price table names it.
   testModel: string;
+  // The models the plug-in knows by the price table's names, offered on Add
+  // a model (T17) even while the table has no price for them ("no price yet").
+  knownModels: readonly string[];
+  // Whether the plug-in can call the model: it knows the provider's own ID
+  // for it and speaks its format. Add a model offers no other.
+  canCall(model: string): boolean;
+  // Foundry only: the deployment name the guide asks the user to keep, the
+  // model's ID, filled in on Add a model and changed by a user who named the
+  // deployment differently. Absent where the provider names the model itself.
+  deploymentName?(model: string): string;
+  // The model a reply says answered, in the provider's own words, where the
+  // reply names one (Messages `model`, Chat Completions `model`, Gemini
+  // `modelVersion`); undefined where it does not (Bedrock's Converse).
+  replyModel(body: unknown): string | undefined;
   // The locations the plug-in can call `model` at, the app's default first.
   locations(model: string): string[];
   locationLabel(location: string): string;
@@ -184,7 +198,8 @@ export interface ProviderPlugin {
   // hour). It lives only in memory for one call: never stored, never logged.
   mintCredential(connection: ConnectionFields): Promise<unknown>;
   // The provider's own request, sent straight to the user's own provider.
-  call(input: { credential: unknown; connection: ConnectionFields; model: string; location: string; request: ModelRequest }): Promise<ProviderReply>;
+  // `deployment` is Foundry's deployment name for the model, when the user set one.
+  call(input: { credential: unknown; connection: ConnectionFields; model: string; location: string; deployment?: string; request: ModelRequest }): Promise<ProviderReply>;
   // The price source the proxy prices this provider's calls from (T11).
   priceSource: readonly SourceId[];
   connect: ConnectMethod;

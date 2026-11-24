@@ -10,7 +10,7 @@ import { userFromAccess } from "../src/users";
 
 export interface TestPlugin extends ProviderPlugin {
   replies: Array<ProviderReply | Error>;
-  calls: Array<{ credential: unknown; model: string; location: string; request: unknown }>;
+  calls: Array<{ credential: unknown; model: string; location: string; deployment?: string; request: unknown }>;
   minted: string[];
 }
 
@@ -28,6 +28,12 @@ export const testPlugin = (provider: Provider, opts: { failMint?: boolean; refus
       fields: [{ name: "account", label: "Account", placeholder: "123456789012", pattern: "\\d{12}", problem: "12 digits." }],
       start: (typed) => ({ kind: "connection", fields: { account: typed.account!, region: "global" } }),
       testModel: provider === "vertex" ? "test-gemini" : "test-sonnet",
+      knownModels: [],
+      canCall: () => true,
+      replyModel: (body) => {
+        const model = (body as { model?: unknown } | null)?.model;
+        return typeof model === "string" ? model : undefined;
+      },
       locations: () => ["global"],
       locationLabel: (l) => l,
       modelId: (m) => m,
@@ -46,7 +52,7 @@ export const testPlugin = (provider: Provider, opts: { failMint?: boolean; refus
       return credential;
     },
     async call(input) {
-      plugin.calls.push({ credential: input.credential, model: input.model, location: input.location, request: input.request });
+      plugin.calls.push({ credential: input.credential, model: input.model, location: input.location, deployment: input.deployment, request: input.request });
       const next = plugin.replies.shift() ?? ok({ input: 1000, output: 100 });
       if (next instanceof Error) throw next;
       return next;
