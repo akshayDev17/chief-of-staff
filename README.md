@@ -2,6 +2,8 @@
 
 An AI agent that runs a job search end to end: finds roles, fills applications and follows up.
 
+The design is [docs/design-v3.md](docs/design-v3.md) and its decision records are in [docs/adr/](docs/adr/). Licensed under the [MIT licence](LICENSE).
+
 ## Layout
 
 One directory per release unit (design-v3 ADR-017), each with its own lock
