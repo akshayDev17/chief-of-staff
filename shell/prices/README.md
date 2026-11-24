@@ -8,7 +8,7 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
   with long-prompt and batch flags, in USD per million tokens, with its source
   and date read.
 - **Refresh.** Cron `0 6 * * *` reads every source (`src/prices/refresh.ts`)
-  and stores a dated snapshot beside the last 14. A failed source keeps its
+  and stores a dated snapshot; the newest 14 are kept. A failed source keeps its
   last good rows with their own date read, marked stale, and raises a
   refresh-failed alert. A source that answers stores what the vendor lists,
   however few rows: a model no longer listed has no price yet, and the page
