@@ -56,8 +56,10 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
 
 Rows read on demand at the standard rate are kept. Flex, priority, ultrafast,
 provisioned, reserved, fine-tuning, image, audio, realtime and embedding meters
-are left out. An Azure meter whose name does not give a model, a token kind and
-a deployment type is counted as "not mapped" on the page and left out. On
+are left out, as are the AWS Marketplace "100K" editions of Claude 2.0 and
+Claude Instant (`src/prices/aws.ts`), which share Bedrock's model names but
+price a different product. An Azure meter whose name does not give a model, a
+token kind and a deployment type is counted as "not mapped" on the page and left out. On
 2026-11-24 that was 810 of the Retail API's token meters. Most are older
 regional meters with no deployment type (Phi, for example), plus the unnamed
 "Model 6" and "Model 7" Kimi meters.
@@ -66,7 +68,7 @@ regional meters with no deployment type (Phi, for example), plus the unnamed
 
 | Family | Foundry (Retail API) | Bedrock (price-list files) | Vertex AI (Catalog API) |
 | --- | --- | --- | --- |
-| Claude | Not listed. Read by the maintainers from Marketplace listings (11 models) | 32 models, Claude 2.0 to Opus 5.5 | Waits on T10's key; Google's public SKU list shows Claude |
+| Claude | Not listed. Read by the maintainers from Marketplace listings (12 models) | 32 models, Claude 2.0 to Opus 5.5 | Waits on T10's key; Google's public SKU list shows Claude |
 | OpenAI GPT (incl. codex, o-series) | 76 models | 14 models (GPT-5.4 to GPT-6.2) | Waits on T10. GPT-6 is Private Preview, and Google's partner pricing page lists only gpt-oss |
 | gpt-oss | 2 | 4 | Waits on T10 |
 | Gemini | Not offered | Not offered (Google models there are Gemma) | Waits on T10 |
@@ -95,6 +97,6 @@ entry needs `listing` (the listing address) and `date_read`, and
 entry without a region, with a deployment other than `global`, `data-zone` or
 `regional`, or with a meter whose `long_prompt` is not `true` or `false`. The
 tests run it, so
-CI does too. The prices were read on 2026-11-24 through the Marketplace catalog
-API that backs each listing (`read_via`). Cron `0 7 * * 1` raises the weekly
-reminder to read every listing again.
+CI does too. The prices were read on 2026-11-24 (Claude Haiku 4.5 on 2026-11-25)
+through the Marketplace catalog API that backs each listing (`read_via`). Cron
+`0 7 * * 1` raises the weekly reminder to read every listing again.

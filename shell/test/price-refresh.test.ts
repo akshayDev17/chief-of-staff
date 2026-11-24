@@ -28,6 +28,8 @@ describe("the daily refresh", () => {
       .toMatchObject({ usdPerMTok: 11 }); // the region's own (higher) price wins over its global one
     expect(await lookupPrice(env.DB, { provider: "foundry", model: "Claude Haiku 5.5", location: "global", tokenKind: "input", longPrompt: true }))
       .toEqual({ usdPerMTok: 0.5, source: "maintainer-read", dateRead: "2026-11-24", stale: false });
+    expect(await lookupPrice(env.DB, { provider: "foundry", model: "Claude Haiku 4.5", location: "global", tokenKind: "output" }))
+      .toEqual({ usdPerMTok: 5, source: "maintainer-read", dateRead: "2026-11-25", stale: false });
     expect(await lookupPrice(env.DB, { provider: "foundry", model: "GPT-6-luna", location: "data-zone", tokenKind: "input" }))
       .toMatchObject({ usdPerMTok: 0.11, source: "azure-retail" });
   });

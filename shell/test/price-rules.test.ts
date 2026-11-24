@@ -103,6 +103,26 @@ describe("two sources disagreeing", () => {
     expect(disagreements).toHaveLength(1);
   });
 
+  it("names each disagreeing row once, however many listings give it", () => {
+    const { rows, disagreements } = mergeRows([row(0.8, "aws-price-list"), row(3.26, "aws-price-list"), row(0.8, "aws-price-list")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ usdPerMTok: 3.26, disagreement: true });
+    expect(disagreements).toEqual(["vertex Gemini 3.8 Flash global global input: 0.8 vs 3.26"]);
+  });
+
+  it("tells apart disagreeing rows that differ only in deployment, batch or long prompt", () => {
+    const pair = (overrides: Partial<PriceRow>) => [{ ...row(1, "aws-price-list"), ...overrides }, { ...row(2, "aws-price-list"), ...overrides }];
+    const { disagreements } = mergeRows([
+      ...pair({}), ...pair({ deployment: "regional" }), ...pair({ batch: true }), ...pair({ longPrompt: true }),
+    ]);
+    expect(disagreements).toEqual([
+      "vertex Gemini 3.8 Flash global global input: 1 vs 2",
+      "vertex Gemini 3.8 Flash regional global input: 1 vs 2",
+      "vertex Gemini 3.8 Flash global global input batch: 1 vs 2",
+      "vertex Gemini 3.8 Flash global global input long prompt: 1 vs 2",
+    ]);
+  });
+
   it("leaves agreeing rows unflagged", () => {
     const { rows, disagreements } = mergeRows([row(1.5, "maintainer-read"), row(1.5, "google-catalog")]);
     expect(rows[0]?.disagreement).toBe(false);

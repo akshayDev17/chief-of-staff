@@ -13,7 +13,7 @@ import type { Deployment, PriceRow, SourceRead, TokenKind } from "./types";
 
 interface AwsProduct {
   sku: string;
-  attributes: { model?: string | null; inferenceType?: string | null; usagetype?: string; regionCode?: string };
+  attributes: { model?: string | null; inferenceType?: string | null; usagetype?: string; regionCode?: string; servicename?: string };
 }
 
 interface AwsPriceDimension {
@@ -30,6 +30,13 @@ export interface AwsOfferFile {
 // Not chat inference at an on-demand list price.
 const SKIP = /image|video|audio|embed|provisioned|modelunits|model_units|ultrafast|flex|priority|latency|reserved|tpm|custom|speech|training/i;
 const NOT_CHAT_MODEL = /embed|rerank|marengo|canvas|reel|sonic|stability|sd3|titan|pegasus|^si-/i;
+// The legacy AWS Marketplace "100K" editions of Claude 2.0 and Claude Instant
+// ("Claude (100K) (Amazon Bedrock Edition)", "Claude Instant (100K) (Amazon
+// Bedrock Edition)") share the on-demand usagetype and model name of the
+// Bedrock listings but price a different Marketplace product ($22.04 / $65.36
+// and $3.26 / $11.02 per 1M tokens in us-east-1 and us-west-2, against Bedrock's
+// $8 / $24 and $0.80 / $2.40). They are not Bedrock on-demand prices.
+const NOT_BEDROCK_EDITION = /\(100K\)/i;
 
 export interface ParsedUsage {
   tokenKind: TokenKind;
@@ -61,6 +68,7 @@ export function rowsFromAwsOffer(offer: AwsOfferFile, dateRead: string): { rows:
     // Some products (xai.grok-4.3, xai.grok-4.6) leave inferenceType empty;
     // their usagetype still names the tokens.
     if (!model || !usagetype || !regionCode || !/token/i.test(`${inferenceType ?? ""} ${usagetype}`)) continue;
+    if (NOT_BEDROCK_EDITION.test(product.attributes.servicename ?? "")) continue;
     if (NOT_CHAT_MODEL.test(model) || SKIP.test(usagetype) || SKIP.test(inferenceType ?? "")) continue;
     const parsed = parseAwsUsageType(usagetype);
     const dimensions = Object.values(offer.terms.OnDemand?.[product.sku] ?? {}).flatMap((t) => Object.values(t.priceDimensions));

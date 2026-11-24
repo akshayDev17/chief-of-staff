@@ -18,7 +18,8 @@ import { rowKey, type PriceRow, type SourceId, type SourceRead, type SourceResul
 
 export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: string[] } {
   const byKey = new Map<string, PriceRow>();
-  const disagreements = new Set<string>();
+  // Every price seen for each disagreeing row, so the alert names each row once.
+  const disagreeing = new Map<string, { row: PriceRow; prices: Set<number> }>();
   for (const row of rows) {
     const key = rowKey(row);
     const seen = byKey.get(key);
@@ -27,12 +28,18 @@ export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: 
       continue;
     }
     if (seen.usdPerMTok !== row.usdPerMTok) {
-      disagreements.add(`${row.provider} ${row.model} ${row.region} ${row.tokenKind}: ${seen.usdPerMTok} vs ${row.usdPerMTok}`);
+      const entry = disagreeing.get(key) ?? { row, prices: new Set([seen.usdPerMTok]) };
+      entry.prices.add(row.usdPerMTok);
+      disagreeing.set(key, entry);
       const higher = row.usdPerMTok > seen.usdPerMTok ? row : seen;
       byKey.set(key, { ...higher, disagreement: true });
     }
   }
-  return { rows: [...byKey.values()], disagreements: [...disagreements] };
+  const disagreements = [...disagreeing.values()].map(
+    ({ row, prices }) =>
+      `${row.provider} ${row.model} ${row.deployment} ${row.region} ${row.tokenKind}${row.batch ? " batch" : ""}${row.longPrompt ? " long prompt" : ""}: ${[...prices].sort((a, b) => a - b).join(" vs ")}`,
+  );
+  return { rows: [...byKey.values()], disagreements };
 }
 
 export interface RefreshInput {
