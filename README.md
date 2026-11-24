@@ -15,7 +15,8 @@ make check   # runs each component's linters and type checks
 Each component directory (`agent/` for Python, `shell/` for TypeScript) has its
 own `Makefile` with `test` and `check` targets; the root targets run them for
 every component directory that exists and skip one that does not yet exist.
-`make test COMPONENTS=agent` runs one component.
+`make test COMPONENTS=agent` runs one component, and does nothing until
+`agent/Makefile` exists.
 
 ### Continuous integration
 
