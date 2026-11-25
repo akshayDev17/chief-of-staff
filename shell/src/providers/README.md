@@ -35,8 +35,9 @@ responsibility (the owner: "i dont think that should be imagined as a gap,
 because its now upto that user that added the other guy onto their
 directory. the model related expense managements now exclusively falls on
 their shoulders, not mine at all."). Whether the token tells the two apart
-every time is checked live in M2 step 11, check 8. Connect Google Vertex AI shows the user's own
-principal to grant,
+every time is checked live in M2 step 11, check 8.
+
+Connect Google Vertex AI shows the user's own principal to grant,
 `principal://iam.googleapis.com/projects/<pool project number>/locations/global/workloadIdentityPools/<pool>/subject/<user id>`,
 derived from `GOOGLE_WIF_PROVIDER`; no user's project grants a service
 account shared by every user.
@@ -167,16 +168,16 @@ values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
 `GOOGLE_PROJECT_NUMBER`, `GITHUB_REPOSITORY` and `BEDROCK_TEMPLATE_BUCKET` in
 the environment) prints every other value: the AWS identity provider and the
 app role's trust and permission policies, the Google pool and provider, and
-the Entra registration with its two return
-addresses (the Microsoft sign-in's and admin consent's). Google's pool needs
-no service account and no service-account impersonation grant for Vertex AI:
-each user grants their own principal. Nothing is guessed during T10.
+the Entra registration with its two return addresses (the Microsoft
+sign-in's and admin consent's). Google's pool needs no service account and no
+service-account impersonation grant for Vertex AI: each user grants their own
+principal. Nothing is guessed during T10.
 
 The Worker reads:
 
 | Name | Kind | What |
 | --- | --- | --- |
-| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and the consent return are under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"` (`https://akshayprabhakant.com`), so every release ships it |
+| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and Microsoft's sign-in and consent returns are under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"` (`https://akshayprabhakant.com`), so every release ships it |
 | `ISSUER_KEYS` | secret | the issuer's keys (above) |
 | `AWS_APP_ROLE_ARN` | variable | the app's own role in the owner's AWS account |
 | `AWS_REGION` | variable | where STS and Bedrock are called and the stack is made; default `us-east-1` |
