@@ -1,10 +1,10 @@
 // Models › Setup › Model for each task, rendered on the server (design T02 /
 // T18).
 //
-//   GET  /models/setup/tasks
-//   POST /models/setup/tasks/accept    the one tap: every proposal is taken
-//   POST /models/setup/tasks/change    task, main, fallback (or none)
-//   POST /models/setup/tasks/help      friends only: "Ask Admin for help"
+//   GET  /chief-of-staff/models/setup/tasks
+//   POST /chief-of-staff/models/setup/tasks/accept    the one tap: every proposal is taken
+//   POST /chief-of-staff/models/setup/tasks/change    task, main, fallback (or none)
+//   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
 // Only the user's own passed models are offered. With one, every task uses
 // it ("Model now"). With more, each task shows its main model and its

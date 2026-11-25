@@ -1,8 +1,8 @@
 // Models › Setup › Add a model, rendered on the server (design T02 / T17).
 //
-//   GET  /models/setup/add[?provider=<id>]
-//   POST /models/setup/add/<id>/pick    model, and on Foundry its deployment name
-//   POST /models/setup/add/<id>/help    friends only: "Ask Admin for help"
+//   GET  /chief-of-staff/models/setup/add[?provider=<id>]
+//   POST /chief-of-staff/models/setup/add/<id>/pick    model, and on Foundry its deployment name
+//   POST /chief-of-staff/models/setup/add/<id>/help    friends only: "Ask Admin for help"
 //
 // One tab per connected provider. Its table lists every chat model the
 // provider sells at a listed price, each with its region, list price,

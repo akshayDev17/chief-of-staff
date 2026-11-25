@@ -2,9 +2,9 @@
 // "Connect <Provider>" button for every registered plug-in, each with its
 // guide, its connection, its region, its monthly budget and its test call.
 //
-//   GET  /models/setup/providers[?provider=<id>][&disconnect=1][&change=region]
-//   POST /models/setup/providers/<id>/connect | retry | region | disconnect | help
-//   GET  /models/setup/providers/<id>/consented   (back from a consent page)
+//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1][&change=region]
+//   POST /chief-of-staff/models/setup/providers/<id>/connect | retry | region | disconnect | help
+//   GET  /chief-of-staff/models/setup/providers/<id>/consented   (back from a consent page)
 //
 // Each test-call result is three lines: the plain verdict; "<provider>
 // replied:" with the status, the error name and the provider's own message
