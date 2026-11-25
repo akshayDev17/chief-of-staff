@@ -133,7 +133,8 @@ push to `main` that touches `shell/`, it runs in the GitHub environment
    is rolled back by D1 and stops the release, so the Worker is not deployed;
 5. deploys the Worker, with its route, as
    `wrangler deploy --tag shell-v<version>-<run>`, passing `ACCESS_AUD` and
-   `ACCESS_TEAM_DOMAIN` as its variables;
+   `ACCESS_TEAM_DOMAIN` as variables alongside the `APP_ORIGIN` in
+   `shell/wrangler.jsonc` (a deploy keeps the Worker's secrets);
 6. creates a GitHub release with that tag naming the migrations applied and
    the restore bookmark.
 

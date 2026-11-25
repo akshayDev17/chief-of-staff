@@ -143,7 +143,7 @@ The Worker reads:
 
 | Name | Kind | What |
 | --- | --- | --- |
-| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and the consent return are under `<APP_ORIGIN>/chief-of-staff` |
+| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and the consent return are under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"` (`https://akshayprabhakant.com`), so every release ships it |
 | `ISSUER_KEYS` | secret | the issuer's keys (above) |
 | `AWS_APP_ROLE_ARN` | variable | the app's own role in the owner's AWS account |
 | `AWS_REGION` | variable | where STS and Bedrock are called and the stack is made; default `us-east-1` |
