@@ -20,7 +20,8 @@ import { userFromAccess } from "./users";
 // ENTRA_CERT_KEY (secret), ENTRA_CERT_THUMBPRINT, FOUNDRY_CREDENTIAL,
 // GOOGLE_WIF_PROVIDER, GOOGLE_SERVICE_ACCOUNT.
 export interface Env extends ProvidersEnv {
-  // Cloudflare Access team domain, `https://<team>.cloudflareaccess.com`.
+  // Cloudflare Access team domain, `<team>.cloudflareaccess.com` (as the
+  // portfolio-app tool writes it) or `https://<team>.cloudflareaccess.com`.
   ACCESS_TEAM_DOMAIN?: string;
   // The Access application's AUD tag.
   ACCESS_AUD?: string;

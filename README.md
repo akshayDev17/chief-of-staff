@@ -92,7 +92,8 @@ design-v3 section 10.3). Two parts:
   `/chief-of-staff/oidc/jwks.json` is served without a token, because AWS,
   Google and Microsoft fetch them (`shell/src/providers/README.md`).
   Configuration is two Worker variables set at deploy from the `production`
-  environment: `ACCESS_TEAM_DOMAIN` (`https://<team>.cloudflareaccess.com`)
+  environment: `ACCESS_TEAM_DOMAIN` (`<team>.cloudflareaccess.com`, the bare host the
+  tool writes, or the same with `https://`)
   and `ACCESS_AUD` (the AUD tag of the tool's sign-in application, not
   secret). The tool will write both there once its requested change lands.
 
