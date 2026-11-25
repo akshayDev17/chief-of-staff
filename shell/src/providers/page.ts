@@ -4,6 +4,7 @@
 //
 //   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1][&change=region]
 //   POST /chief-of-staff/models/setup/providers/<id>/connect | retry | region | disconnect | help
+//   GET  /chief-of-staff/models/setup/providers/<id>/signed-in   (back from Microsoft's sign-in)
 //   GET  /chief-of-staff/models/setup/providers/<id>/consented   (back from a consent page)
 //
 // Each test-call result is three lines: the plain verdict; "<provider>
@@ -46,6 +47,8 @@ export interface ProviderPanel {
 
 export interface ProvidersPageInput {
   viewer: Viewer;
+  // The signed-in user: Vertex AI shows that user's own Google identity.
+  userId: string;
   panels: ProviderPanel[];
   selected: Provider;
   confirmDisconnect: boolean;
@@ -123,7 +126,7 @@ ${replyLine(result, plugin)}
 <div class="row">${links}${postButton(action(provider, "retry"), "Try again")}${help}</div></div>`;
 }
 
-function connectForm(panel: ProviderPanel): string {
+function connectForm(panel: ProviderPanel, userId: string): string {
   const { plugin, check } = panel;
   const c = plugin.connect;
   // A plug-in that opens the provider's own page (Bedrock's stack) opens it
@@ -136,11 +139,11 @@ function connectForm(panel: ProviderPanel): string {
     )
     .join("\n");
   const waitingConsent = check?.pendingFields
-    ? `<p class="small muted">Waiting for Microsoft's consent page: sign in there and tap Accept, or connect again.</p>`
+    ? `<p class="small muted">Waiting for Microsoft: sign in there and tap Accept, or connect again.</p>`
     : "";
   return `${waitingConsent}<form method="post" action="${action(plugin.provider, "connect")}"${opensNewTab ? ' target="_blank" data-reload' : ""}>
 ${fields}
-${c.grantHelp ? c.grantHelp() : ""}
+${c.grantHelp ? c.grantHelp({ userId }) : ""}
 <div class="row" style="margin-top:8px"><button type="submit" class="btn small">Connect ${esc(c.guide.name)}</button></div>
 </form>`;
 }
@@ -173,7 +176,7 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const pages = g.pages.map((p) => `<a href="${esc(p.href)}" rel="noopener noreferrer">${esc(p.label)}</a>`).join(" · ");
   const head = `<p class="small muted">Guide checked on ${nbDate(g.checkedOn)} against the vendor's own pages · ${pages}</p>
 <ol class="small">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>`;
-  if (!connection) return `${head}${connectForm(panel)}`;
+  if (!connection) return `${head}${connectForm(panel, input.userId)}`;
   // "Connected" once the provider's side answers; until then the record is
   // stored and the check is waiting for the grant.
   const status =
@@ -191,7 +194,7 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
     input.viewer === "friend"
       ? `<p class="small muted" style="margin-top:6px">Only you see the provider's reply. “Ask Admin for help” sends only this item's name and the plain reason.</p>`
       : "";
-  const grantHelp = plugin.connect.grantHelp && check?.state !== "passed" ? plugin.connect.grantHelp(connection) : "";
+  const grantHelp = plugin.connect.grantHelp && check?.state !== "passed" ? plugin.connect.grantHelp({ userId: input.userId, connection }) : "";
   return `${head}${disconnect}${grantHelp}${dialog}${regionLine(panel, input.changeRegion)}${budget}${resultBox(panel, input.viewer)}${template}${note}`;
 }
 
@@ -308,6 +311,7 @@ async function pageInput(
   const selected = extra.selected ?? (registered.find((p) => p === asked) ?? (viewer === "friend" ? panels.find((p) => p.plugin.connect.guide.recommendedForFriends)?.plugin.provider : undefined) ?? registered[0]!);
   return {
     viewer,
+    userId,
     panels,
     selected,
     confirmDisconnect: url.searchParams.get("disconnect") === "1",
@@ -320,7 +324,7 @@ async function pageInput(
 
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
-const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|retry|region|disconnect|help|consented))?$`);
+const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|retry|region|disconnect|help|signed-in|consented))?$`);
 
 export const isProvidersPath = (pathname: string): boolean => ROUTE.test(pathname);
 
@@ -340,11 +344,12 @@ export async function handleProviders(
   const provider = providerPart as Provider;
   if (!plugins[provider]) return new Response(null, { status: 404 });
 
-  if (verb === "consented") {
+  if (verb === "signed-in" || verb === "consented") {
     if (request.method !== "GET") return new Response(null, { status: 405 });
-    const outcome = await finishConsent(db, plugins, { userId, provider, returned: url.searchParams, now });
+    const outcome = await finishConsent(db, plugins, { userId, provider, returnedTo: verb, returned: url.searchParams, appOrigin: input.appOrigin, now });
     if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
-    return back(provider);
+    // Microsoft's sign-in leads on to its admin consent.
+    return outcome.open ? Response.redirect(outcome.open, 303) : back(provider);
   }
 
   if (request.method !== "POST") return new Response(null, { status: 405 });

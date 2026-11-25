@@ -12,7 +12,7 @@ import { setBudget } from "../src/proxy/budgets";
 import { handleBudgets } from "../src/proxy/budgets-page";
 import { readConnection } from "../src/proxy/connections";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
-import { APP_ORIGIN, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
+import { APP_ORIGIN, fakeMicrosoft, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
 import { userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-25T10:00:00Z");
@@ -45,7 +45,7 @@ function world(converse: () => Response = () => Response.json({ output: { messag
     [/bedrock-runtime/, converse],
     [/cloudformation/, () => new Response("", { status: 403 })],
   ]);
-  const config = { APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json", ENTRA_CLIENT_ID: "client-1", GOOGLE_SERVICE_ACCOUNT: "chief-of-staff-models@owner.iam.gserviceaccount.com" };
+  const config = { APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json", ENTRA_CLIENT_ID: "client-1", FOUNDRY_CREDENTIAL: "federated", GOOGLE_WIF_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/w" };
   return { bedrock: bedrockPlugin(config, fetcher, () => NOW), foundry: foundryPlugin(config, fetcher, () => NOW), vertex: vertexPlugin(config, fetcher, () => NOW) };
 }
 
@@ -190,14 +190,18 @@ describe("Models › Setup › Providers", () => {
     expect(await text(await open(plugins))).toContain('<strong>Monthly budget:</strong> $30 · <a href="/chief-of-staff/models/setup/budgets">Budgets</a>');
   });
 
-  it("shows the Vertex AI service account with a copy button and the role command before connecting", async () => {
+  it("shows the user's own Google identity with a copy button and the role command before connecting, never a shared service account", async () => {
     const page = await text(await open(world(), "?provider=vertex"));
-    expect(page).toContain('<span class="mono">chief-of-staff-models@owner.iam.gserviceaccount.com</span> <button type="button" class="btn small ghost" data-copy="chief-of-staff-models@owner.iam.gserviceaccount.com">Copy</button>');
+    const own = `principal://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/subject/${userId}`;
+    expect(page).toContain(`Your own identity: <span class="mono" style="word-break:break-all">${own}</span> <button type="button" class="btn small ghost" data-copy="${own}">Copy</button>`);
+    expect(page).toContain("paste your own identity shown below (copy button), pick that role and Save. It is yours alone, so no other user of this app can use your project.");
+    expect(page).not.toContain("gserviceaccount.com");
+    expect(page).not.toContain("service-account email");
     expect(page).toContain("gcloud iam roles create chiefOfStaffModelCaller --project=YOUR_PROJECT_ID");
     expect(page).not.toContain('target="_blank" data-reload');
   });
 
-  it("keeps the Vertex AI service account and the role command, with the project ID, on screen after Connect until the test call passes", async () => {
+  it("keeps the user's own identity and the role command, with the project ID, on screen after Connect until the test call passes", async () => {
     const vertexRow = (tokenKind: "input" | "output", usdPerMTok: number) => ({
       provider: "vertex" as const, model: "Claude Haiku 5.5", deployment: "regional" as const, region: "us", tokenKind, longPrompt: false, batch: false,
       usdPerMTok, source: "google-catalog" as const, dateRead: "2026-11-24", stale: false, disagreement: false,
@@ -206,18 +210,18 @@ describe("Models › Setup › Providers", () => {
     let granted = false;
     const { fetcher } = scriptedFetch([
       [/^https:\/\/sts\.googleapis\.com\//, () => Response.json({ access_token: "federated-token", token_type: "Bearer", expires_in: 3599 })],
-      [/^https:\/\/iamcredentials\.googleapis\.com\//, () => Response.json({ accessToken: "sa-token", expireTime: "2026-11-25T11:00:00Z" })],
       [/aiplatform/, () =>
         granted
           ? Response.json({ content: [{ type: "text", text: "OK" }], usage: { input_tokens: 11, output_tokens: 2 } })
           : Response.json({ error: { code: 403, message: "Permission 'aiplatform.endpoints.predict' denied", status: "PERMISSION_DENIED" } }, { status: 403 })],
     ]);
-    const vertex = vertexPlugin({ APP_ORIGIN, ISSUER_KEYS, GOOGLE_WIF_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/w", GOOGLE_SERVICE_ACCOUNT: "chief-of-staff-models@owner.iam.gserviceaccount.com" }, fetcher, () => NOW);
+    const vertex = vertexPlugin({ APP_ORIGIN, ISSUER_KEYS, GOOGLE_WIF_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/w" }, fetcher, () => NOW);
     const plugins = { ...world(), vertex };
     await post(plugins, "/vertex/connect", { projectId: "example-project-123" });
     const waiting = await text(await open(plugins, "?provider=vertex"));
     expect(waiting).toContain("Vertex AI replied: 403 · PERMISSION_DENIED");
-    expect(waiting).toContain('data-copy="chief-of-staff-models@owner.iam.gserviceaccount.com">Copy</button>');
+    expect(waiting).toContain(`data-copy="principal://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/subject/${userId}">Copy</button>`);
+    expect(waiting).toContain("Grant your own identity shown above its role on your project");
     expect(waiting).toContain("gcloud iam roles create chiefOfStaffModelCaller --project=example-project-123");
     granted = true;
     await post(plugins, "/vertex/retry");
@@ -226,13 +230,34 @@ describe("Models › Setup › Providers", () => {
     expect(passed).not.toContain("gcloud iam roles create");
   });
 
-  it("sends Foundry to Microsoft's consent page and says so while waiting", async () => {
-    const plugins = world();
+  it("sends Foundry to Microsoft's sign-in, then on to admin consent in the signed-in tenant, and says so while waiting", async () => {
+    const TENANT = "11111111-2222-4333-8444-555555555555";
+    const ms = await fakeMicrosoft();
+    let nonce = "";
+    const t0 = NOW.getTime() / 1000;
+    const { fetcher } = scriptedFetch([
+      [/organizations\/oauth2\/v2\.0\/token$/, async () =>
+        Response.json({ id_token: await ms.idToken({ iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: "client-1", tid: TENANT, nonce, iat: t0, nbf: t0, exp: t0 + 3600 }) })],
+      [/discovery\/v2\.0\/keys$/, () => Response.json(ms.keySet)],
+    ]);
+    const plugins = { ...world(), foundry: foundryPlugin({ APP_ORIGIN, ISSUER_KEYS, ENTRA_CLIENT_ID: "client-1", FOUNDRY_CREDENTIAL: "federated" }, fetcher, () => NOW) };
+    expect(await text(await open(plugins, "?provider=foundry"))).toContain("sign in with Microsoft, then tap <strong>Accept</strong>. Your organisation is taken from this sign-in, so only you can connect it.");
     const response = await post(plugins, "/foundry/connect", { endpoint: "https://example-resource.services.ai.azure.com" });
-    expect(response.headers.get("location")).toMatch(/^https:\/\/login\.microsoftonline\.com\/organizations\/adminconsent\?client_id=client-1/);
-    expect(await text(await open(plugins, "?provider=foundry"))).toContain("Waiting for Microsoft's consent page");
-    const refused = await open(plugins, "/foundry/consented?error=access_denied&error_description=The+admin+canceled+the+request&state=x");
-    expect(refused.status).toBe(400);
+    const signIn = new URL(response.headers.get("location")!);
+    expect(signIn.origin + signIn.pathname).toBe("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize");
+    nonce = signIn.searchParams.get("nonce")!;
+    expect(await text(await open(plugins, "?provider=foundry"))).toContain("Waiting for Microsoft: sign in there and tap Accept");
+
+    const signedIn = await open(plugins, `/foundry/signed-in?code=c&state=${signIn.searchParams.get("state")}`);
+    expect(signedIn.status).toBe(303);
+    const consent = new URL(signedIn.headers.get("location")!);
+    expect(consent.origin + consent.pathname).toBe(`https://login.microsoftonline.com/${TENANT}/adminconsent`);
+
+    const forged = await open(plugins, `/foundry/consented?tenant=99999999-8888-4777-8666-555555555555&admin_consent=True&state=${consent.searchParams.get("state")}`);
+    expect(forged.status).toBe(400);
+    expect(await text(forged)).toContain("different organisation than the one you signed in with, so nothing was saved");
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+    expect((await open(plugins, "/foundry/signed-in", { method: "POST" })).status).toBe(405);
   });
 
   it("refuses a bad field with its plain problem, and a form from another site", async () => {

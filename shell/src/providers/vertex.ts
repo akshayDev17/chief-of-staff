@@ -3,12 +3,22 @@
 //
 // Connect: the user types their project ID, makes the one-permission role
 // with the Cloud Shell command shown, and grants it in IAM → Grant access to
-// the app's service account (in the owner's project). No key file exists
-// anywhere. The record holds the project ID, not secret.
+// their own identity, shown on the Connect screen (T116, design-v3 1.4): a
+// federated principal in the app's Workload Identity Federation pool whose
+// subject is the user's own app ID,
+//   principal://iam.googleapis.com/projects/<pool project number>/locations/global/workloadIdentityPools/<pool>/subject/<user id>
+// Every user grants a different principal, so a grant on one user's project
+// serves no other user, whatever project ID they type; no project grants a
+// service account shared by every user. No key file exists anywhere. The
+// record holds the project ID, not secret.
 //
-// Credential: the issuer's ID token -> Google's STS (Workload Identity
-// Federation, the owner's pool trusting the issuer) -> generateAccessToken
-// for the app's service account: a 1-hour token.
+// Credential: the issuer's ID token, its `sub` the user's own app ID and
+// signed only for that user's own calls -> Google's STS (the owner's pool
+// trusting the issuer) -> the federated access token, used directly on
+// Vertex AI (direct resource access; no service account is impersonated).
+// Whether Vertex AI's Claude endpoint accepts a federated principal is M2
+// step 11 (g), live; if it does not, the fallback is one service account per
+// user in the app's project, which only that user's principal may act as.
 //
 // Caller: Claude's `rawPredict` on the user's project, at the location the
 // app picks: `https://aiplatform.googleapis.com` for `global`,
@@ -29,10 +39,14 @@
 //   Authorization HTTP header"; a JWT subject token's `alg` "Must be RS256 or
 //   ES256", with `kid`.
 //   https://docs.cloud.google.com/iam/docs/reference/sts/rest/v1/TopLevel/token
-// - generateAccessToken: projects/-/serviceAccounts/{email} ("replacing it
-//   with a project ID is invalid"); "By default, the maximum allowed value is
-//   1 hour."
-//   https://docs.cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateAccessToken
+// - Principal identifiers: a single identity in a workload identity pool is
+//   "principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/subject/SUBJECT_ATTRIBUTE_VALUE".
+//   https://docs.cloud.google.com/iam/docs/principal-identifiers
+// - Workload Identity Federation with other providers: "we recommend that you
+//   grant direct resource access to the principal. In this case, the
+//   principal is the federated user"; "You must map one of these claims to
+//   google.subject to uniquely identify the user."
+//   https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-other-providers
 // - Provider audiences: "If this list is empty, the OIDC token audience must
 //   be equal to the full canonical resource name".
 //   https://docs.cloud.google.com/iam/docs/reference/rest/v1/projects.locations.workloadIdentityPools.providers
@@ -63,11 +77,8 @@ export interface VertexEnv {
   ISSUER_KEYS?: string;
   // `//iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>` (T10).
   GOOGLE_WIF_PROVIDER?: string;
-  // The app's service account in the owner's project (T10; not secret).
-  GOOGLE_SERVICE_ACCOUNT?: string;
 }
 
-export const GOOGLE_SUBJECT = "chief-of-staff:vertex";
 export const CUSTOM_ROLE_ID = "chiefOfStaffModelCaller";
 const CLOUD_PLATFORM = "https://www.googleapis.com/auth/cloud-platform";
 const ANTHROPIC_VERSION = "vertex-2023-10-16";
@@ -75,6 +86,18 @@ const ANTHROPIC_VERSION = "vertex-2023-10-16";
 // The ID token's audience: the provider's full canonical name, which Google
 // accepts "with or without the https:// prefix".
 export const wifAudience = (provider: string): string => `https:${provider}`;
+
+const WIF_PROVIDER = /^\/\/iam\.googleapis\.com\/(projects\/\d+\/locations\/global\/workloadIdentityPools\/[a-z0-9-]+)\/providers\/[a-z0-9-]+$/;
+// A user's app ID, as Google's subject takes it.
+const SUBJECT = /^[A-Za-z0-9_-]{1,127}$/;
+
+// The user's own Google identity, the one they grant the role to: the pool
+// of GOOGLE_WIF_PROVIDER, subject the user's app ID. Undefined until the
+// pool exists (T10).
+export function userPrincipal(wifProvider: string | undefined, userId: string): string | undefined {
+  const pool = WIF_PROVIDER.exec(wifProvider?.trim() ?? "")?.[1];
+  return pool && SUBJECT.test(userId) ? `principal://iam.googleapis.com/${pool}/subject/${userId}` : undefined;
+}
 
 // Vertex AI's model ID from the price table's name ("Claude Sonnet 5.5" ->
 // "claude-sonnet-5-5").
@@ -143,8 +166,6 @@ async function googleJson(response: Response, step: string): Promise<Record<stri
 }
 
 export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date()): ProviderPlugin {
-  const serviceAccount = env.GOOGLE_SERVICE_ACCOUNT?.trim();
-
   const iamLink = (connection?: ConnectionFields): Link => ({ label: "Open IAM → Grant access", href: consoleLink("iam-admin/iam", connection?.projectId) });
 
   const connect: ConnectMethod = {
@@ -157,7 +178,7 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
         "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). For Claude: its Model Garden card → Enable.",
         "Type your project ID and tap <strong>Connect Google Vertex AI</strong>.",
         "Run the one-line Cloud Shell command shown, which makes a role that can only call models. If you cannot create custom roles, use Google's <strong>Vertex AI User</strong> role (<code>roles/aiplatform.user</code>) instead.",
-        "In IAM → Grant access, paste the app's service-account email (copy button), pick that role and Save. No key file is made.",
+        "In IAM → Grant access, paste your own identity shown below (copy button), pick that role and Save. It is yours alone, so no other user of this app can use your project. No key file is made.",
       ],
       checkedOn: "2026-11-25",
       pages: [
@@ -165,7 +186,7 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
         { label: "Vertex AI access control", href: "https://docs.cloud.google.com/vertex-ai/docs/general/access-control" },
         { label: "Workload Identity Federation", href: "https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-other-providers" },
       ],
-      revoke: "remove the app's service account from your project in IAM.",
+      revoke: "remove your identity's role from your project in IAM.",
       regionChoice: true,
     },
     fields: [
@@ -178,11 +199,12 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
       },
     ],
     start: (typed) => ({ kind: "connection", fields: { projectId: typed.projectId! } }),
-    grantHelp(connection) {
-      const account = serviceAccount
-        ? `<span class="mono">${esc(serviceAccount)}</span> <button type="button" class="btn small ghost" data-copy="${esc(serviceAccount)}">Copy</button>`
+    grantHelp({ userId, connection }) {
+      const principal = userPrincipal(env.GOOGLE_WIF_PROVIDER, userId);
+      const identity = principal
+        ? `<span class="mono" style="word-break:break-all">${esc(principal)}</span> <button type="button" class="btn small ghost" data-copy="${esc(principal)}">Copy</button>`
         : `<span class="muted">shown once Admin has set up the app's Google identity</span>`;
-      return `<p class="small">The app's service account: ${account}</p>
+      return `<p class="small" style="margin-top:6px">Your own identity: ${identity}</p>
 <p class="small">The Cloud Shell command${connection?.projectId ? "" : " (put your project ID in it)"}:</p>
 <pre class="cmd">${esc(customRoleCommand(connection?.projectId ?? "YOUR_PROJECT_ID"))}</pre>`;
     },
@@ -224,7 +246,7 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
         return { reason: "not_allowed_yet", fix: "Turn on billing for the project, then try again.", links: [{ label: "Open Billing", href: consoleLink("billing/linkedaccount", connection?.projectId) }] };
       }
       if (f.status === 401 || f.status === 403 || /PERMISSION_DENIED|UNAUTHENTICATED/.test(f.errorName)) {
-        return { reason: "not_set_up", fix: "Grant the app's service account its role on your project (the one the Cloud Shell command made, else Vertex AI User, roles/aiplatform.user), then try again.", links: [iamLink(connection)] };
+        return { reason: "not_set_up", fix: "Grant your own identity shown above its role on your project (the one the Cloud Shell command made, else Vertex AI User, roles/aiplatform.user), then try again.", links: [iamLink(connection)] };
       }
       if (f.status === 404 || /NOT_FOUND/.test(f.errorName)) {
         return { reason: "no_such_model", fix: "Change the region, or pick a model the project offers there.", links: [] };
@@ -236,15 +258,17 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
 
   return {
     provider: "vertex",
-    version: "vertex-1.0.0",
+    version: "vertex-1.1.0",
     connectionFields: ["projectId"],
     priceSource: ["google-catalog"],
     connect,
-    async mintCredential() {
-      const missing = [...(env.GOOGLE_WIF_PROVIDER ? [] : ["GOOGLE_WIF_PROVIDER"]), ...(serviceAccount ? [] : ["GOOGLE_SERVICE_ACCOUNT"])];
-      if (missing.length) throw new AppNotConfigured(missing);
+    // The token is the user's own principal's: its subject is the user whose
+    // call this is, never another user's, whatever project the record names.
+    async mintCredential(_connection, { userId }) {
+      if (!env.GOOGLE_WIF_PROVIDER) throw new AppNotConfigured(["GOOGLE_WIF_PROVIDER"]);
+      if (!SUBJECT.test(userId)) throw new Error("a Vertex AI credential needs the user's own app ID");
       const issuer = await readIssuer(env);
-      const subjectToken = await mintIdToken(issuer, { audience: wifAudience(env.GOOGLE_WIF_PROVIDER!), subject: GOOGLE_SUBJECT, now: now() });
+      const subjectToken = await mintIdToken(issuer, { audience: wifAudience(env.GOOGLE_WIF_PROVIDER), subject: userId, now: now() });
       const federated = await googleJson(
         await fetcher("https://sts.googleapis.com/v1/token", {
           method: "POST",
@@ -261,16 +285,7 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
         "sts.googleapis.com token",
       );
       if (typeof federated.access_token !== "string") throw new Error("Google's STS answered without a token");
-      const token = await googleJson(
-        await fetcher(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount!)}:generateAccessToken`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${federated.access_token}`, "content-type": "application/json" },
-          body: JSON.stringify({ scope: [CLOUD_PLATFORM], lifetime: "3600s" }),
-        }),
-        "generateAccessToken",
-      );
-      if (typeof token.accessToken !== "string") throw new Error("generateAccessToken answered without a token");
-      return { accessToken: token.accessToken, expireTime: token.expireTime };
+      return { accessToken: federated.access_token, expiresIn: federated.expires_in };
     },
     async call({ credential, connection, model, location, request }) {
       const authorization = `Bearer ${(credential as { accessToken: string }).accessToken}`;

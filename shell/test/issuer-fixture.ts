@@ -1,6 +1,8 @@
 // Test-only issuer keys and a scripted fetch for the provider plug-ins. Every
 // key is generated here, per run; no real key, account or tenant appears.
 
+import { signJwt } from "../src/issuer";
+
 export const APP_ORIGIN = "https://cos.example.com";
 
 const RSA = { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" } as const;
@@ -63,3 +65,18 @@ export const stsCredentials = (action: string, id: string) =>
 
 export const stsError = (code: string, message: string, status = 403) =>
   xml(`<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><Error><Type>Sender</Type><Code>${code}</Code><Message>${message}</Message></Error><RequestId>r-1</RequestId></ErrorResponse>`, status);
+
+// A made-up Microsoft identity platform for Foundry's sign-in: one signing
+// key, its published key set, and ID tokens signed with it (or with any
+// other key, to forge one). Generated per run.
+export async function fakeMicrosoft() {
+  const jwk = await issuerKey("ms-key-1");
+  const PKCS1 = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const importSigning = (k: JsonWebKey) => crypto.subtle.importKey("jwk", { ...k, ext: false, key_ops: ["sign"] }, PKCS1, false, ["sign"]);
+  const signingKey = await importSigning(jwk);
+  const keySet = { keys: [{ kty: "RSA", use: "sig", kid: jwk.kid, n: jwk.n, e: jwk.e }] };
+  const idToken = (claims: Record<string, unknown>, opts: { header?: Record<string, unknown>; key?: CryptoKey } = {}) =>
+    signJwt(opts.header ?? { typ: "JWT", alg: "RS256", kid: jwk.kid }, claims, opts.key ?? signingKey);
+  const otherKey = async () => importSigning(await issuerKey("ms-key-1"));
+  return { keySet, idToken, otherKey };
+}

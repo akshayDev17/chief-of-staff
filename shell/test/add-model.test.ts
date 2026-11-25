@@ -371,10 +371,9 @@ describe("Add a model on Google Vertex AI: Gemini", () => {
     let version = "gemini-3.5-flash-001";
     const { fetcher, sent } = scriptedFetch([
       [/sts\.googleapis\.com/, () => Response.json({ access_token: "federated" })],
-      [/iamcredentials/, () => Response.json({ accessToken: "google-access-token", expireTime: "2026-11-25T11:00:00Z" })],
       [/:generateContent$/, () => Response.json({ modelVersion: version, candidates: [{ content: { parts: [{ text: "OK" }] } }], usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 1, thoughtsTokenCount: 3 } })],
     ]);
-    const vertex = vertexPlugin({ APP_ORIGIN, ISSUER_KEYS, GOOGLE_WIF_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q", GOOGLE_SERVICE_ACCOUNT: "sa@owner.iam.gserviceaccount.com" }, fetcher, () => NOW);
+    const vertex = vertexPlugin({ APP_ORIGIN, ISSUER_KEYS, GOOGLE_WIF_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q" }, fetcher, () => NOW);
     const regs: PluginRegistry = { vertex };
     await writeConnection(env.DB, userId, vertex, { projectId: "example-project-123" }, NOW);
     expect(await addModel(env.DB, regs, { userId, provider: "vertex", model: "Gemini 3.5 Flash", now: NOW })).toMatchObject({

@@ -1,7 +1,7 @@
 // The exact values the owner's one-time provider steps need (T10), worked
 // out from a few inputs so nothing is guessed: the issuer's addresses, the
-// AWS identity provider and role policies, the Google pool, provider and
-// service account, and the Entra app registration. Used by
+// AWS identity provider and role policies, the Google pool and provider, and
+// the Entra app registration with its two return addresses. Used by
 // provider-setup.mjs `values`; nothing here touches any account. Also the
 // issuer key's rotation steps (`rotateIssuerKeys`). No Node-only imports,
 // so the Worker's tests import it too.
@@ -21,10 +21,12 @@ export const APP_ROLE_NAME = "chief-of-staff-app";
 export const ENTRA_SUBJECT = "chief-of-staff:foundry";
 export const ENTRA_FEDERATED_AUDIENCE = "api://AzureADTokenExchange";
 export const CONSENT_RETURN_PATH = `${BASE_PATH}/models/setup/providers/foundry/consented`;
-export const GOOGLE_SUBJECT = "chief-of-staff:vertex";
+export const SIGN_IN_RETURN_PATH = `${BASE_PATH}/models/setup/providers/foundry/signed-in`;
 export const GOOGLE_POOL = "chief-of-staff";
 export const GOOGLE_PROVIDER = "chief-of-staff-worker";
-export const GOOGLE_SERVICE_ACCOUNT_ID = "chief-of-staff-models";
+// Each user's Google subject is their own app ID (a UUID, src/users.ts): the
+// pool takes no other subject from the issuer.
+export const GOOGLE_SUBJECT_CONDITION = "assertion.sub.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')";
 export const TEMPLATE_PREFIX = "chief-of-staff-bedrock-role/";
 
 const ORIGIN = /^https:\/\/[a-z0-9.-]+$/;
@@ -62,7 +64,6 @@ export function setupValues(i) {
   const issuerHostPath = issuer.replace(/^https:\/\//, "");
   const appRoleArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:role/${APP_ROLE_NAME}`;
   const oidcProviderArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:oidc-provider/${issuerHostPath}`;
-  const serviceAccount = `${GOOGLE_SERVICE_ACCOUNT_ID}@${i.GOOGLE_PROJECT_ID}.iam.gserviceaccount.com`;
   const wifProvider = `//iam.googleapis.com/projects/${i.GOOGLE_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_POOL}/providers/${GOOGLE_PROVIDER}`;
   const publishRoleArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:role/chief-of-staff-template-publisher`;
   return {
@@ -129,19 +130,20 @@ export function setupValues(i) {
     },
     google: {
       commands: [
-        `gcloud services enable aiplatform.googleapis.com iamcredentials.googleapis.com sts.googleapis.com --project=${i.GOOGLE_PROJECT_ID}`,
-        `gcloud iam service-accounts create ${GOOGLE_SERVICE_ACCOUNT_ID} --project=${i.GOOGLE_PROJECT_ID} --display-name="Chief of staff models"`,
+        `gcloud services enable aiplatform.googleapis.com sts.googleapis.com --project=${i.GOOGLE_PROJECT_ID}`,
         `gcloud iam workload-identity-pools create ${GOOGLE_POOL} --project=${i.GOOGLE_PROJECT_ID} --location=global --display-name="Chief of staff"`,
-        `gcloud iam workload-identity-pools providers create-oidc ${GOOGLE_PROVIDER} --project=${i.GOOGLE_PROJECT_ID} --location=global --workload-identity-pool=${GOOGLE_POOL} --issuer-uri=${issuer} --allowed-audiences=https:${wifProvider} --attribute-mapping=google.subject=assertion.sub --attribute-condition="assertion.sub=='${GOOGLE_SUBJECT}'"`,
-        `gcloud iam service-accounts add-iam-policy-binding ${serviceAccount} --project=${i.GOOGLE_PROJECT_ID} --role=roles/iam.workloadIdentityUser --member=principal://iam.googleapis.com/projects/${i.GOOGLE_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_POOL}/subject/${GOOGLE_SUBJECT}`,
+        `gcloud iam workload-identity-pools providers create-oidc ${GOOGLE_PROVIDER} --project=${i.GOOGLE_PROJECT_ID} --location=global --workload-identity-pool=${GOOGLE_POOL} --issuer-uri=${issuer} --allowed-audiences=https:${wifProvider} --attribute-mapping=google.subject=assertion.sub --attribute-condition="${GOOGLE_SUBJECT_CONDITION}"`,
       ],
-      workerVariables: { GOOGLE_WIF_PROVIDER: wifProvider, GOOGLE_SERVICE_ACCOUNT: serviceAccount },
+      // What each user grants on their own project, shown on their Connect screen.
+      userPrincipal: `principal://iam.googleapis.com/projects/${i.GOOGLE_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_POOL}/subject/<user id>`,
+      workerVariables: { GOOGLE_WIF_PROVIDER: wifProvider },
     },
     entra: {
       registration: {
         name: "Chief of staff",
         supportedAccountTypes: "Accounts in any organizational directory (Multitenant)",
-        redirectUri: { platform: "Web", uri: `${i.APP_ORIGIN}${CONSENT_RETURN_PATH}` },
+        // Microsoft's sign-in returns to the first, its admin consent to the second.
+        redirectUris: { platform: "Web", uris: [`${i.APP_ORIGIN}${SIGN_IN_RETURN_PATH}`, `${i.APP_ORIGIN}${CONSENT_RETURN_PATH}`] },
         apiPermissions: "none (the app needs no Microsoft Graph permission; each user gives it a role on their Foundry resource)",
         certificate: "upload the public certificate printed by `provider-setup.mjs keys`",
       },
@@ -189,10 +191,17 @@ ${vars(v.aws.githubVariables)}
 
 3. Google Vertex AI, in the owner's Google Cloud project
 ${v.google.commands.map((c) => `  ${c}`).join("\n")}
+  No service account and no service-account impersonation grant is needed for
+  Vertex AI: each user grants the role on their own project to their own
+  principal in the pool, shown on their Connect screen:
+    ${v.google.userPrincipal}
   Worker variables:
 ${vars(v.google.workerVariables)}
 
 4. Microsoft Foundry, in the owner's Entra tenant
+  Add both return addresses under Authentication → Web → Redirect URIs:
+    Microsoft sign-in return:  ${v.entra.registration.redirectUris.uris[0]}
+    admin consent return:      ${v.entra.registration.redirectUris.uris[1]}
   App registration:
 ${json(v.entra.registration)}
   Only if M2 step 11.1 passes, a federated credential:

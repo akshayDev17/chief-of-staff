@@ -1,11 +1,23 @@
 // The Microsoft Foundry plug-in (design-v3 1.6, T16).
 //
 // Connect: the user types their Foundry resource address and taps Connect
-// Microsoft Foundry; Microsoft's admin-consent page adds the app's
-// multi-tenant Entra registration ("Chief of staff", in the owner's tenant)
-// to the user's tenant and comes back with the tenant ID. The user then gives
-// "Chief of staff" a role on the resource and turns off key authentication.
-// The record holds the tenant ID and the endpoint, neither secret.
+// Microsoft Foundry. Every user grants the same app, so the tenant is taken
+// only from proof that this user signed in to it (T116, design-v3 1.4):
+//   1. Microsoft's sign-in (authorization code flow at `/organizations`,
+//      scope `openid`), with a state and a nonce kept on the user's own check
+//      row, each used once. The app redeems the code with its own credential,
+//      checks the ID token's signature against Microsoft's published keys
+//      (by `kid`), its `aud` (the app's client ID), its `iss` (Microsoft's
+//      v2.0 issuer for that `tid`), `exp`, `nbf` and the nonce, and keeps
+//      the `tid`.
+//   2. Microsoft's admin consent in that tenant (`/{tid}/adminconsent`, not
+//      `organizations`), which adds the app's multi-tenant Entra registration
+//      ("Chief of staff", in the owner's tenant) to it. The callback's
+//      `tenant` is only checked against the signed-in one: a different one
+//      is refused and nothing is stored. It never sets the tenant.
+// The user then gives "Chief of staff" a role on the resource and turns off
+// key authentication. The record holds the signed-in tenant ID and the
+// endpoint, neither secret; tokens are minted only in that tenant.
 //
 // Credential: client credentials in the user's tenant, scope
 // `https://ai.azure.com/.default`, the app proving itself with its
@@ -31,6 +43,40 @@
 // the deployment differently changes it there (T17).
 //
 // Pages read 2026-11-25 (ms.date in brackets):
+// - Authorization code flow [2026-01-09]: `response_type` "Must include code";
+//   for ID tokens the scope "must be updated to include the ID token scopes:
+//   openid"; `nonce` "is included in the resulting id_token as a claim";
+//   `redirect_uri` "must exactly match one of the redirect URIs you
+//   registered"; redeeming with a certificate, "the client_secret parameter is
+//   replaced by two parameters", `grant_type` "Must be authorization_code";
+//   the token response's `id_token` is "Only provided if openid scope was
+//   requested". `response_mode=query`, not the recommended `form_post`: a
+//   cross-site POST would arrive without the app's sign-in cookie.
+//   https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow
+// - OpenID Connect [2026-06-30]: `organizations` means "Only users with work
+//   or school accounts from Microsoft Entra ID can sign in to the
+//   application"; the discovery document at /{tenant}/v2.0/.well-known/
+//   openid-configuration (read 2026-11-25 for `organizations`: issuer
+//   "https://login.microsoftonline.com/{tenantid}/v2.0", jwks_uri
+//   ".../discovery/v2.0/keys").
+//   https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc
+// - ID tokens [2025-05-14]: "validate the issuer"; after the signature, "the
+//   iat, nbf, and exp timestamps should all fall before or after the current
+//   time, as appropriate", "the aud claim should match the app ID", "the
+//   nonce claim in the payload must match the nonce parameter passed into the
+//   /authorize endpoint".
+//   https://learn.microsoft.com/en-us/entra/identity-platform/id-tokens
+// - ID token claims [2023-05-30]: `tid` "Represents the tenant that the user
+//   is signing in to", 9188040d-6c67-4c5b-b112-36a304b66dad for personal
+//   accounts; a v2.0 `iss` "ends in /v2.0".
+//   https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference
+// - Signing key rollover [2024-10-28]: "Discover keys using the
+//   tenant-specific endpoint"; keys "roll over on a periodic basis", so they
+//   are fetched each time and picked by `kid`.
+//   https://learn.microsoft.com/en-us/entra/identity-platform/signing-key-rollover
+// - Claims validation [2025-03-21]: "Always check that the tid in a token
+//   matches the tenant ID used to store data with the application."
+//   https://learn.microsoft.com/en-us/entra/identity-platform/claims-validation
 // - Client credentials [2026-01-30]: POST /{tenant}/oauth2/v2.0/token;
 //   `client_assertion_type` "must be set to
 //   urn:ietf:params:oauth:client-assertion-type:jwt-bearer"; admin consent at
@@ -88,6 +134,11 @@ export const FOUNDRY_SCOPE = "https://ai.azure.com/.default";
 export const ENTRA_FEDERATED_AUDIENCE = "api://AzureADTokenExchange";
 export const ENTRA_SUBJECT = "chief-of-staff:foundry";
 export const CONSENT_RETURN_PATH = `${PROVIDERS_PATH}/foundry/consented`;
+export const SIGN_IN_RETURN_PATH = `${PROVIDERS_PATH}/foundry/signed-in`;
+// The `tid` of every personal Microsoft account, which cannot hold Foundry.
+const PERSONAL_ACCOUNTS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+// How far the app's clock may differ from Microsoft's, for `exp` and `nbf`.
+const CLOCK_SKEW_S = 300;
 const ANTHROPIC_VERSION = "2023-06-01";
 const LOGIN = "https://login.microsoftonline.com";
 const ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
@@ -221,11 +272,79 @@ export function chatCompletionsText(body: unknown): string | undefined {
   return typeof content === "string" && content.trim() ? content.trim() : undefined;
 }
 
-export function adminConsentLink(input: { clientId: string; appOrigin: string; state: string }): string {
-  // `organizations`, never `common`: admin consent happens in a tenant.
-  const q = new URLSearchParams({ client_id: input.clientId, redirect_uri: `${input.appOrigin}${CONSENT_RETURN_PATH}`, state: input.state });
-  return `${LOGIN}/organizations/adminconsent?${q}`;
+const isTenantId = (value: unknown): value is string => typeof value === "string" && GUID.test(value) && value.toLowerCase() !== PERSONAL_ACCOUNTS_TENANT;
+
+// Step 1: Microsoft's sign-in, which proves the user's tenant.
+export function signInLink(input: { clientId: string; appOrigin: string; state: string; nonce: string }): string {
+  const q = new URLSearchParams({
+    client_id: input.clientId,
+    response_type: "code",
+    redirect_uri: `${input.appOrigin}${SIGN_IN_RETURN_PATH}`,
+    response_mode: "query",
+    scope: "openid",
+    state: input.state,
+    nonce: input.nonce,
+  });
+  return `${LOGIN}/organizations/oauth2/v2.0/authorize?${q}`;
 }
+
+// Step 2: admin consent in the signed-in tenant, never `organizations` or `common`.
+export function adminConsentLink(input: { clientId: string; appOrigin: string; state: string; tenantId: string }): string {
+  const q = new URLSearchParams({ client_id: input.clientId, redirect_uri: `${input.appOrigin}${CONSENT_RETURN_PATH}`, state: input.state });
+  return `${LOGIN}/${encodeURIComponent(input.tenantId)}/adminconsent?${q}`;
+}
+
+const fromBase64url = (part: string): Uint8Array =>
+  Uint8Array.from(atob(part.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (part.length % 4)) % 4)), (c) => c.charCodeAt(0));
+const jsonPart = (part: string): Record<string, unknown> => JSON.parse(new TextDecoder().decode(fromBase64url(part))) as Record<string, unknown>;
+
+const notVerified = (why: string): ConnectProblem =>
+  new ConnectProblem(`Microsoft's sign-in could not be verified (${why}), so nothing was saved. Tap Connect Microsoft Foundry again.`);
+
+// Checks a Microsoft ID token and returns the tenant it proves. Every refusal
+// is a ConnectProblem; nothing is trusted before the signature checks out.
+export async function verifyMicrosoftIdToken(
+  idToken: string,
+  expected: { clientId: string; nonce: string; now: Date },
+  fetcher: typeof fetch,
+): Promise<{ tenantId: string }> {
+  const parts = idToken.split(".");
+  if (parts.length !== 3) throw notVerified("not a signed token");
+  let header: Record<string, unknown>;
+  let claims: Record<string, unknown>;
+  try {
+    header = jsonPart(parts[0]!);
+    claims = jsonPart(parts[1]!);
+  } catch {
+    throw notVerified("not a signed token");
+  }
+  if (header.alg !== "RS256" || typeof header.kid !== "string") throw notVerified("not signed with one of Microsoft's keys");
+  // The tenant picks which of Microsoft's own key sets to fetch; the token
+  // is trusted only once its signature verifies against that set.
+  const tid = claims.tid;
+  if (!isTenantId(tid)) throw notVerified("no work or school organisation in it");
+  const tenantId = tid.toLowerCase();
+  const response = await fetcher(`${LOGIN}/${tenantId}/discovery/v2.0/keys`).catch(() => undefined);
+  if (!response) throw notVerified("Microsoft's keys could not be fetched");
+  const keySet = (await readBody(response)) as { keys?: Array<JsonWebKey & { kid?: string }> } | undefined;
+  const jwk = response.ok && Array.isArray(keySet?.keys) ? keySet.keys.find((k) => k.kid === header.kid && k.kty === "RSA") : undefined;
+  if (!jwk?.n || !jwk.e) throw notVerified("not signed with one of Microsoft's keys");
+  const RS256 = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const signed = await crypto.subtle
+    .importKey("jwk", { kty: "RSA", n: jwk.n, e: jwk.e, alg: "RS256", ext: true }, RS256, false, ["verify"])
+    .then((key) => crypto.subtle.verify(RS256, key, fromBase64url(parts[2]!), new TextEncoder().encode(`${parts[0]}.${parts[1]}`)))
+    .catch(() => false);
+  if (!signed) throw notVerified("its signature does not match Microsoft's key");
+  if (claims.iss !== `${LOGIN}/${tid}/v2.0`) throw notVerified("it was not issued by Microsoft for that organisation");
+  if (claims.aud !== expected.clientId) throw notVerified("it was issued for another app");
+  const t = Math.floor(expected.now.getTime() / 1000);
+  if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_S <= t) throw notVerified("it has expired");
+  if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_S > t) throw notVerified("it is not valid yet");
+  if (typeof claims.nonce !== "string" || claims.nonce !== expected.nonce) throw notVerified("it was not made for this Connect");
+  return { tenantId };
+}
+
+const randomValue = (): string => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
 async function importPkcs8(pem: string): Promise<CryptoKey> {
   const base64 = pem.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, "").replace(/\s+/g, "");
@@ -256,6 +375,46 @@ const PORTAL_RESOURCES: Link = { label: "Open your resource's Access control", h
 const PORTAL_ENTERPRISE_APPS: Link = { label: "Open your Enterprise applications", href: "https://portal.azure.com/#view/Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview" };
 
 export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date()): ProviderPlugin {
+  const federated = env.FOUNDRY_CREDENTIAL === "federated";
+  const missingAppValues = (): string[] => [
+    ...(env.ENTRA_CLIENT_ID ? [] : ["ENTRA_CLIENT_ID"]),
+    ...(federated ? [] : [...(env.ENTRA_CERT_KEY ? [] : ["ENTRA_CERT_KEY"]), ...(env.ENTRA_CERT_THUMBPRINT ? [] : ["ENTRA_CERT_THUMBPRINT"])]),
+  ];
+
+  // The app proving itself at a token endpoint: `organizations` for the
+  // sign-in, the user's tenant for Foundry tokens.
+  const appAssertion = async (tenant: string): Promise<string> =>
+    federated
+      ? mintIdToken(await readIssuer(env), { audience: ENTRA_FEDERATED_AUDIENCE, subject: ENTRA_SUBJECT, now: now() })
+      : certificateAssertion({ clientId: env.ENTRA_CLIENT_ID!, tenantId: tenant, keyPem: env.ENTRA_CERT_KEY!, thumbprint: env.ENTRA_CERT_THUMBPRINT!, now: now() });
+
+  // The sign-in's code, redeemed for its ID token.
+  const redeemSignIn = async (code: string, appOrigin: string): Promise<string> => {
+    const missing = missingAppValues();
+    if (missing.length) throw new AppNotConfigured(missing);
+    const response = await fetcher(`${LOGIN}/organizations/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: env.ENTRA_CLIENT_ID!,
+        scope: "openid",
+        code,
+        redirect_uri: `${appOrigin}${SIGN_IN_RETURN_PATH}`,
+        grant_type: "authorization_code",
+        client_assertion_type: ASSERTION_TYPE,
+        client_assertion: await appAssertion("organizations"),
+      }).toString(),
+    }).catch(() => undefined);
+    if (!response) throw new ConnectProblem("Microsoft did not answer the sign-in. Tap Connect Microsoft Foundry again.");
+    const body = await readBody(response);
+    const idToken = (body as { id_token?: unknown } | null)?.id_token;
+    if (!response.ok || typeof idToken !== "string") {
+      const { refusal } = entraRefusal(response.status, body);
+      throw new ConnectProblem(`Microsoft did not accept the sign-in: ${refusal.message || refusal.errorName}. Tap Connect Microsoft Foundry again.`);
+    }
+    return idToken;
+  };
+
   const connect: ConnectMethod = {
     guide: {
       name: "Microsoft Foundry",
@@ -265,13 +424,14 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       steps: [
         "A paid Azure subscription with pay-as-you-go billing (not a free trial, student, credit-only or reseller subscription), billed in a country where Anthropic sells Claude, with a Foundry project in a region that offers the model.",
         "For Claude: Build → Catalog → Model Catalog → the model (Claude Haiku 5.5 for the test call) → Deploy → Custom settings, then accept the Marketplace terms. Keep the suggested deployment name.",
-        "Type your Foundry resource address and tap <strong>Connect Microsoft Foundry</strong>: sign in on Microsoft's page and tap <strong>Accept</strong>.",
+        "Type your Foundry resource address and tap <strong>Connect Microsoft Foundry</strong>: sign in with Microsoft, then tap <strong>Accept</strong>. Your organisation is taken from this sign-in, so only you can connect it.",
         "On your resource: Access control (IAM) → Add → Add role assignment → the role → “Chief of staff” → Review + assign.",
         "Turn off key authentication on the resource, so no key can be read from it.",
       ],
       checkedOn: "2026-11-25",
       pages: [
         { label: "Claude in Foundry", href: "https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude" },
+        { label: "Microsoft sign-in", href: "https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow" },
         { label: "Keyless Microsoft Entra ID", href: "https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/configure-entra-id" },
         { label: "Add a role assignment", href: "https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-portal" },
         { label: "Disable key authentication", href: "https://learn.microsoft.com/en-us/azure/ai-services/disable-local-auth" },
@@ -290,22 +450,45 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       },
     ],
     start(typed, { appOrigin, consentState }) {
-      if (!env.ENTRA_CLIENT_ID) throw new AppNotConfigured(["ENTRA_CLIENT_ID"]);
+      // The sign-in's code is redeemed with the app's own credential, so it must exist first.
+      const missing = missingAppValues();
+      if (missing.length) throw new AppNotConfigured(missing);
       const endpoint = typed.endpoint!.replace(/\/+$/, "");
-      return { kind: "consent", pending: { endpoint }, open: adminConsentLink({ clientId: env.ENTRA_CLIENT_ID, appOrigin, state: consentState }) };
+      const nonce = randomValue();
+      return { kind: "consent", pending: { endpoint, nonce }, open: signInLink({ clientId: env.ENTRA_CLIENT_ID!, appOrigin, state: consentState, nonce }), returnsTo: "signed-in" };
     },
-    finish(pending, returned) {
+    async finish(pending, returned, { appOrigin, consentState }) {
+      const endpoint = pending.endpoint!;
+      if (!pending.tenantId) {
+        // Back from the sign-in: the tenant comes from the signed ID token alone.
+        const error = returned.get("error");
+        if (error) throw new ConnectProblem(`Microsoft's sign-in did not complete: ${returned.get("error_description")?.split(/\r?\n/)[0] || error}`);
+        const code = returned.get("code");
+        if (!code || !pending.nonce) throw new ConnectProblem("Microsoft's sign-in came back without a sign-in. Tap Connect Microsoft Foundry again.");
+        const idToken = await redeemSignIn(code, appOrigin);
+        const { tenantId } = await verifyMicrosoftIdToken(idToken, { clientId: env.ENTRA_CLIENT_ID!, nonce: pending.nonce, now: now() }, fetcher);
+        return {
+          kind: "consent",
+          pending: { endpoint, tenantId },
+          open: adminConsentLink({ clientId: env.ENTRA_CLIENT_ID!, appOrigin, state: consentState, tenantId }),
+          returnsTo: "consented",
+        };
+      }
+      // Back from admin consent: its `tenant` is checked, never taken.
       const error = returned.get("error");
       if (error) {
         throw new ConnectProblem(`Microsoft's consent page did not accept: ${returned.get("error_description") || error}`);
       }
-      const tenantId = returned.get("tenant") ?? "";
-      if (returned.get("admin_consent")?.toLowerCase() !== "true" || !GUID.test(tenantId)) {
+      const tenant = returned.get("tenant") ?? "";
+      if (returned.get("admin_consent")?.toLowerCase() !== "true" || !GUID.test(tenant)) {
         throw new ConnectProblem("Microsoft's consent page did not say the app was accepted. Tap Connect Microsoft Foundry again.");
       }
-      // The tenant only names where the app asks for its tokens; the token
-      // request itself proves the consent.
-      return { tenantId: tenantId.toLowerCase(), endpoint: pending.endpoint! };
+      if (tenant.toLowerCase() !== pending.tenantId) {
+        throw new ConnectProblem(
+          "Microsoft's consent page answered for a different organisation than the one you signed in with, so nothing was saved. Tap Connect Microsoft Foundry again and accept in your own organisation.",
+        );
+      }
+      return { kind: "connection", fields: { tenantId: pending.tenantId, endpoint } };
     },
     testModel: "Claude Haiku 5.5",
     knownModels: FOUNDRY_CLAUDE_MODELS,
@@ -365,28 +548,23 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
 
   return {
     provider: "foundry",
-    version: "foundry-1.0.0",
+    version: "foundry-1.1.0",
     connectionFields: ["tenantId", "endpoint"],
     priceSource: ["azure-retail", "maintainer-read"],
     connect,
+    // Only in the tenant on the user's own record, which only a verified
+    // sign-in writes: never `organizations`, `common` or a personal account.
     async mintCredential(connection) {
-      const clientId = env.ENTRA_CLIENT_ID;
-      const federated = env.FOUNDRY_CREDENTIAL === "federated";
-      const missing = [
-        ...(clientId ? [] : ["ENTRA_CLIENT_ID"]),
-        ...(federated ? [] : [...(env.ENTRA_CERT_KEY ? [] : ["ENTRA_CERT_KEY"]), ...(env.ENTRA_CERT_THUMBPRINT ? [] : ["ENTRA_CERT_THUMBPRINT"])]),
-      ];
+      const missing = missingAppValues();
       if (missing.length) throw new AppNotConfigured(missing);
-      const at = now();
-      const tenantId = connection.tenantId!;
-      const assertion = federated
-        ? await mintIdToken(await readIssuer(env), { audience: ENTRA_FEDERATED_AUDIENCE, subject: ENTRA_SUBJECT, now: at })
-        : await certificateAssertion({ clientId: clientId!, tenantId, keyPem: env.ENTRA_CERT_KEY!, thumbprint: env.ENTRA_CERT_THUMBPRINT!, now: at });
+      const tenantId = connection.tenantId;
+      if (!isTenantId(tenantId)) throw new Error("the Foundry connection's tenant is not one organisation's tenant ID");
+      const assertion = await appAssertion(tenantId);
       const response = await fetcher(`${LOGIN}/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
-          client_id: clientId!,
+          client_id: env.ENTRA_CLIENT_ID!,
           scope: FOUNDRY_SCOPE,
           client_assertion_type: ASSERTION_TYPE,
           client_assertion: assertion,

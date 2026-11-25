@@ -47,8 +47,8 @@
   // providers"): the secrets ISSUER_KEYS and ENTRA_CERT_KEY, and the
   // variables AWS_APP_ROLE_ARN, AWS_REGION, BEDROCK_TEMPLATE_URL,
   // ENTRA_CLIENT_ID, ENTRA_CERT_THUMBPRINT, FOUNDRY_CREDENTIAL,
-  // GOOGLE_WIF_PROVIDER and GOOGLE_SERVICE_ACCOUNT, none of them secret
-  // (APP_ORIGIN is in "vars" above). The vault key (32 random bytes, base64; src/vault.ts) goes
+  // GOOGLE_WIF_PROVIDER, none of them secret (APP_ORIGIN is in "vars" above).
+  // The vault key (32 random bytes, base64; src/vault.ts) goes
   // in Secrets Store as a binding with the first ticket that stores a vault
   // item; the three v1 provider connections need none.
 }
