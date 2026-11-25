@@ -346,7 +346,7 @@ export async function handleProviders(
 
   if (verb === "signed-in" || verb === "consented") {
     if (request.method !== "GET") return new Response(null, { status: 405 });
-    const outcome = await finishConsent(db, plugins, { userId, provider, returnedTo: verb, returned: url.searchParams, appOrigin: input.appOrigin, now });
+    const outcome = await finishConsent(db, plugins, { userId, provider, returned: url.searchParams, appOrigin: input.appOrigin, now });
     if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
     // Microsoft's sign-in leads on to its admin consent.
     return outcome.open ? Response.redirect(outcome.open, 303) : back(provider);

@@ -106,19 +106,16 @@ export interface ConnectField {
   problem: string;
 }
 
-// Where a provider's own page sends the user back to, under
-// /models/setup/providers/<id>/: Microsoft's sign-in returns to `signed-in`,
-// its admin consent to `consented`.
-export type ReturnPath = "signed-in" | "consented";
-
 // What tapping "Connect <Provider>" leads to: the connection record at once
 // (and, for Bedrock, the AWS page to open), or a provider page that comes
-// back to `returnsTo` (Foundry: Microsoft's sign-in, which proves the user's
-// tenant, then its admin consent in that tenant). `pending` is what the
-// plug-in keeps until then, on the user's own check row; it is not secret.
+// back under /models/setup/providers/<id>/ (Foundry: Microsoft's sign-in, at
+// `signed-in`, which proves the user's tenant, then its admin consent in that
+// tenant, at `consented`). `pending` is what the plug-in keeps until then, on
+// the user's own check row; it is not secret, and it alone says which page
+// the answer is from.
 export type ConnectStart =
   | { kind: "connection"; fields: ConnectionFields; open?: string }
-  | { kind: "consent"; pending: Record<string, string>; open: string; returnsTo: ReturnPath };
+  | { kind: "consent"; pending: Record<string, string>; open: string };
 
 export interface Guide {
   // "Amazon Bedrock": the button reads "Connect Amazon Bedrock".
@@ -152,7 +149,7 @@ export interface ConnectMethod {
     typed: Record<string, string>,
     context: { userId: string; appOrigin: string; consentState: string; existing?: ConnectionFields },
   ): ConnectStart;
-  // Back from a provider page, at the `returnsTo` it was sent with: the
+  // Back from a provider page, with the pending fields it was sent with: the
   // record, or the next provider page (with a fresh `consentState`, the old
   // one being spent). Throws a ConnectProblem, with a plain message, when the
   // page refused or its answer cannot be trusted.

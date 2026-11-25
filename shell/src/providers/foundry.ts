@@ -1,16 +1,40 @@
 // The Microsoft Foundry plug-in (design-v3 1.6, T16).
 //
-// Connect: the user types their Foundry resource address and taps Connect
-// Microsoft Foundry. Every user grants the same app, so the tenant is taken
-// only from proof that this user signed in to it (T116, design-v3 1.4):
-//   1. Microsoft's sign-in (authorization code flow at `/organizations`,
-//      scope `openid`), with a state and a nonce kept on the user's own check
-//      row, each used once. The app redeems the code with its own credential,
-//      checks the ID token's signature against Microsoft's published keys
-//      (by `kid`), its `aud` (the app's client ID), its `iss` (Microsoft's
-//      v2.0 issuer for that `tid`), `exp`, `nbf` and the nonce, and keeps
-//      the `tid`.
-//   2. Microsoft's admin consent in that tenant (`/{tid}/adminconsent`, not
+// Connect: the user types their Foundry resource address and their Azure
+// directory's ID and taps Connect Microsoft Foundry. Every user grants the
+// same app, so the tenant is taken only from proof that this user signed in
+// to it (T116, design-v3 1.4):
+//   1. Microsoft's sign-in (authorization code flow at the typed directory's
+//      own endpoint, `/{tenant}`, scope `openid`), with a state and a nonce
+//      kept on the user's own check row, each used once. The app redeems the
+//      code with its own credential, checks the ID token's signature against
+//      Microsoft's published keys (by `kid`), its `aud` (the app's client
+//      ID), its `iss` (Microsoft's v2.0 issuer for that `tid`), its `tid`
+//      (the typed directory), `exp`, `nbf` and the nonce, and keeps the `tid`.
+//      The typed ID only says where to sign in; the tenant kept is the signed
+//      token's.
+//   2. Personal Microsoft accounts only (the owner, 2026-11-25): the signed
+//      token's `idp` must name the personal Microsoft account provider
+//      ("live.com", or an STS address carrying the Microsoft account tenant),
+//      that is, a personal account signed in to its own Azure directory (its
+//      Default Directory). A work or school account is refused, with Bedrock
+//      and Vertex AI named as the way in, and nothing is stored. The test is
+//      never "`tid` is the consumers tenant": every personal account has that
+//      `tid` outside Azure, and here `tid` is the user's own directory. The
+//      sign-in is at `/{tenant}`, not `/organizations`, because Microsoft's
+//      `organizations` admits "only users with work or school accounts"; a
+//      tenant's own endpoint admits its "directory guests with a personal
+//      Microsoft account". Whether the token tells the two apart every time
+//      is checked live (M2 step 11, check 8); Microsoft says `idp` "may be"
+//      those values.
+//      There is no one-app-user-per-directory rule. Someone a user invites
+//      into their own directory who also uses the app can sign in to it and
+//      connect its resources; that is the directory owner's call (the owner,
+//      2026-11-25: "i dont think that should be imagined as a gap, because
+//      its now upto that user that added the other guy onto their directory.
+//      the model related expense managements now exclusively falls on their
+//      shoulders, not mine at all.").
+//   3. Microsoft's admin consent in that tenant (`/{tid}/adminconsent`, not
 //      `organizations`), which adds the app's multi-tenant Entra registration
 //      ("Chief of staff", in the owner's tenant) to it. The callback's
 //      `tenant` is only checked against the signed-in one: a different one
@@ -55,8 +79,12 @@
 //   https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow
 // - OpenID Connect [2026-06-30]: `organizations` means "Only users with work
 //   or school accounts from Microsoft Entra ID can sign in to the
-//   application"; the discovery document at /{tenant}/v2.0/.well-known/
-//   openid-configuration (read 2026-11-25 for `organizations`: issuer
+//   application"; a Directory (tenant) ID means "Only users from a specific
+//   Microsoft Entra tenant (directory members with a work or school account
+//   or directory guests with a personal Microsoft account) can sign in", and
+//   "for guest scenarios where you sign a user from one tenant into another
+//   tenant, you must provide the tenant identifier"; the discovery document
+//   at /{tenant}/v2.0/.well-known/openid-configuration (issuer
 //   "https://login.microsoftonline.com/{tenantid}/v2.0", jwks_uri
 //   ".../discovery/v2.0/keys").
 //   https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc
@@ -66,9 +94,15 @@
 //   nonce claim in the payload must match the nonce parameter passed into the
 //   /authorize endpoint".
 //   https://learn.microsoft.com/en-us/entra/identity-platform/id-tokens
-// - ID token claims [2023-05-30]: `tid` "Represents the tenant that the user
-//   is signing in to", 9188040d-6c67-4c5b-b112-36a304b66dad for personal
-//   accounts; a v2.0 `iss` "ends in /v2.0".
+// - ID token claims [2023-05-30, updated 2026-06-15]: `tid` "Represents the
+//   tenant that the user is signing in to", 9188040d-6c67-4c5b-b112-36a304b66dad
+//   "for sign-ins to the personal Microsoft account tenant"; a v2.0 `iss`
+//   "ends in /v2.0"; `idp` "is identical to the value of the issuer claim
+//   unless the user account isn't in the same tenant as the issuer", and
+//   "for personal accounts being used in an organizational context (for
+//   instance, a personal account invited to a tenant), the idp claim may be
+//   'live.com' or an STS URI containing the Microsoft account tenant
+//   9188040d-6c67-4c5b-b112-36a304b66dad".
 //   https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference
 // - Signing key rollover [2024-10-28]: "Discover keys using the
 //   tenant-specific endpoint"; keys "roll over on a periodic basis", so they
@@ -135,8 +169,11 @@ export const ENTRA_FEDERATED_AUDIENCE = "api://AzureADTokenExchange";
 export const ENTRA_SUBJECT = "chief-of-staff:foundry";
 export const CONSENT_RETURN_PATH = `${PROVIDERS_PATH}/foundry/consented`;
 export const SIGN_IN_RETURN_PATH = `${PROVIDERS_PATH}/foundry/signed-in`;
-// The `tid` of every personal Microsoft account, which cannot hold Foundry.
+// The Microsoft account tenant: the `tid` of every personal account's
+// sign-in outside an Azure directory (which cannot hold Foundry), and the
+// tenant in the `idp` of a personal account signed in to one.
 const PERSONAL_ACCOUNTS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+const PERSONAL_IDP = new RegExp(`^(?:live\\.com|https://(?:sts\\.windows\\.net|login\\.microsoftonline\\.com)/${PERSONAL_ACCOUNTS_TENANT}(?:/v2\\.0)?/?)$`, "i");
 // How far the app's clock may differ from Microsoft's, for `exp` and `nbf`.
 const CLOCK_SKEW_S = 300;
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -274,8 +311,8 @@ export function chatCompletionsText(body: unknown): string | undefined {
 
 const isTenantId = (value: unknown): value is string => typeof value === "string" && GUID.test(value) && value.toLowerCase() !== PERSONAL_ACCOUNTS_TENANT;
 
-// Step 1: Microsoft's sign-in, which proves the user's tenant.
-export function signInLink(input: { clientId: string; appOrigin: string; state: string; nonce: string }): string {
+// Step 1: Microsoft's sign-in at the user's own directory, which proves the tenant.
+export function signInLink(input: { clientId: string; appOrigin: string; state: string; nonce: string; tenantId: string }): string {
   const q = new URLSearchParams({
     client_id: input.clientId,
     response_type: "code",
@@ -285,10 +322,10 @@ export function signInLink(input: { clientId: string; appOrigin: string; state: 
     state: input.state,
     nonce: input.nonce,
   });
-  return `${LOGIN}/organizations/oauth2/v2.0/authorize?${q}`;
+  return `${LOGIN}/${encodeURIComponent(input.tenantId)}/oauth2/v2.0/authorize?${q}`;
 }
 
-// Step 2: admin consent in the signed-in tenant, never `organizations` or `common`.
+// Step 3: admin consent in the signed-in tenant, never `organizations` or `common`.
 export function adminConsentLink(input: { clientId: string; appOrigin: string; state: string; tenantId: string }): string {
   const q = new URLSearchParams({ client_id: input.clientId, redirect_uri: `${input.appOrigin}${CONSENT_RETURN_PATH}`, state: input.state });
   return `${LOGIN}/${encodeURIComponent(input.tenantId)}/adminconsent?${q}`;
@@ -301,13 +338,14 @@ const jsonPart = (part: string): Record<string, unknown> => JSON.parse(new TextD
 const notVerified = (why: string): ConnectProblem =>
   new ConnectProblem(`Microsoft's sign-in could not be verified (${why}), so nothing was saved. Tap Connect Microsoft Foundry again.`);
 
-// Checks a Microsoft ID token and returns the tenant it proves. Every refusal
-// is a ConnectProblem; nothing is trusted before the signature checks out.
+// Checks a Microsoft ID token and returns the tenant it proves and whether
+// its account is a personal one. Every refusal is a ConnectProblem; nothing
+// is trusted before the signature checks out.
 export async function verifyMicrosoftIdToken(
   idToken: string,
-  expected: { clientId: string; nonce: string; now: Date },
+  expected: { clientId: string; tenantId: string; nonce: string; now: Date },
   fetcher: typeof fetch,
-): Promise<{ tenantId: string }> {
+): Promise<{ tenantId: string; personal: boolean }> {
   const parts = idToken.split(".");
   if (parts.length !== 3) throw notVerified("not a signed token");
   let header: Record<string, unknown>;
@@ -322,8 +360,9 @@ export async function verifyMicrosoftIdToken(
   // The tenant picks which of Microsoft's own key sets to fetch; the token
   // is trusted only once its signature verifies against that set.
   const tid = claims.tid;
-  if (!isTenantId(tid)) throw notVerified("no work or school organisation in it");
+  if (!isTenantId(tid)) throw notVerified("no Azure directory in it");
   const tenantId = tid.toLowerCase();
+  if (tenantId !== expected.tenantId.toLowerCase()) throw notVerified("it is for another directory than the one typed");
   const response = await fetcher(`${LOGIN}/${tenantId}/discovery/v2.0/keys`).catch(() => undefined);
   if (!response) throw notVerified("Microsoft's keys could not be fetched");
   const keySet = (await readBody(response)) as { keys?: Array<JsonWebKey & { kid?: string }> } | undefined;
@@ -341,7 +380,7 @@ export async function verifyMicrosoftIdToken(
   if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_S <= t) throw notVerified("it has expired");
   if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_S > t) throw notVerified("it is not valid yet");
   if (typeof claims.nonce !== "string" || claims.nonce !== expected.nonce) throw notVerified("it was not made for this Connect");
-  return { tenantId };
+  return { tenantId, personal: typeof claims.idp === "string" && PERSONAL_IDP.test(claims.idp) };
 }
 
 const randomValue = (): string => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -381,18 +420,17 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
     ...(federated ? [] : [...(env.ENTRA_CERT_KEY ? [] : ["ENTRA_CERT_KEY"]), ...(env.ENTRA_CERT_THUMBPRINT ? [] : ["ENTRA_CERT_THUMBPRINT"])]),
   ];
 
-  // The app proving itself at a token endpoint: `organizations` for the
-  // sign-in, the user's tenant for Foundry tokens.
+  // The app proving itself at the user's tenant's token endpoint.
   const appAssertion = async (tenant: string): Promise<string> =>
     federated
       ? mintIdToken(await readIssuer(env), { audience: ENTRA_FEDERATED_AUDIENCE, subject: ENTRA_SUBJECT, now: now() })
       : certificateAssertion({ clientId: env.ENTRA_CLIENT_ID!, tenantId: tenant, keyPem: env.ENTRA_CERT_KEY!, thumbprint: env.ENTRA_CERT_THUMBPRINT!, now: now() });
 
-  // The sign-in's code, redeemed for its ID token.
-  const redeemSignIn = async (code: string, appOrigin: string): Promise<string> => {
+  // The sign-in's code, redeemed for its ID token at the directory it signed in to.
+  const redeemSignIn = async (code: string, tenantId: string, appOrigin: string): Promise<string> => {
     const missing = missingAppValues();
     if (missing.length) throw new AppNotConfigured(missing);
-    const response = await fetcher(`${LOGIN}/organizations/oauth2/v2.0/token`, {
+    const response = await fetcher(`${LOGIN}/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -402,7 +440,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
         redirect_uri: `${appOrigin}${SIGN_IN_RETURN_PATH}`,
         grant_type: "authorization_code",
         client_assertion_type: ASSERTION_TYPE,
-        client_assertion: await appAssertion("organizations"),
+        client_assertion: await appAssertion(tenantId),
       }).toString(),
     }).catch(() => undefined);
     if (!response) throw new ConnectProblem("Microsoft did not answer the sign-in. Tap Connect Microsoft Foundry again.");
@@ -422,9 +460,9 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       vendor: "Foundry",
       recommendedForFriends: false,
       steps: [
-        "A paid Azure subscription with pay-as-you-go billing (not a free trial, student, credit-only or reseller subscription), billed in a country where Anthropic sells Claude, with a Foundry project in a region that offers the model.",
+        "A personal Microsoft account (not a work or school account) with a paid Azure subscription with pay-as-you-go billing (not a free trial, student, credit-only or reseller subscription), billed in a country where Anthropic sells Claude, with a Foundry project in a region that offers the model.",
         "For Claude: Build → Catalog → Model Catalog → the model (Claude Haiku 5.5 for the test call) → Deploy → Custom settings, then accept the Marketplace terms. Keep the suggested deployment name.",
-        "Type your Foundry resource address and tap <strong>Connect Microsoft Foundry</strong>: sign in with Microsoft, then tap <strong>Accept</strong>. Your organisation is taken from this sign-in, so only you can connect it.",
+        "Type your Foundry resource address and your Directory (tenant) ID (Azure portal → Microsoft Entra ID → Overview → Tenant ID), and tap <strong>Connect Microsoft Foundry</strong>: sign in with your personal Microsoft account, then tap <strong>Accept</strong>. Your directory is taken from this sign-in, so only you can connect it. A work or school account can't connect Foundry here: connect Amazon Bedrock or Google Vertex AI instead.",
         "On your resource: Access control (IAM) → Add → Add role assignment → the role → “Chief of staff” → Review + assign.",
         "Turn off key authentication on the resource, so no key can be read from it.",
       ],
@@ -448,32 +486,45 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
         pattern: ENDPOINT.source.slice(1, -1),
         problem: "A Foundry resource address looks like https://<resource>.services.ai.azure.com.",
       },
+      {
+        name: "tenantId",
+        label: "Directory (tenant) ID",
+        placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        pattern: GUID.source.slice(1, -1),
+        problem: "A Directory (tenant) ID looks like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx: Azure portal → Microsoft Entra ID → Overview → Tenant ID.",
+      },
     ],
     start(typed, { appOrigin, consentState }) {
       // The sign-in's code is redeemed with the app's own credential, so it must exist first.
       const missing = missingAppValues();
       if (missing.length) throw new AppNotConfigured(missing);
       const endpoint = typed.endpoint!.replace(/\/+$/, "");
+      // Only where to sign in: the tenant kept is the signed token's.
+      const signInTenant = typed.tenantId!.toLowerCase();
+      if (!isTenantId(signInTenant)) throw new ConnectProblem("That is the ID every personal Microsoft account shares, not your Azure directory's: Azure portal → Microsoft Entra ID → Overview → Tenant ID.");
       const nonce = randomValue();
-      return { kind: "consent", pending: { endpoint, nonce }, open: signInLink({ clientId: env.ENTRA_CLIENT_ID!, appOrigin, state: consentState, nonce }), returnsTo: "signed-in" };
+      return { kind: "consent", pending: { endpoint, signInTenant, nonce }, open: signInLink({ clientId: env.ENTRA_CLIENT_ID!, appOrigin, state: consentState, nonce, tenantId: signInTenant }) };
     },
+    // The leg is picked by the server-held pending fields alone: a sign-in
+    // keeps its nonce, the consent only the signed-in tenant.
     async finish(pending, returned, { appOrigin, consentState }) {
       const endpoint = pending.endpoint!;
-      if (!pending.tenantId) {
+      if (pending.nonce) {
         // Back from the sign-in: the tenant comes from the signed ID token alone.
         const error = returned.get("error");
         if (error) throw new ConnectProblem(`Microsoft's sign-in did not complete: ${returned.get("error_description")?.split(/\r?\n/)[0] || error}`);
         const code = returned.get("code");
-        if (!code || !pending.nonce) throw new ConnectProblem("Microsoft's sign-in came back without a sign-in. Tap Connect Microsoft Foundry again.");
-        const idToken = await redeemSignIn(code, appOrigin);
-        const { tenantId } = await verifyMicrosoftIdToken(idToken, { clientId: env.ENTRA_CLIENT_ID!, nonce: pending.nonce, now: now() }, fetcher);
-        return {
-          kind: "consent",
-          pending: { endpoint, tenantId },
-          open: adminConsentLink({ clientId: env.ENTRA_CLIENT_ID!, appOrigin, state: consentState, tenantId }),
-          returnsTo: "consented",
-        };
+        if (!code || !pending.signInTenant) throw new ConnectProblem("Microsoft's sign-in came back without a sign-in. Tap Connect Microsoft Foundry again.");
+        const idToken = await redeemSignIn(code, pending.signInTenant, appOrigin);
+        const { tenantId, personal } = await verifyMicrosoftIdToken(idToken, { clientId: env.ENTRA_CLIENT_ID!, tenantId: pending.signInTenant, nonce: pending.nonce, now: now() }, fetcher);
+        if (!personal) {
+          throw new ConnectProblem(
+            "Microsoft Foundry connects here only with a personal Microsoft account, and you signed in with a work or school account, so nothing was saved. Connect Amazon Bedrock or Google Vertex AI instead.",
+          );
+        }
+        return { kind: "consent", pending: { endpoint, tenantId }, open: adminConsentLink({ clientId: env.ENTRA_CLIENT_ID!, appOrigin, state: consentState, tenantId }) };
       }
+      if (!pending.tenantId) throw new ConnectProblem("Microsoft's answer was not for this Connect. Tap Connect Microsoft Foundry again.");
       // Back from admin consent: its `tenant` is checked, never taken.
       const error = returned.get("error");
       if (error) {
@@ -553,7 +604,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
     priceSource: ["azure-retail", "maintainer-read"],
     connect,
     // Only in the tenant on the user's own record, which only a verified
-    // sign-in writes: never `organizations`, `common` or a personal account.
+    // sign-in writes: never `organizations`, `common` or the Microsoft account tenant.
     async mintCredential(connection) {
       const missing = missingAppValues();
       if (missing.length) throw new AppNotConfigured(missing);

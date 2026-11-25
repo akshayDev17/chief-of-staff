@@ -16,15 +16,26 @@ tenant in Foundry's consent callback, reaches nothing of theirs.
 | Provider | Plug-in | The user types | The record holds | The credential |
 | --- | --- | --- | --- | --- |
 | Amazon Bedrock | `bedrock.ts` | the 12-digit AWS account ID | the invoke-only role's ARN, the user's external ID | the issuer's token → `AssumeRoleWithWebIdentity` (the app's role) → `AssumeRole` (the user's role, with the external ID): 1 hour |
-| Microsoft Foundry | `foundry.ts` | the Foundry resource address | the tenant ID (the `tid` of the user's own Microsoft sign-in, its ID token verified against Microsoft's keys; admin consent's callback is only checked against it), the endpoint | client credentials in that tenant only, proven by the app's certificate (or, with `FOUNDRY_CREDENTIAL=federated`, the issuer's token): 60 to 90 minutes |
+| Microsoft Foundry | `foundry.ts` | the Foundry resource address, the Azure directory's ID (only where to sign in) | the tenant ID (the `tid` of the user's own Microsoft sign-in, its ID token verified against Microsoft's keys and its `idp` showing a personal Microsoft account; admin consent's callback is only checked against it), the endpoint | client credentials in that tenant only, proven by the app's certificate (or, with `FOUNDRY_CREDENTIAL=federated`, the issuer's token): 60 to 90 minutes |
 | Google Vertex AI | `vertex.ts` | the project ID | the project ID | the issuer's token with the user's own app ID as its subject → Google's STS (Workload Identity Federation) → that user's own federated principal's token, used directly: 1 hour |
 
-Connect Microsoft Foundry is two Microsoft pages: the sign-in
-(`/organizations`, scope `openid`, returning to
+Connect Microsoft Foundry is two Microsoft pages: the sign-in at the typed
+directory's own endpoint (`/{tenant}`, scope `openid`, returning to
 `/models/setup/providers/foundry/signed-in`), then admin consent in the
 signed-in tenant (`/{tid}/adminconsent`, returning to `.../consented`). Each
 leg's state, and the sign-in's nonce, sit on the user's own check row and
-are spent on first use. Connect Google Vertex AI shows the user's own
+are spent on first use; those pending fields alone say which leg an answer
+is for. Foundry is for personal Microsoft accounts only (the owner,
+2026-11-25): the signed token's `idp` must name the personal Microsoft
+account provider, never "`tid` is the consumers tenant", and a work or school
+sign-in is refused at Connect, naming Bedrock and Vertex AI, with nothing
+stored. There is no one-app-user-per-directory rule: someone a user invites
+into their own directory who also uses the app is that directory owner's
+responsibility (the owner: "i dont think that should be imagined as a gap,
+because its now upto that user that added the other guy onto their
+directory. the model related expense managements now exclusively falls on
+their shoulders, not mine at all."). Whether the token tells the two apart
+every time is checked live in M2 step 11, check 8. Connect Google Vertex AI shows the user's own
 principal to grant,
 `principal://iam.googleapis.com/projects/<pool project number>/locations/global/workloadIdentityPools/<pool>/subject/<user id>`,
 derived from `GOOGLE_WIF_PROVIDER`; no user's project grants a service

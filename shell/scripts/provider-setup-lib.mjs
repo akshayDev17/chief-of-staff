@@ -204,6 +204,13 @@ ${vars(v.google.workerVariables)}
     admin consent return:      ${v.entra.registration.redirectUris.uris[1]}
   App registration:
 ${json(v.entra.registration)}
+  Foundry connects personal Microsoft accounts only (T116). Their sign-in is at
+  each user's own Azure directory (login.microsoftonline.com/<tenant ID>), not
+  /organizations, which Microsoft says admits only work or school accounts.
+  Microsoft's pages do not say whether the multitenant account type above
+  admits a personal account signing in to its own directory: M2 step 11,
+  check 8 tries it. If it is refused, change Supported account types to
+  "Accounts in any organizational directory and personal Microsoft accounts".
   Only if M2 step 11.1 passes, a federated credential:
 ${json(v.entra.federatedCredential)}
   Worker variables (ENTRA_CERT_THUMBPRINT and the ENTRA_CERT_KEY secret come from \`provider-setup.mjs keys\`):

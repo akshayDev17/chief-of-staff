@@ -230,21 +230,23 @@ describe("Models › Setup › Providers", () => {
     expect(passed).not.toContain("gcloud iam roles create");
   });
 
-  it("sends Foundry to Microsoft's sign-in, then on to admin consent in the signed-in tenant, and says so while waiting", async () => {
+  it("sends Foundry to Microsoft's sign-in at the typed directory, then on to admin consent in the signed-in tenant, and says so while waiting", async () => {
     const TENANT = "11111111-2222-4333-8444-555555555555";
     const ms = await fakeMicrosoft();
     let nonce = "";
     const t0 = NOW.getTime() / 1000;
     const { fetcher } = scriptedFetch([
-      [/organizations\/oauth2\/v2\.0\/token$/, async () =>
-        Response.json({ id_token: await ms.idToken({ iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: "client-1", tid: TENANT, nonce, iat: t0, nbf: t0, exp: t0 + 3600 }) })],
+      [new RegExp(`${TENANT}/oauth2/v2\\.0/token$`), async () =>
+        Response.json({ id_token: await ms.idToken({ iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: "client-1", tid: TENANT, idp: "live.com", nonce, iat: t0, nbf: t0, exp: t0 + 3600 }) })],
       [/discovery\/v2\.0\/keys$/, () => Response.json(ms.keySet)],
     ]);
     const plugins = { ...world(), foundry: foundryPlugin({ APP_ORIGIN, ISSUER_KEYS, ENTRA_CLIENT_ID: "client-1", FOUNDRY_CREDENTIAL: "federated" }, fetcher, () => NOW) };
-    expect(await text(await open(plugins, "?provider=foundry"))).toContain("sign in with Microsoft, then tap <strong>Accept</strong>. Your organisation is taken from this sign-in, so only you can connect it.");
-    const response = await post(plugins, "/foundry/connect", { endpoint: "https://example-resource.services.ai.azure.com" });
+    const guide = await text(await open(plugins, "?provider=foundry"));
+    expect(guide).toContain("sign in with your personal Microsoft account, then tap <strong>Accept</strong>. Your directory is taken from this sign-in, so only you can connect it. A work or school account can't connect Foundry here: connect Amazon Bedrock or Google Vertex AI instead.");
+    expect(guide).toContain("Directory (tenant) ID");
+    const response = await post(plugins, "/foundry/connect", { endpoint: "https://example-resource.services.ai.azure.com", tenantId: TENANT });
     const signIn = new URL(response.headers.get("location")!);
-    expect(signIn.origin + signIn.pathname).toBe("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize");
+    expect(signIn.origin + signIn.pathname).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`);
     nonce = signIn.searchParams.get("nonce")!;
     expect(await text(await open(plugins, "?provider=foundry"))).toContain("Waiting for Microsoft: sign in there and tap Accept");
 

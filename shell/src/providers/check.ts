@@ -24,7 +24,7 @@ import type { Provider } from "../prices/types";
 import { AppNotConfigured } from "../issuer";
 import { connectedAt, deleteConnection, readConnection, writeConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
-import { ConnectProblem, type ConnectStart, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type ReturnPath, type Usage } from "../proxy/plugin";
+import { ConnectProblem, type ConnectStart, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
 import { PROVIDER_NAMES, sendTestCall } from "../proxy/proxy";
 
 export const RETRY_MINUTES = 15;
@@ -311,7 +311,7 @@ export async function connectProvider(
   }
   const before = await readCheck(db, input.userId, input.provider);
   if (start.kind === "consent") {
-    await saveCheck(db, input.userId, { ...(before ?? { provider: input.provider, state: "checking" }), consentState, pendingFields: pendingWith(start) });
+    await saveCheck(db, input.userId, { ...(before ?? { provider: input.provider, state: "checking" }), consentState, pendingFields: start.pending });
     return { open: start.open };
   }
   await writeConnection(db, input.userId, plugin, start.fields, input.now);
@@ -323,19 +323,15 @@ export async function connectProvider(
   return { open: start.open, check: await runCheck(db, plugins, input.userId, input.provider, input.now) };
 }
 
-// Which return path a pending provider page must come back to, kept with
-// the plug-in's own pending fields.
-const RETURNS_TO = "returnsTo";
-const pendingWith = (start: Extract<ConnectStart, { kind: "consent" }>): Record<string, string> => ({ ...start.pending, [RETURNS_TO]: start.returnsTo });
-
 // Back from a provider page, which must return the state value this user's
-// Connect sent, at the return path it was sent with. The state is spent
+// Connect sent; the plug-in's own pending fields say which page it was. The
+// state is spent
 // before anything else is done with the answer, so it works once, even when
 // two answers race; the next page gets a new one.
 export async function finishConsent(
   db: D1Database,
   plugins: PluginRegistry,
-  input: { userId: string; provider: Provider; returnedTo: ReturnPath; returned: URLSearchParams; appOrigin: string | undefined; now: Date },
+  input: { userId: string; provider: Provider; returned: URLSearchParams; appOrigin: string | undefined; now: Date },
 ): Promise<ConnectOutcome> {
   const plugin = plugins[input.provider];
   const check = await readCheck(db, input.userId, input.provider);
@@ -347,8 +343,7 @@ export async function finishConsent(
     .bind(input.userId, input.provider, state)
     .run();
   if (spent.meta.changes !== 1) return notThis;
-  const { [RETURNS_TO]: expected, ...pending } = check.pendingFields;
-  if (expected !== input.returnedTo) return notThis;
+  const pending = check.pendingFields;
   if (!input.appOrigin) return { problem: `The app's own side of ${plugin.connect.guide.name} isn't set up yet: Admin's one-time setup is missing APP_ORIGIN.` };
   const spentCheck: Check = { ...check, consentState: undefined, pendingFields: undefined };
   const nextState = randomState();
@@ -362,7 +357,7 @@ export async function finishConsent(
   }
   if (next.kind === "consent") {
     // The next provider page, with a state of its own.
-    await saveCheck(db, input.userId, { ...spentCheck, consentState: nextState, pendingFields: pendingWith(next) });
+    await saveCheck(db, input.userId, { ...spentCheck, consentState: nextState, pendingFields: next.pending });
     return { open: next.open };
   }
   await writeConnection(db, input.userId, plugin, next.fields, input.now);

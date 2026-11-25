@@ -49,44 +49,52 @@ function azure(token: (s: Sent) => Response = () => Response.json({ token_type: 
 const CONSENT = "consent-state-2";
 const context = { appOrigin: APP_ORIGIN, consentState: CONSENT };
 const t0 = NOW.getTime() / 1000;
+const MSA_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+// A personal Microsoft account signed in to its own Azure directory: `tid`
+// is that directory, `idp` the Microsoft account provider.
 const goodClaims = (nonce: string, over: Record<string, unknown> = {}) => ({
-  iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: CLIENT_ID, tid: TENANT, sub: "user-pairwise-sub", nonce,
+  iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: CLIENT_ID, tid: TENANT, idp: `https://sts.windows.net/${MSA_TENANT}/`, sub: "user-pairwise-sub", nonce,
   iat: t0 - 10, nbf: t0 - 10, exp: t0 + 3600, ver: "2.0", ...over,
 });
+const signInPending = (nonce: string) => ({ endpoint: ENDPOINT, signInTenant: TENANT, nonce });
 
 // Microsoft as the sign-in has it: the token endpoint redeems the code for
 // `idToken`, and the tenant's key set is published.
 function microsoft(idToken: string | (() => Response)) {
   return scriptedFetch([
-    [/^https:\/\/login\.microsoftonline\.com\/organizations\/oauth2\/v2\.0\/token$/, () =>
+    [new RegExp(`^https://login\\.microsoftonline\\.com/${TENANT}/oauth2/v2\\.0/token$`), () =>
       typeof idToken === "string" ? Response.json({ token_type: "Bearer", scope: "openid", expires_in: 3599, id_token: idToken, access_token: "graph-token-unused" }) : idToken()],
     [/^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]+\/discovery\/v2\.0\/keys$/, () => Response.json(ms.keySet)],
   ]);
 }
 
 describe("Connect Microsoft Foundry", () => {
-  it("starts with Microsoft's sign-in for work or school accounts, with a state and a nonce, and keeps the endpoint", () => {
-    const start = foundryPlugin(envWith()).connect.start({ endpoint: `${ENDPOINT}/` }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "state-123" });
-    expect(start).toMatchObject({ kind: "consent", returnsTo: "signed-in", pending: { endpoint: ENDPOINT, nonce: expect.stringMatching(/^[0-9a-f]{32}$/) } });
+  it("starts with Microsoft's sign-in at the typed directory's own endpoint, with a state and a nonce, and keeps the endpoint", () => {
+    const start = foundryPlugin(envWith()).connect.start({ endpoint: `${ENDPOINT}/`, tenantId: TENANT.toUpperCase() }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "state-123" });
+    expect(start).toEqual({ kind: "consent", pending: { endpoint: ENDPOINT, signInTenant: TENANT, nonce: expect.stringMatching(/^[0-9a-f]{32}$/) }, open: expect.any(String) });
     if (start.kind !== "consent") throw new Error("a sign-in was expected");
     const link = new URL(start.open);
-    expect(link.origin + link.pathname).toBe("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize");
+    // Not `/organizations`, which admits only work or school accounts.
+    expect(link.origin + link.pathname).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`);
     expect(Object.fromEntries(link.searchParams)).toEqual({
       client_id: CLIENT_ID, response_type: "code", redirect_uri: `${APP_ORIGIN}${SIGN_IN_RETURN_PATH}`, response_mode: "query", scope: "openid",
       state: "state-123", nonce: start.pending.nonce,
     });
-    expect(link.toString()).toBe(signInLink({ clientId: CLIENT_ID, appOrigin: APP_ORIGIN, state: "state-123", nonce: start.pending.nonce! }));
+    expect(link.toString()).toBe(signInLink({ clientId: CLIENT_ID, appOrigin: APP_ORIGIN, state: "state-123", nonce: start.pending.nonce!, tenantId: TENANT }));
     // Every Connect has its own nonce.
-    const again = foundryPlugin(envWith()).connect.start({ endpoint: ENDPOINT }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" });
+    const again = foundryPlugin(envWith()).connect.start({ endpoint: ENDPOINT, tenantId: TENANT }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" });
     expect(again.kind === "consent" && again.pending.nonce).not.toBe(start.pending.nonce);
   });
 
-  it("redeems the sign-in with the app's certificate, keeps the signed token's tenant, and sends the user to admin consent in that tenant", async () => {
+  it("refuses the Microsoft account tenant as the directory to sign in to", () => {
+    expect(() => foundryPlugin(envWith()).connect.start({ endpoint: ENDPOINT, tenantId: MSA_TENANT }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" })).toThrow(/not your Azure directory's/);
+  });
+
+  it("redeems a personal account's sign-in with the app's certificate, binds its own directory from the signed token, and sends the user to admin consent there", async () => {
     const { fetcher, sent } = microsoft(await ms.idToken(goodClaims("nonce-1")));
-    const next = await foundryPlugin(envWith(), fetcher, () => NOW).connect.finish!({ endpoint: ENDPOINT, nonce: "nonce-1" }, new URLSearchParams({ code: "code-1", state: "s" }), context);
+    const next = await foundryPlugin(envWith(), fetcher, () => NOW).connect.finish!(signInPending("nonce-1"), new URLSearchParams({ code: "code-1", state: "s" }), context);
     expect(next).toEqual({
       kind: "consent",
-      returnsTo: "consented",
       pending: { endpoint: ENDPOINT, tenantId: TENANT },
       open: adminConsentLink({ clientId: CLIENT_ID, appOrigin: APP_ORIGIN, state: CONSENT, tenantId: TENANT }),
     });
@@ -100,7 +108,7 @@ describe("Connect Microsoft Foundry", () => {
       client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
     });
     expect(f.client_secret).toBeUndefined();
-    expect(decodeJwt(f.client_assertion!).claims.aud).toBe("https://login.microsoftonline.com/organizations/oauth2/v2.0/token");
+    expect(decodeJwt(f.client_assertion!).claims.aud).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`);
     expect(sent[1]!.url).toBe(`https://login.microsoftonline.com/${TENANT}/discovery/v2.0/keys`);
   });
 
@@ -115,13 +123,14 @@ describe("Connect Microsoft Foundry", () => {
     ["a token not valid yet", async () => ms.idToken(goodClaims("n", { nbf: t0 + 3600 })), /not valid yet/],
     ["another Connect's nonce", async () => ms.idToken(goodClaims("another-nonce")), /not made for this Connect/],
     ["no nonce", async () => ms.idToken({ ...goodClaims("n"), nonce: undefined }), /not made for this Connect/],
-    ["a personal account", async () => ms.idToken(goodClaims("n", { tid: "9188040d-6c67-4c5b-b112-36a304b66dad", iss: "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0" })), /no work or school organisation/],
-    ["no tenant", async () => ms.idToken({ ...goodClaims("n"), tid: undefined }), /no work or school organisation/],
+    ["the Microsoft account tenant, outside any Azure directory", async () => ms.idToken(goodClaims("n", { tid: MSA_TENANT, iss: `https://login.microsoftonline.com/${MSA_TENANT}/v2.0` })), /no Azure directory in it/],
+    ["no tenant", async () => ms.idToken({ ...goodClaims("n"), tid: undefined }), /no Azure directory in it/],
+    ["another directory than the one typed", async () => ms.idToken(goodClaims("n", { tid: "22222222-2222-4222-8222-222222222222", iss: "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222/v2.0" })), /another directory than the one typed/],
     ["not a token", async () => "not-a-token", /not a signed token/],
     ["a signature that is not base64url", async () => `${(await ms.idToken(goodClaims("n"))).split(".").slice(0, 2).join(".")}.%%%`, /signature does not match/],
   ] as Array<[string, () => Promise<string>, RegExp]>)("refuses an ID token with %s, and asks for nothing more", async (_, token, why) => {
     const { fetcher, sent } = microsoft(await token());
-    const error = await foundryPlugin(envWith(), fetcher, () => NOW).connect.finish!({ endpoint: ENDPOINT, nonce: "n" }, new URLSearchParams({ code: "c" }), context).catch((e: unknown) => e);
+    const error = await foundryPlugin(envWith(), fetcher, () => NOW).connect.finish!(signInPending("n"), new URLSearchParams({ code: "c" }), context).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ConnectProblem);
     expect((error as Error).message).toMatch(/^Microsoft's sign-in could not be verified \(/);
     expect((error as Error).message).toMatch(why);
@@ -129,21 +138,45 @@ describe("Connect Microsoft Foundry", () => {
     expect(sent.some((s) => /adminconsent/.test(s.url))).toBe(false);
   });
 
+  it.each([
+    ["a member of the directory (no idp: the account is homed there)", { idp: undefined }],
+    ["a work or school account from another organisation", { idp: "https://sts.windows.net/22222222-2222-4222-8222-222222222222/" }],
+    ["an account from another identity provider", { idp: "google.com" }],
+    ["an idp that only mentions the Microsoft account tenant", { idp: `https://evil.example.com/${MSA_TENANT}/` }],
+  ] as Array<[string, Record<string, unknown>]>)("refuses a work or school sign-in (%s), naming Bedrock and Vertex AI, with no admin consent", async (_, over) => {
+    const { fetcher, sent } = microsoft(await ms.idToken({ ...goodClaims("n"), ...over }));
+    const error = await foundryPlugin(envWith(), fetcher, () => NOW).connect.finish!(signInPending("n"), new URLSearchParams({ code: "c" }), context).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ConnectProblem);
+    expect((error as Error).message).toBe(
+      "Microsoft Foundry connects here only with a personal Microsoft account, and you signed in with a work or school account, so nothing was saved. Connect Amazon Bedrock or Google Vertex AI instead.",
+    );
+    expect(sent.some((s) => /adminconsent/.test(s.url))).toBe(false);
+  });
+
+  it.each([["live.com"], [`https://login.microsoftonline.com/${MSA_TENANT}/v2.0`], [`https://sts.windows.net/${MSA_TENANT}/`]])(
+    "takes a personal account by its idp %s and binds the token's own directory",
+    async (idp) => {
+      const { fetcher } = microsoft(await ms.idToken(goodClaims("n", { idp })));
+      const next = await foundryPlugin(envWith(), fetcher, () => NOW).connect.finish!(signInPending("n"), new URLSearchParams({ code: "c" }), context);
+      expect(next).toMatchObject({ kind: "consent", pending: { endpoint: ENDPOINT, tenantId: TENANT } });
+    },
+  );
+
   it("says plainly when Microsoft does not answer", async () => {
     const down = (() => Promise.reject(new TypeError("network down"))) as unknown as typeof fetch;
-    await expect(foundryPlugin(envWith(), down, () => NOW).connect.finish!({ endpoint: ENDPOINT, nonce: "n" }, new URLSearchParams({ code: "c" }), context)).rejects.toThrow(/did not answer the sign-in/);
+    await expect(foundryPlugin(envWith(), down, () => NOW).connect.finish!(signInPending("n"), new URLSearchParams({ code: "c" }), context)).rejects.toThrow(/did not answer the sign-in/);
     const keysDown = scriptedFetch([
-      [/organizations\/oauth2\/v2\.0\/token$/, async () => Response.json({ id_token: await ms.idToken(goodClaims("n")) })],
+      [/\/oauth2\/v2\.0\/token$/, async () => Response.json({ id_token: await ms.idToken(goodClaims("n")) })],
       [/discovery/, () => Promise.reject(new TypeError("network down"))],
     ]).fetcher;
-    await expect(foundryPlugin(envWith(), keysDown, () => NOW).connect.finish!({ endpoint: ENDPOINT, nonce: "n" }, new URLSearchParams({ code: "c" }), context)).rejects.toThrow(/keys could not be fetched/);
+    await expect(foundryPlugin(envWith(), keysDown, () => NOW).connect.finish!(signInPending("n"), new URLSearchParams({ code: "c" }), context)).rejects.toThrow(/keys could not be fetched/);
   });
 
   it("says plainly when the sign-in was refused, by the user or by Microsoft", async () => {
     const { connect } = foundryPlugin(envWith(), microsoft(() => Response.json({ error: "invalid_grant", error_description: "AADSTS70008: The provided authorization code or refresh token has expired.\r\nTrace ID: x", error_codes: [70008] }, { status: 400 })).fetcher, () => NOW);
-    await expect(connect.finish!({ endpoint: ENDPOINT, nonce: "n" }, new URLSearchParams({ error: "access_denied", error_description: "The user canceled the sign-in" }), context)).rejects.toThrow(/did not complete: The user canceled/);
-    await expect(connect.finish!({ endpoint: ENDPOINT, nonce: "n" }, new URLSearchParams({ state: "s" }), context)).rejects.toThrow(/without a sign-in/);
-    await expect(connect.finish!({ endpoint: ENDPOINT, nonce: "n" }, new URLSearchParams({ code: "old" }), context)).rejects.toThrow(/did not accept the sign-in: AADSTS70008: The provided authorization code or refresh token has expired\./);
+    await expect(connect.finish!(signInPending("n"), new URLSearchParams({ error: "access_denied", error_description: "The user canceled the sign-in" }), context)).rejects.toThrow(/did not complete: The user canceled/);
+    await expect(connect.finish!(signInPending("n"), new URLSearchParams({ state: "s" }), context)).rejects.toThrow(/without a sign-in/);
+    await expect(connect.finish!(signInPending("n"), new URLSearchParams({ code: "old" }), context)).rejects.toThrow(/did not accept the sign-in: AADSTS70008: The provided authorization code or refresh token has expired\./);
   });
 
   it("finishes admin consent only in the signed-in tenant: a callback naming another tenant is refused and sets nothing", async () => {
@@ -157,17 +190,20 @@ describe("Connect Microsoft Foundry", () => {
     await expect(connect.finish!(pending, back({ tenant: TENANT }), context)).rejects.toThrow(/did not say/);
   });
 
-  it("takes only a Foundry resource address", () => {
-    const f = foundryPlugin(envWith()).connect.fields[0]!;
-    const ok = (v: string) => new RegExp(`^(?:${f.pattern})$`).test(v);
-    expect(ok(ENDPOINT)).toBe(true);
-    expect(ok("https://evil.example.com/x.services.ai.azure.com")).toBe(false);
-    expect(ok("http://example-resource.services.ai.azure.com")).toBe(false);
+  it("takes only a Foundry resource address and a directory ID", () => {
+    const [endpoint, tenant] = foundryPlugin(envWith()).connect.fields;
+    const ok = (f: typeof endpoint, v: string) => new RegExp(`^(?:${f!.pattern})$`).test(v);
+    expect(ok(endpoint, ENDPOINT)).toBe(true);
+    expect(ok(endpoint, "https://evil.example.com/x.services.ai.azure.com")).toBe(false);
+    expect(ok(endpoint, "http://example-resource.services.ai.azure.com")).toBe(false);
+    expect(tenant!.label).toBe("Directory (tenant) ID");
+    expect(ok(tenant, TENANT)).toBe(true);
+    expect(ok(tenant, "contoso.onmicrosoft.com")).toBe(false);
   });
 
   it("cannot start before the app's Entra registration and its credential exist (T10)", () => {
     const start = (over: Record<string, string | undefined>) => () =>
-      foundryPlugin(envWith(over)).connect.start({ endpoint: ENDPOINT }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" });
+      foundryPlugin(envWith(over)).connect.start({ endpoint: ENDPOINT, tenantId: TENANT }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" });
     expect(start({ ENTRA_CLIENT_ID: undefined })).toThrow(/ENTRA_CLIENT_ID/);
     expect(start({ ENTRA_CERT_KEY: undefined })).toThrow(/ENTRA_CERT_KEY/);
     expect(start({ FOUNDRY_CREDENTIAL: "federated", ENTRA_CERT_KEY: undefined, ENTRA_CERT_THUMBPRINT: undefined })).not.toThrow();

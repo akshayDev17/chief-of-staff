@@ -79,6 +79,9 @@ describe("the owner's setup values", () => {
     const text = lib.renderChecklist(lib.setupValues(lib.readValueInputs(inputs)));
     expect(text).toContain("Microsoft sign-in return:  https://cos.example.com/chief-of-staff/models/setup/providers/foundry/signed-in");
     expect(text).toContain("admin consent return:      https://cos.example.com/chief-of-staff/models/setup/providers/foundry/consented");
+    // Personal accounts sign in at their own directory; the account type is checked live.
+    expect(text).toContain("each user's own Azure directory (login.microsoftonline.com/<tenant ID>), not\n  /organizations");
+    expect(text).toContain('"Accounts in any organizational directory and personal Microsoft accounts"');
     expect(text).toContain("No service account and no service-account impersonation grant is needed for\n  Vertex AI");
     expect(text).toContain("principal://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/chief-of-staff/subject/<user id>");
     expect(text).not.toContain("GOOGLE_SERVICE_ACCOUNT");
