@@ -86,8 +86,12 @@ describe("Access check configuration and keys", () => {
     expect((await send({ "cf-access-jwt-assertion": token }, {})).status).toBe(403);
   });
 
-  it("accepts only a cloudflareaccess.com team domain over https", () => {
+  it("accepts a cloudflareaccess.com team domain, bare or over https, and nothing else", () => {
     expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: `${TEAM_DOMAIN}/`, ACCESS_AUD: AUD })).toEqual({ teamDomain: TEAM_DOMAIN, audience: AUD });
+    expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: "example-team.cloudflareaccess.com", ACCESS_AUD: AUD })).toEqual({ teamDomain: TEAM_DOMAIN, audience: AUD });
+    expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: "example-team.cloudflareaccess.com/", ACCESS_AUD: AUD })).toEqual({ teamDomain: TEAM_DOMAIN, audience: AUD });
+    expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: "evil.example.com", ACCESS_AUD: AUD })).toBeNull();
+    expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: "example-team.cloudflareaccess.com/path", ACCESS_AUD: AUD })).toBeNull();
     expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: "http://example-team.cloudflareaccess.com", ACCESS_AUD: AUD })).toBeNull();
     expect(readAccessConfig({ ACCESS_TEAM_DOMAIN: "https://evil.example.com", ACCESS_AUD: AUD })).toBeNull();
   });

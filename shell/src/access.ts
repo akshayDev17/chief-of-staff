@@ -16,7 +16,8 @@
 //   AUD tag, `exp` must be in the future and `nbf` not in the future.
 
 export interface AccessConfig {
-  // `https://<team>.cloudflareaccess.com`, as the page writes it.
+  // `https://<team>.cloudflareaccess.com`, as the page writes it; the
+  // variable may also be the bare host, which the tool writes.
   teamDomain: string;
   // The Access application's AUD tag.
   audience: string;
@@ -50,7 +51,9 @@ export const readAccessConfig = (env: {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
 }): AccessConfig | null => {
-  const teamDomain = env.ACCESS_TEAM_DOMAIN?.trim().replace(/\/+$/, "");
+  // The portfolio-app tool writes the bare host; a missing scheme means https.
+  const raw = env.ACCESS_TEAM_DOMAIN?.trim().replace(/\/+$/, "");
+  const teamDomain = raw && !raw.includes("://") ? `https://${raw}` : raw;
   const audience = env.ACCESS_AUD?.trim();
   if (!teamDomain || !audience) return null;
   if (!/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(teamDomain)) return null;

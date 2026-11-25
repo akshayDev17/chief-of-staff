@@ -16,7 +16,8 @@ name: Release shell
 # Environment `production`: secrets CLOUDFLARE_API_TOKEN (the narrow deploy
 # token, no Access permission) and CLOUDFLARE_ACCOUNT_ID, which the tool
 # puts there; variables ACCESS_AUD and ACCESS_TEAM_DOMAIN, which the tool
-# will write once its requested change lands.
+# will write once its requested change lands (ACCESS_TEAM_DOMAIN as the bare
+# host `<team>.cloudflareaccess.com`; the Worker also accepts it with https://).
 
 on:
   push:

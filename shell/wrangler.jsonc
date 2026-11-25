@@ -1,7 +1,7 @@
 // The shell Worker. No account or secrets here.
 //
 // Variables the deploy sets (never committed): ACCESS_TEAM_DOMAIN
-// (`https://<team>.cloudflareaccess.com`) and ACCESS_AUD (the AUD tag of the
+// (`<team>.cloudflareaccess.com`, as the tool writes it, or with `https://`) and ACCESS_AUD (the AUD tag of the
 // Access application the portfolio-app tool makes over /chief-of-staff),
 // both from the GitHub environment `production`, where the tool will write
 // them once its requested change lands (README "Releasing the shell").
