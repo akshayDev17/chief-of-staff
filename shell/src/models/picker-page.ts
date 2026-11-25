@@ -17,14 +17,11 @@
 
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
-import { PROVIDERS_PATH, type Viewer } from "../providers/page";
-import { BUDGETS_PATH } from "../proxy/budgets-page";
+import { ADD_MODEL_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
-import { ADD_MODEL_PATH } from "./page";
 import { acceptProposals, changeTask, modelKey, readTaskRoutes, taskById, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
-
-export const TASK_MODELS_PATH = "/models/setup/tasks";
 
 export interface PickerPageInput {
   viewer: Viewer;

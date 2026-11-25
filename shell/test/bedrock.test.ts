@@ -111,7 +111,7 @@ describe("the Bedrock credential", () => {
     expect(web!.headers.get("authorization")).toBeNull();
     const w = form(web!);
     expect(w).toMatchObject({ Action: "AssumeRoleWithWebIdentity", Version: "2011-06-15", RoleArn: APP_ROLE, DurationSeconds: "3600" });
-    expect(decodeJwt(w.WebIdentityToken!).claims).toMatchObject({ iss: `${APP_ORIGIN}/oidc`, aud: AWS_AUDIENCE, sub: AWS_SUBJECT });
+    expect(decodeJwt(w.WebIdentityToken!).claims).toMatchObject({ iss: `${APP_ORIGIN}/chief-of-staff/oidc`, aud: AWS_AUDIENCE, sub: AWS_SUBJECT });
     const r = form(role!);
     expect(r).toMatchObject({ Action: "AssumeRole", RoleArn: USER_ROLE, ExternalId: connection.externalId, DurationSeconds: "3600" });
     expect(role!.headers.get("authorization")).toMatch(/^AWS4-HMAC-SHA256 Credential=ASIAAPP\/20261125\/us-east-1\/sts\/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=[0-9a-f]{64}$/);

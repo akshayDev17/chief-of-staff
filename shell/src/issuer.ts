@@ -3,13 +3,14 @@
 // no long-lived cloud key: the provider plug-ins mint a short ID token here and
 // trade it for that provider's own short-lived credential.
 //
-//   issuer URL:   <APP_ORIGIN>/oidc
-//   discovery:    <APP_ORIGIN>/oidc/.well-known/openid-configuration
-//   key set:      <APP_ORIGIN>/oidc/jwks.json
+//   issuer URL:   <APP_ORIGIN>/chief-of-staff/oidc
+//   discovery:    <APP_ORIGIN>/chief-of-staff/oidc/.well-known/openid-configuration
+//   key set:      <APP_ORIGIN>/chief-of-staff/oidc/jwks.json
 //
 // Those two documents are the only paths served without the owner's sign-in:
 // the providers fetch them (index.ts exempts exactly these two from the
-// Access check; scripts/access-app.mjs adds the matching Access bypass).
+// Access check; the portfolio-app tool's Bypass Access application covers
+// exactly these two, README "Cloudflare Access").
 //
 // One app-wide signing key, RS256 (the one algorithm all three accept:
 // Microsoft's federated credentials "Only issuers that provide tokens signed
@@ -28,7 +29,9 @@
 //   3. retire: once every token signed with the old key has expired, drop it.
 // Tokens live 5 minutes; nothing here is cached beyond one request.
 
-export const ISSUER_PATH = "/oidc";
+import { BASE_PATH } from "./paths";
+
+export const ISSUER_PATH = `${BASE_PATH}/oidc`;
 export const DISCOVERY_PATH = `${ISSUER_PATH}/.well-known/openid-configuration`;
 export const JWKS_PATH = `${ISSUER_PATH}/jwks.json`;
 // Served without the owner's sign-in, and nothing else is.

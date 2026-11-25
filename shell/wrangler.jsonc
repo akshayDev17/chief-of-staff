@@ -1,15 +1,22 @@
-// The shell Worker. Local development and tests only: no account, routes or
-// secrets here; the deploy ticket adds them.
+// The shell Worker. No account or secrets here.
 //
 // Variables the deploy sets (never committed): ACCESS_TEAM_DOMAIN
-// (`https://<team>.cloudflareaccess.com`) and ACCESS_AUD (the Access
-// application's AUD tag, printed by scripts/sync-access-app.mjs). Without
-// both, the Worker refuses every request (src/access.ts).
+// (`https://<team>.cloudflareaccess.com`) and ACCESS_AUD (the AUD tag of the
+// Access application the portfolio-app tool makes over /chief-of-staff),
+// both from the GitHub environment `production` (README "Releasing the
+// shell"). Without both, the Worker refuses every request (src/access.ts).
 {
   "name": "chief-of-staff-shell",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": false,
+  // The app lives at akshayprabhakant.com/chief-of-staff (src/paths.ts). A
+  // route pattern cannot hold a query, so this one pattern is the only one
+  // that also matches `/chief-of-staff?<query>`; it matches sibling paths
+  // such as `/chief-of-staff.html` too, which the Worker passes to the origin
+  // untouched (src/index.ts; the portfolio-app README, "The app's Worker
+  // route and its pass-through").
+  "routes": [{ "pattern": "akshayprabhakant.com/chief-of-staff*", "zone_name": "akshayprabhakant.com" }],
   // The app's one D1 database. The id is a placeholder until T10 creates the
   // database on the owner's account (a database id is not secret); local
   // runs and tests never use it, and the release refuses to run with it.

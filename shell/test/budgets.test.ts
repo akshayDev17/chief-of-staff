@@ -7,7 +7,7 @@ import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-
 import { seedPrices, testPlugin, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-25T10:00:00Z");
-const BASE = "https://shell.test/models/setup/budgets";
+const BASE = "https://shell.test/chief-of-staff/models/setup/budgets";
 let key: TestKey;
 
 beforeAll(async () => {

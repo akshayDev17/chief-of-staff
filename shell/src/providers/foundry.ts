@@ -65,6 +65,7 @@
 // Claude's Marketplace listings (src/prices/azure.ts, maintainer.ts).
 
 import { AppNotConfigured, mintIdToken, readIssuer, signJwt } from "../issuer";
+import { PROVIDERS_PATH } from "../paths";
 import type { ConnectMethod, Failure, Link, ProviderPlugin } from "../proxy/plugin";
 import { ConnectProblem, ProviderRefusal } from "../proxy/plugin";
 import type { Usage } from "../proxy/plugin";
@@ -86,7 +87,7 @@ export interface FoundryEnv {
 export const FOUNDRY_SCOPE = "https://ai.azure.com/.default";
 export const ENTRA_FEDERATED_AUDIENCE = "api://AzureADTokenExchange";
 export const ENTRA_SUBJECT = "chief-of-staff:foundry";
-export const CONSENT_RETURN_PATH = "/models/setup/providers/foundry/consented";
+export const CONSENT_RETURN_PATH = `${PROVIDERS_PATH}/foundry/consented`;
 const ANTHROPIC_VERSION = "2023-06-01";
 const LOGIN = "https://login.microsoftonline.com";
 const ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";

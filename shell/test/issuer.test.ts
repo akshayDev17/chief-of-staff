@@ -30,8 +30,8 @@ describe("the issuer's public documents", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.json()).toMatchObject({
-      issuer: `${APP_ORIGIN}/oidc`,
-      jwks_uri: `${APP_ORIGIN}/oidc/jwks.json`,
+      issuer: `${APP_ORIGIN}/chief-of-staff/oidc`,
+      jwks_uri: `${APP_ORIGIN}/chief-of-staff/oidc/jwks.json`,
       id_token_signing_alg_values_supported: ["RS256"],
     });
   });
@@ -50,7 +50,7 @@ describe("the issuer's public documents", () => {
 
   it("exempts exactly those two paths from the Access check, and only for GET", async () => {
     const keys = issuerKeys("issuer-old", [oldKey]);
-    for (const path of ["/oidc", "/oidc/", "/oidc/jwks.json/", "/oidc/jwks.json.bak", "/oidc/.well-known/", "/.well-known/openid-configuration", "/jwks.json", "/health", "/models/setup/providers"]) {
+    for (const path of ["/chief-of-staff/oidc", "/chief-of-staff/oidc/", "/chief-of-staff/oidc/jwks.json/", "/chief-of-staff/oidc/jwks.json.bak", "/chief-of-staff/oidc/.well-known/", "/chief-of-staff/.well-known/openid-configuration", "/chief-of-staff/jwks.json", "/chief-of-staff/health", "/chief-of-staff/models/setup/providers"]) {
       expect((await anonymous(path, keys)).status, path).toBe(403);
     }
     expect((await anonymous(JWKS_PATH, keys, { method: "POST" })).status).toBe(403);
@@ -58,7 +58,7 @@ describe("the issuer's public documents", () => {
 
   it("still serves every other path only with a valid Access token", async () => {
     serveCerts(() => [accessKey]);
-    const response = await worker.fetch(new Request(`${APP_ORIGIN}/health`, { headers: { "cf-access-jwt-assertion": await signToken(accessKey) } }), {
+    const response = await worker.fetch(new Request(`${APP_ORIGIN}/chief-of-staff/health`, { headers: { "cf-access-jwt-assertion": await signToken(accessKey) } }), {
       ...ENV, DB: env.DB, APP_ORIGIN, ISSUER_KEYS: issuerKeys("issuer-old", [oldKey]),
     });
     expect(response.status).toBe(200);
@@ -72,7 +72,7 @@ describe("the issuer's tokens", () => {
     const { header, claims } = decodeJwt(token);
     expect(header).toEqual({ alg: "RS256", typ: "JWT", kid: "issuer-old" });
     const iat = NOW.getTime() / 1000;
-    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/oidc`, aud: "sts.amazonaws.com", sub: "chief-of-staff:bedrock", iat, nbf: iat, exp: iat + ID_TOKEN_LIFETIME_S });
+    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/chief-of-staff/oidc`, aud: "sts.amazonaws.com", sub: "chief-of-staff:bedrock", iat, nbf: iat, exp: iat + ID_TOKEN_LIFETIME_S });
     expect(ID_TOKEN_LIFETIME_S).toBeLessThanOrEqual(300);
     const published = await (await anonymous(JWKS_PATH, keys)).json();
     expect(await verifiesAgainst(token, published as never)).toBe(true);

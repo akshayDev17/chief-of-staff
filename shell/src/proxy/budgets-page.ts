@@ -26,8 +26,7 @@ import { connectedProviders } from "./connections";
 import type { PluginRegistry } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
-
-export const BUDGETS_PATH = "/models/setup/budgets";
+import { ADD_MODEL_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 
 export interface ProviderBudgetCard {
   provider: Provider;
@@ -53,7 +52,7 @@ function card(c: ProviderBudgetCard, applicationsADay: number): string {
     ? `<p class="small muted">Suggested · <span class="pill warn">estimate</span> · checked on ${nbDate(s.checkedOn)}</p>
 <p class="big">about ${dollars(s.monthlyUsd)} a month</p>
 <p class="small">Basis: ${applicationsADay} application${applicationsADay === 1 ? "" : "s"} a day, if this provider carried every task, at ${esc(s.model)}'s list prices from the app's price table and the design's tokens per application. Replaced by the figures measured in practice mode.</p>`
-    : `<p class="small muted">No suggestion yet: it is worked out from the list price of a model you pick at this provider (<a href="/models/setup/add">Add a model</a>).</p>`;
+    : `<p class="small muted">No suggestion yet: it is worked out from the list price of a model you pick at this provider (<a href="${ADD_MODEL_PATH}">Add a model</a>).</p>`;
   const set = c.budget
     ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month · ${cents(c.spentThisMonth)} spent since the 1st</p>`
     : "";
@@ -98,7 +97,7 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><a href="/models/setup/providers">Providers</a> · <strong>Budgets</strong> · <a href="/models/setup/add">Add a model</a> · <a href="/models/setup/tasks">Model for each task</a></p>
+<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers</a> · <strong>Budgets</strong> · <a href="${ADD_MODEL_PATH}">Add a model</a> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
 <h2>Budgets, one per provider</h2>
 <p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st; a task's fallback on another provider carries on within that provider's own budget.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}

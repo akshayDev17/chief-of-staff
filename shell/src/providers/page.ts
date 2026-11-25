@@ -14,10 +14,10 @@
 // the wording. The reply is shown only to the user who made the call.
 // The Usage page, not built yet, is named but not linked.
 
+import { ADD_MODEL_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
-import { BUDGETS_PATH } from "../proxy/budgets-page";
 import { readConnection } from "../proxy/connections";
 import type { ConnectionFields, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 import {
@@ -32,8 +32,6 @@ import {
   type Check,
   type CheckResult,
 } from "./check";
-
-export const PROVIDERS_PATH = "/models/setup/providers";
 
 // Who is looking: the owner, or a friend the owner invited (who says
 // "Admin" for the owner and gets "Ask Admin for help").
@@ -228,7 +226,7 @@ ${refresh}
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><strong>Providers</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="/models/setup/add">Add a model</a> · <a href="/models/setup/tasks">Model for each task</a></p>
+<p class="small" style="margin:-4px 0 10px"><strong>Providers</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="${ADD_MODEL_PATH}">Add a model</a> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
 <h2>Model providers</h2>
 <p>Foundry, Bedrock and Vertex AI are the only providers. You never give the app a key: you let it call your models from inside your own account, and you can take that back there at any time.</p>
 ${intro}
@@ -238,7 +236,7 @@ ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` :
 <nav class="row" aria-label="Providers" style="margin-top:10px"><span class="seg">${tabs}</span></nav>
 <div style="margin-top:10px">${panelHtml(selected, input)}</div>
 </section>
-<div class="row" style="margin-top:12px"><a class="btn" href="/models/setup/add">Next: pick a model</a></div>
+<div class="row" style="margin-top:12px"><a class="btn" href="${ADD_MODEL_PATH}">Next: pick a model</a></div>
 </main>
 <script>
 document.querySelectorAll("[data-copy]").forEach(function (b) {

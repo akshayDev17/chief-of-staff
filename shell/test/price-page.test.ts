@@ -21,7 +21,7 @@ beforeAll(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-const PAGE = "https://shell.test/admin/price-table";
+const PAGE = "https://shell.test/chief-of-staff/admin/price-table";
 
 // Every request passes the Access check first, as in health.test.ts.
 const page = async (query = "") => {

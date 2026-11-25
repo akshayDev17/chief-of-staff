@@ -54,7 +54,7 @@ describe("Connect Microsoft Foundry", () => {
     });
     const link = new URL(start.open!);
     expect(link.origin + link.pathname).toBe("https://login.microsoftonline.com/organizations/adminconsent");
-    expect(Object.fromEntries(link.searchParams)).toEqual({ client_id: CLIENT_ID, redirect_uri: `${APP_ORIGIN}/models/setup/providers/foundry/consented`, state: "state-123" });
+    expect(Object.fromEntries(link.searchParams)).toEqual({ client_id: CLIENT_ID, redirect_uri: `${APP_ORIGIN}/chief-of-staff/models/setup/providers/foundry/consented`, state: "state-123" });
   });
 
   it("finishes with the tenant Microsoft returns, and refuses a refused or odd answer", () => {
@@ -104,7 +104,7 @@ describe("the Foundry credential", () => {
     await foundryPlugin(envWith({ FOUNDRY_CREDENTIAL: "federated", ENTRA_CERT_KEY: undefined, ENTRA_CERT_THUMBPRINT: undefined }), fetcher, () => NOW).mintCredential(connection);
     const { claims, header } = decodeJwt(form(sent[0]!).client_assertion!);
     expect(header.alg).toBe("RS256");
-    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/oidc`, aud: ENTRA_FEDERATED_AUDIENCE, sub: ENTRA_SUBJECT });
+    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/chief-of-staff/oidc`, aud: ENTRA_FEDERATED_AUDIENCE, sub: ENTRA_SUBJECT });
   });
 
   it("passes Entra's refusal on with its AADSTS code", async () => {

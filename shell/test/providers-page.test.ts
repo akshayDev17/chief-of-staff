@@ -4,7 +4,8 @@ import worker from "../src/index";
 import { bedrockPlugin } from "../src/providers/bedrock";
 import { readCheck } from "../src/providers/check";
 import { foundryPlugin } from "../src/providers/foundry";
-import { formatCost, handleProviders, PROVIDERS_PATH, type Viewer } from "../src/providers/page";
+import { PROVIDERS_PATH } from "../src/paths";
+import { formatCost, handleProviders, type Viewer } from "../src/providers/page";
 import { vertexPlugin } from "../src/providers/vertex";
 import { writeSnapshot } from "../src/prices/store";
 import { setBudget } from "../src/proxy/budgets";
@@ -78,7 +79,7 @@ describe("Models › Setup › Providers", () => {
   it("opens AWS's ready-filled stack on Connect, in a new tab, and shows the test call that ran by itself", async () => {
     const plugins = world();
     const form = await text(await open(plugins));
-    expect(form).toMatch(/<form method="post" action="\/models\/setup\/providers\/bedrock\/connect" target="_blank" data-reload>/);
+    expect(form).toMatch(/<form method="post" action="\/chief-of-staff\/models\/setup\/providers\/bedrock\/connect" target="_blank" data-reload>/);
     const response = await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toMatch(/^https:\/\/us-east-1\.console\.aws\.amazon\.com\/cloudformation\/home\?region=us-east-1#\/stacks\/create\/review\?templateURL=/);
@@ -101,7 +102,7 @@ describe("Models › Setup › Providers", () => {
     expect(page).toContain('<p class="tc-reply">Bedrock replied: 403 · AccessDenied · “not authorized to perform: sts:AssumeRole”</p>');
     expect(page).toContain("Create the stack again with Connect Amazon Bedrock, then try again.");
     expect(page).toMatch(/<a class="btn small secondary" href="https:\/\/us-east-1\.console\.aws\.amazon\.com[^"]+" target="_blank" rel="noopener noreferrer">Connect Amazon Bedrock<\/a>/);
-    expect(page).toContain('<form method="post" action="/models/setup/providers/bedrock/retry"><button type="submit" class="btn small">Try again</button></form>');
+    expect(page).toContain('<form method="post" action="/chief-of-staff/models/setup/providers/bedrock/retry"><button type="submit" class="btn small">Try again</button></form>');
     // Still waiting for the stack: the page refreshes by itself.
     expect(page).toContain('<meta http-equiv="refresh" content="30">');
     expect(page).not.toContain("Ask Admin for help");
@@ -128,7 +129,7 @@ describe("Models › Setup › Providers", () => {
     });
     const saveBudget = (amount: string) =>
       handleBudgets(
-        new Request(`${APP_ORIGIN}/models/setup/budgets`, { method: "POST", body: new URLSearchParams({ provider: "bedrock", amount, per_day: "5" }), headers: { origin: APP_ORIGIN } }),
+        new Request(`${APP_ORIGIN}/chief-of-staff/models/setup/budgets`, { method: "POST", body: new URLSearchParams({ provider: "bedrock", amount, per_day: "5" }), headers: { origin: APP_ORIGIN } }),
         env.DB, plugins, userId, NOW,
       );
     await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
@@ -139,7 +140,7 @@ describe("Models › Setup › Providers", () => {
     expect(calls).toBe(1);
     const waiting = await text(await open(plugins, "?provider=bedrock"));
     expect(waiting).toContain("This month&#39;s budget for Amazon Bedrock is spent, so the test call waits until the 1st.");
-    expect(waiting).toContain('<form method="post" action="/models/setup/providers/bedrock/retry"><button type="submit" class="btn small">Try again</button></form>');
+    expect(waiting).toContain('<form method="post" action="/chief-of-staff/models/setup/providers/bedrock/retry"><button type="submit" class="btn small">Try again</button></form>');
     // Raised but still spent: the test call keeps waiting and nothing reaches the provider.
     expect((await saveBudget("0.02")).status).toBe(303);
     expect(calls).toBe(1);
@@ -165,7 +166,7 @@ describe("Models › Setup › Providers", () => {
     const confirm = await text(await open(plugins, "?provider=bedrock&disconnect=1"));
     expect(confirm).toContain('<h2 id="disc-title">Disconnect Amazon Bedrock?</h2>');
     expect(confirm).toContain("Its models stop answering for you at once. To remove the grant on the provider’s side too: delete the “chief-of-staff” stack in AWS CloudFormation.");
-    expect(confirm).toContain('href="/models/setup/providers?provider=bedrock">Cancel</a>');
+    expect(confirm).toContain('href="/chief-of-staff/models/setup/providers?provider=bedrock">Cancel</a>');
     const response = await post(plugins, "/bedrock/disconnect");
     expect(response.status).toBe(303);
     expect(await readConnection(env.DB, userId, "bedrock")).toBeUndefined();
@@ -186,7 +187,7 @@ describe("Models › Setup › Providers", () => {
     const plugins = world();
     await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
     await setBudget(env.DB, userId, "bedrock", 30, "accepted", NOW);
-    expect(await text(await open(plugins))).toContain('<strong>Monthly budget:</strong> $30 · <a href="/models/setup/budgets">Budgets</a>');
+    expect(await text(await open(plugins))).toContain('<strong>Monthly budget:</strong> $30 · <a href="/chief-of-staff/models/setup/budgets">Budgets</a>');
   });
 
   it("shows the Vertex AI service account with a copy button and the role command before connecting", async () => {
@@ -281,6 +282,6 @@ describe("the Worker's providers route", () => {
   });
 
   it("links Providers from the Budgets page", async () => {
-    expect(await (await send("/models/setup/budgets")).text()).toContain('<a href="/models/setup/providers">Providers</a>');
+    expect(await (await send("/chief-of-staff/models/setup/budgets")).text()).toContain('<a href="/chief-of-staff/models/setup/providers">Providers</a>');
   });
 });

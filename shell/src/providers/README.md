@@ -32,12 +32,15 @@ Chat Completions for every other Foundry model
 
 ## The issuer (`src/issuer.ts`)
 
-The Worker is its own OpenID Connect issuer at `<APP_ORIGIN>/oidc`, with its
-discovery document at `/oidc/.well-known/openid-configuration` and its key set
-at `/oidc/jwks.json`. Those two paths are the only ones served without the
-owner's sign-in: the Worker exempts exactly them from its Access check, and
-`scripts/access-app.mjs` adds a second Access application on exactly those
-two paths with a Bypass policy. Tokens are RS256 and live 5 minutes, with the
+The Worker is its own OpenID Connect issuer at
+`<APP_ORIGIN>/chief-of-staff/oidc` (`https://akshayprabhakant.com/chief-of-staff/oidc`
+once deployed), with its discovery document at
+`/chief-of-staff/oidc/.well-known/openid-configuration` and its key set at
+`/chief-of-staff/oidc/jwks.json`. Those two paths are the only ones served
+without the owner's sign-in: the Worker exempts exactly them from its Access
+check, and the owner's `portfolio-app` tool makes a second Access application
+on exactly those two paths with a Bypass policy (README "Cloudflare
+Access"). Tokens are RS256 and live 5 minutes, with the
 audience and subject each provider was told to trust:
 
 | Provider | `aud` | `sub` |
@@ -140,7 +143,7 @@ The Worker reads:
 
 | Name | Kind | What |
 | --- | --- | --- |
-| `APP_ORIGIN` | variable | `https://<host>`, the issuer's and the consent return's address |
+| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and the consent return are under `<APP_ORIGIN>/chief-of-staff` |
 | `ISSUER_KEYS` | secret | the issuer's keys (above) |
 | `AWS_APP_ROLE_ARN` | variable | the app's own role in the owner's AWS account |
 | `AWS_REGION` | variable | where STS and Bedrock are called and the stack is made; default `us-east-1` |

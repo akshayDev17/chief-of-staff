@@ -44,7 +44,7 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
   later and for Gemini, `us-east5` for the older Claude models), then Global;
   a model the app names no default location for keeps the conservative rule,
   the highest regional price.
-- **Admin · Price table** is at `GET /admin/price-table`. It is owner only: like
+- **Admin · Price table** is at `GET /chief-of-staff/admin/price-table`. It is owner only: like
   every request to the Worker, it is behind the Cloudflare Access check
   (`src/access.ts`, T15).
 - **Alerts** are shown on that page and logged. Push and email come with T49.

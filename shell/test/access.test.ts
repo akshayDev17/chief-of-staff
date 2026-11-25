@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 const send = (headers: Record<string, string> = {}, env: Record<string, string> = ENV) =>
-  worker.fetch(new Request("https://shell.test/health", { headers }), { ...env, DB: testEnv.DB });
+  worker.fetch(new Request("https://shell.test/chief-of-staff/health", { headers }), { ...env, DB: testEnv.DB });
 
 // The same request as a WebSocket upgrade.
 const upgrade = (headers: Record<string, string> = {}) =>

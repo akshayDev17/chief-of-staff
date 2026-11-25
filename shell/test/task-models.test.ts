@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { TASK_MODELS_PATH, handleTaskModels } from "../src/models/picker-page";
+import { handleTaskModels } from "../src/models/picker-page";
+import { TASK_MODELS_PATH } from "../src/paths";
 import { acceptProposals, callTask, changeTask, readTaskRoutes, routeTask, TASKS } from "../src/models/tasks";
 import { writeSnapshot } from "../src/prices/store";
 import type { PriceRow, Provider } from "../src/prices/types";

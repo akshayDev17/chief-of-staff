@@ -10,14 +10,17 @@
 // checks each against src/): src/issuer.ts, src/providers/bedrock.ts,
 // foundry.ts and vertex.ts.
 
-export const ISSUER_PATH = "/oidc";
+// The app's path on its host (src/paths.ts BASE_PATH): the issuer and the
+// consent return live under it.
+export const BASE_PATH = "/chief-of-staff";
+export const ISSUER_PATH = `${BASE_PATH}/oidc`;
 export const AWS_AUDIENCE = "sts.amazonaws.com";
 export const AWS_SUBJECT = "chief-of-staff:bedrock";
 export const ROLE_NAME = "chief-of-staff-model-caller";
 export const APP_ROLE_NAME = "chief-of-staff-app";
 export const ENTRA_SUBJECT = "chief-of-staff:foundry";
 export const ENTRA_FEDERATED_AUDIENCE = "api://AzureADTokenExchange";
-export const CONSENT_RETURN_PATH = "/models/setup/providers/foundry/consented";
+export const CONSENT_RETURN_PATH = `${BASE_PATH}/models/setup/providers/foundry/consented`;
 export const GOOGLE_SUBJECT = "chief-of-staff:vertex";
 export const GOOGLE_POOL = "chief-of-staff";
 export const GOOGLE_PROVIDER = "chief-of-staff-worker";

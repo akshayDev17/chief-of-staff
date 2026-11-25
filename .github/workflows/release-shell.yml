@@ -6,11 +6,16 @@ name: Release shell
 # as a tagged version. README "Releasing the shell" has the rules, the
 # rollback and the restore steps.
 #
-# Until T10 provides the Cloudflare token, the release stops after the tests
-# with a plain message and nothing touches any Cloudflare account.
+# Its Cloudflare and GitHub setup is the portfolio-app tool's, as for every
+# app on akshayprabhakant.com: the route's two Access applications and the
+# GitHub environment `production` (README "Cloudflare Access"). Until that
+# environment holds the deploy token and the Access application's AUD tag,
+# the release stops after the tests with a plain message and nothing touches
+# any Cloudflare account.
 #
-# Secrets (T10): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, ACCESS_APP_DOMAIN,
-# OWNER_EMAIL. Variable: ACCESS_TEAM_DOMAIN.
+# Environment `production`: secrets CLOUDFLARE_API_TOKEN (the narrow deploy
+# token, no Access permission) and CLOUDFLARE_ACCOUNT_ID; variables
+# ACCESS_AUD and ACCESS_TEAM_DOMAIN.
 
 on:
   push:
@@ -30,6 +35,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    environment: production
     permissions:
       contents: write # the release and its tag
     defaults:
@@ -49,14 +55,25 @@ jobs:
       - name: Check and test, migrations on a fresh local database first
         run: make check test
 
-      - name: Skip while there is no Cloudflare token
+      - name: Skip until the production environment is set up
         id: gate
+        env:
+          ACCESS_AUD: ${{ vars.ACCESS_AUD }}
+          ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "Release skipped: CLOUDFLARE_API_TOKEN is not set (it arrives with T10). Nothing was migrated or deployed."
+            echo "Release skipped: CLOUDFLARE_API_TOKEN is not set in the production environment (the portfolio-app tool puts it there). Nothing was migrated or deployed."
             echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Without both, the deployed Worker would refuse every request.
+          for name in ACCESS_AUD ACCESS_TEAM_DOMAIN; do
+            if [ -z "${!name}" ]; then
+              echo "Release skipped: the production environment variable ${name} is not set (the portfolio-app tool's Access application gives it). Nothing was migrated or deployed."
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
           if grep -q '"database_id": "00000000-0000-0000-0000-000000000000"' wrangler.jsonc; then
             echo "::error::wrangler.jsonc still has the placeholder database_id; set the real one (T10) before releasing."
             exit 1
@@ -84,24 +101,12 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: npx wrangler d1 migrations apply chief-of-staff --remote
 
-      # T15's Access application, created or updated; its AUD tag is the
-      # Worker's ACCESS_AUD.
-      - name: Sync the Access application
-        id: access
-        if: steps.gate.outputs.go == 'true'
-        env:
-          ACCESS_APP_DOMAIN: ${{ secrets.ACCESS_APP_DOMAIN }}
-          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
-        run: |
-          result="$(node scripts/sync-access-app.mjs)"
-          echo "aud=$(node -e 'console.log(JSON.parse(process.argv[1]).aud)' "$result")" >> "$GITHUB_OUTPUT"
-
       - name: Deploy the Worker as a tagged version
         if: steps.gate.outputs.go == 'true'
         env:
           TAG: ${{ steps.gate.outputs.tag }}
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
-          ACCESS_AUD: ${{ steps.access.outputs.aud }}
+          ACCESS_AUD: ${{ vars.ACCESS_AUD }}
         run: |
           npx wrangler deploy --tag "$TAG" --message "$TAG from ${GITHUB_SHA}" \
             --var "ACCESS_TEAM_DOMAIN:${ACCESS_TEAM_DOMAIN}" --var "ACCESS_AUD:${ACCESS_AUD}"

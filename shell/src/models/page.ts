@@ -17,13 +17,11 @@
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { SOURCES } from "../prices/sources";
 import type { Provider } from "../prices/types";
-import { formatCost, PROVIDERS_PATH, type Viewer } from "../providers/page";
-import { BUDGETS_PATH } from "../proxy/budgets-page";
+import { ADD_MODEL_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { formatCost, type Viewer } from "../providers/page";
 import { connectedProviders } from "../proxy/connections";
 import type { PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 import { addModel, listOffer, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow, type TestResult } from "./add";
-
-export const ADD_MODEL_PATH = "/models/setup/add";
 
 export interface AddPageInput {
   viewer: Viewer;
@@ -170,14 +168,14 @@ ${foundryHint}`
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers</a> · <a href="${BUDGETS_PATH}">Budgets</a> · <strong>Add a model</strong> · <a href="/models/setup/tasks">Model for each task</a></p>
+<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers</a> · <a href="${BUDGETS_PATH}">Budgets</a> · <strong>Add a model</strong> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
 <h2>Add a model</h2>
 <p>Pick from every chat model your provider sells at a listed price. The price comes from the app's own price table, with its source and date; nothing to type. Each model's strength comes from its input price: Smallest under $0.50 per million tokens, Middle $0.50 to under $2.50, Strongest $2.50 and up.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
 ${content}
 <p class="small muted" style="margin-top:8px">A model can be picked only after its test call passes. A reply naming a different model is refused with a plain reason. A model with no price yet cannot be added, because the budget stop needs a real price.</p>
-<div class="row"><a class="btn" href="/models/setup/tasks">Next: the model for each task</a></div>
+<div class="row"><a class="btn" href="${TASK_MODELS_PATH}">Next: the model for each task</a></div>
 </main>
 </body>
 </html>`;
