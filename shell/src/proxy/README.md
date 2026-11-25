@@ -11,10 +11,11 @@ method (`connect`, see `src/providers/README.md`), its price source
 (`priceSource`) and its caller:
 
 - `connectionFields`: the only fields its connection record may hold, none
-  secret (an AWS role ARN and external ID, a Microsoft tenant ID and endpoint,
-  a Google project ID);
-- `mintCredential(connection)`: a short-lived credential from that record,
-  kept in memory for one call and never stored or logged;
+  secret (an AWS role ARN and external ID, a Microsoft tenant ID from the
+  user's own signed Microsoft sign-in and the endpoint, a Google project ID);
+- `mintCredential(connection, { userId })`: a short-lived credential from that
+  record, for that user alone, kept in memory for one call and never stored or
+  logged;
 - `call(...)`: the provider's own request, returning the status, the body
   untouched and the usage figures (uncached input, cached input, 5-minute and
   1-hour cache writes, output; disjoint counts) and whether the provider billed

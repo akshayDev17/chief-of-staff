@@ -2,7 +2,7 @@
 // once a connection answers, its plain result, and its retries.
 //
 //   connectProvider(...)  "Connect <Provider>": the record, then the check
-//   finishConsent(...)    back from a consent page (Microsoft's admin consent)
+//   finishConsent(...)    back from a provider page (Microsoft's sign-in, then its admin consent)
 //   runCheck(...)         mint a credential, make the test call, record the result
 //   runDueChecks(...)     the cron, every minute: the checks whose next try is due
 //
@@ -24,7 +24,7 @@ import type { Provider } from "../prices/types";
 import { AppNotConfigured } from "../issuer";
 import { connectedAt, deleteConnection, readConnection, writeConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
-import { ConnectProblem, type ConnectionFields, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
+import { ConnectProblem, type ConnectStart, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
 import { PROVIDER_NAMES, sendTestCall } from "../proxy/proxy";
 
 export const RETRY_MINUTES = 15;
@@ -238,7 +238,7 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
     // Bedrock: the template version in the user's own stack, read with a
     // credential of its own; best effort.
     const version = await plugin
-      .mintCredential(connection)
+      .mintCredential(connection, { userId })
       .then((credential) => plugin.connect.readSetupVersion?.(credential, connection))
       .catch(() => undefined);
     if (version && version !== recorded.templateVersion) {
@@ -323,32 +323,46 @@ export async function connectProvider(
   return { open: start.open, check: await runCheck(db, plugins, input.userId, input.provider, input.now) };
 }
 
-// Back from the provider's consent page, which must return the state value
-// this user's Connect sent.
+// Back from a provider page, which must return the state value this user's
+// Connect sent; the plug-in's own pending fields say which page it was. The
+// state is spent
+// before anything else is done with the answer, so it works once, even when
+// two answers race; the next page gets a new one.
 export async function finishConsent(
   db: D1Database,
   plugins: PluginRegistry,
-  input: { userId: string; provider: Provider; returned: URLSearchParams; now: Date },
+  input: { userId: string; provider: Provider; returned: URLSearchParams; appOrigin: string | undefined; now: Date },
 ): Promise<ConnectOutcome> {
   const plugin = plugins[input.provider];
   const check = await readCheck(db, input.userId, input.provider);
-  if (!plugin?.connect.finish || !check?.consentState || !check.pendingFields || input.returned.get("state") !== check.consentState) {
-    return { problem: `That consent page answer was not for this Connect. Tap Connect ${plugin?.connect.guide.name ?? "again"} again.` };
-  }
-  let fields: ConnectionFields;
+  const notThis = { problem: `That answer from ${plugin?.connect.guide.vendor ?? "the provider"} was not for this Connect. Tap Connect ${plugin?.connect.guide.name ?? "again"} again.` };
+  const state = input.returned.get("state");
+  if (!plugin?.connect.finish || !check?.consentState || !check.pendingFields || !state || state !== check.consentState) return notThis;
+  const spent = await db
+    .prepare("UPDATE provider_checks SET consent_state = NULL, pending_fields = NULL WHERE user_id = ? AND provider = ? AND consent_state = ?")
+    .bind(input.userId, input.provider, state)
+    .run();
+  if (spent.meta.changes !== 1) return notThis;
+  const pending = check.pendingFields;
+  if (!input.appOrigin) return { problem: `The app's own side of ${plugin.connect.guide.name} isn't set up yet: Admin's one-time setup is missing APP_ORIGIN.` };
+  const spentCheck: Check = { ...check, consentState: undefined, pendingFields: undefined };
+  const nextState = randomState();
+  let next: ConnectStart;
   try {
-    fields = plugin.connect.finish(check.pendingFields, input.returned);
+    next = await plugin.connect.finish(pending, input.returned, { appOrigin: input.appOrigin, consentState: nextState });
   } catch (error) {
-    if (error instanceof ConnectProblem) {
-      await saveCheck(db, input.userId, { ...check, consentState: undefined, pendingFields: undefined });
-      return { problem: error.message };
-    }
+    if (error instanceof ConnectProblem) return { problem: error.message };
+    if (error instanceof AppNotConfigured) return { problem: `The app's own side of ${plugin.connect.guide.name} isn't set up yet: Admin's one-time setup is missing ${error.missing.join(", ")}.` };
     throw error;
   }
-  await writeConnection(db, input.userId, plugin, fields, input.now);
+  if (next.kind === "consent") {
+    // The next provider page, with a state of its own.
+    await saveCheck(db, input.userId, { ...spentCheck, consentState: nextState, pendingFields: next.pending });
+    return { open: next.open };
+  }
+  await writeConnection(db, input.userId, plugin, next.fields, input.now);
   await saveCheck(db, input.userId, {
-    ...check, state: "checking", result: undefined, passedAt: undefined, revokedAt: undefined, consentState: undefined, pendingFields: undefined,
-    nextTryAt: input.now.toISOString(),
+    ...spentCheck, state: "checking", result: undefined, passedAt: undefined, revokedAt: undefined, nextTryAt: input.now.toISOString(),
   });
   return { check: await runCheck(db, plugins, input.userId, input.provider, input.now) };
 }

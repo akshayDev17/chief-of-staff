@@ -183,7 +183,7 @@ async function attempt(
   };
   let credential: unknown;
   try {
-    credential = await plugin.mintCredential(connection);
+    credential = await plugin.mintCredential(connection, { userId: call.userId });
   } catch (error) {
     let failure: Failure | undefined;
     if (error instanceof ProviderRefusal) {

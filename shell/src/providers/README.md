@@ -6,11 +6,41 @@ permission inside their own account, revocable there, and the app turns that
 grant into a credential that lasts about an hour. A connection record holds
 nothing secret.
 
+Every user grants the same app, so a grant alone does not say which user made
+it. Each connection is used only for the user who proved control of it (T116,
+design-v3 1.4): Bedrock by the user's own external ID, Foundry by the tenant
+in the user's own signed Microsoft sign-in, Vertex AI by a role granted to the
+user's own Google identity. Typing another user's project ID, or forging the
+tenant in Foundry's consent callback, reaches nothing of theirs.
+
 | Provider | Plug-in | The user types | The record holds | The credential |
 | --- | --- | --- | --- | --- |
 | Amazon Bedrock | `bedrock.ts` | the 12-digit AWS account ID | the invoke-only role's ARN, the user's external ID | the issuer's token → `AssumeRoleWithWebIdentity` (the app's role) → `AssumeRole` (the user's role, with the external ID): 1 hour |
-| Microsoft Foundry | `foundry.ts` | the Foundry resource address | the tenant ID (from Microsoft's admin consent), the endpoint | client credentials in the user's tenant, proven by the app's certificate (or, with `FOUNDRY_CREDENTIAL=federated`, the issuer's token): 60 to 90 minutes |
-| Google Vertex AI | `vertex.ts` | the project ID | the project ID | the issuer's token → Google's STS (Workload Identity Federation) → the app's service account's token: 1 hour |
+| Microsoft Foundry | `foundry.ts` | the Foundry resource address, the Azure directory's ID (only where to sign in) | the tenant ID (the `tid` of the user's own Microsoft sign-in, its ID token verified against Microsoft's keys and its `idp` showing a personal Microsoft account; admin consent's callback is only checked against it), the endpoint | client credentials in that tenant only, proven by the app's certificate (or, with `FOUNDRY_CREDENTIAL=federated`, the issuer's token): 60 to 90 minutes |
+| Google Vertex AI | `vertex.ts` | the project ID | the project ID | the issuer's token with the user's own app ID as its subject → Google's STS (Workload Identity Federation) → that user's own federated principal's token, used directly: 1 hour |
+
+Connect Microsoft Foundry is two Microsoft pages: the sign-in at the typed
+directory's own endpoint (`/{tenant}`, scope `openid`, returning to
+`/models/setup/providers/foundry/signed-in`), then admin consent in the
+signed-in tenant (`/{tid}/adminconsent`, returning to `.../consented`). Each
+leg's state, and the sign-in's nonce, sit on the user's own check row and
+are spent on first use; those pending fields alone say which leg an answer
+is for. Foundry is for personal Microsoft accounts only (the owner,
+2026-11-25): the signed token's `idp` must name the personal Microsoft
+account provider, never "`tid` is the consumers tenant", and a work or school
+sign-in is refused at Connect, naming Bedrock and Vertex AI, with nothing
+stored. There is no one-app-user-per-directory rule: someone a user invites
+into their own directory who also uses the app is that directory owner's
+responsibility (the owner: "i dont think that should be imagined as a gap,
+because its now upto that user that added the other guy onto their
+directory. the model related expense managements now exclusively falls on
+their shoulders, not mine at all."). Whether the token tells the two apart
+every time is checked live in M2 step 11, check 8.
+
+Connect Google Vertex AI shows the user's own principal to grant,
+`principal://iam.googleapis.com/projects/<pool project number>/locations/global/workloadIdentityPools/<pool>/subject/<user id>`,
+derived from `GOOGLE_WIF_PROVIDER`; no user's project grants a service
+account shared by every user.
 
 Each plug-in has three parts (`src/proxy/plugin.ts`): its **Connect method**
 (`connect`: fields, setup link, test request, the plain reasons for the
@@ -46,7 +76,7 @@ audience and subject each provider was told to trust:
 | Provider | `aud` | `sub` |
 | --- | --- | --- |
 | AWS | `sts.amazonaws.com` | `chief-of-staff:bedrock` |
-| Google | `https://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/chief-of-staff/providers/chief-of-staff-worker` | `chief-of-staff:vertex` |
+| Google | `https://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/chief-of-staff/providers/chief-of-staff-worker` | the user's own app ID, only for that user's own calls |
 | Microsoft (federated only) | `api://AzureADTokenExchange` | `chief-of-staff:foundry` |
 
 ### Rotating the issuer key
@@ -74,7 +104,7 @@ verify against the published set until the old key is retired
 ## Release units (design-v3 1.4, ADR-017)
 
 - **The plug-ins** ship in the Worker and roll back with it; each has its
-  own version label (`bedrock-1.0.0`, `foundry-1.0.0`, `vertex-1.0.0`) on
+  own version label (`bedrock-1.0.0`, `foundry-1.1.0`, `vertex-1.1.0`) on
   every ledger row it writes, test calls included.
 - **The Bedrock template** (`shell/bedrock-template/`) has its own version
   and publish workflow; users' stacks keep their version, so a new one stays
@@ -89,9 +119,10 @@ verify against the published set until the old key is retired
   `ENTRA_CERT_THUMBPRINT`, and remove the old certificate from the
   registration only after every token minted with it has expired (90
   minutes at most; wait a day).
-- **The Vertex AI assets** (the service account, the pool and provider, the
-  custom role command) keep the role ID `chiefOfStaffModelCaller` and its
-  one permission, so roles users already made keep working.
+- **The Vertex AI assets** (the pool and provider, with each user's own
+  principal, and the custom role command) keep the role ID
+  `chiefOfStaffModelCaller` and its one permission, so roles users already
+  made keep working.
 - **The issuer key** has its own rotation cycle (above).
 
 ## The Connect check (`check.ts`)
@@ -136,14 +167,17 @@ the Wrangler commands for the private halves. `node scripts/provider-setup.mjs
 values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
 `GOOGLE_PROJECT_NUMBER`, `GITHUB_REPOSITORY` and `BEDROCK_TEMPLATE_BUCKET` in
 the environment) prints every other value: the AWS identity provider and the
-app role's trust and permission policies, the Google pool, provider, service
-account and binding, and the Entra registration. Nothing is guessed during T10.
+app role's trust and permission policies, the Google pool and provider, and
+the Entra registration with its two return addresses (the Microsoft
+sign-in's and admin consent's). Google's pool needs no service account and no
+service-account impersonation grant for Vertex AI: each user grants their own
+principal. Nothing is guessed during T10.
 
 The Worker reads:
 
 | Name | Kind | What |
 | --- | --- | --- |
-| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and the consent return are under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"` (`https://akshayprabhakant.com`), so every release ships it |
+| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and Microsoft's sign-in and consent returns are under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"` (`https://akshayprabhakant.com`), so every release ships it |
 | `ISSUER_KEYS` | secret | the issuer's keys (above) |
 | `AWS_APP_ROLE_ARN` | variable | the app's own role in the owner's AWS account |
 | `AWS_REGION` | variable | where STS and Bedrock are called and the stack is made; default `us-east-1` |
@@ -152,8 +186,7 @@ The Worker reads:
 | `ENTRA_CERT_KEY` | secret | its certificate's private key, PKCS #8 PEM |
 | `ENTRA_CERT_THUMBPRINT` | variable | the certificate's `x5t#S256` |
 | `FOUNDRY_CREDENTIAL` | variable | `certificate` (default) or `federated` |
-| `GOOGLE_WIF_PROVIDER` | variable | the workload identity pool provider's full name |
-| `GOOGLE_SERVICE_ACCOUNT` | variable | the app's service account's email |
+| `GOOGLE_WIF_PROVIDER` | variable | the workload identity pool provider's full name; each user's own principal is derived from it |
 
 Until they are set, every page still renders, and a test call says plainly
 which of the app's own values is missing.
@@ -164,7 +197,10 @@ Nothing here has run against a cloud account. M2 steps 1, 2, 10 and the
 Connect checks of step 11 (federated credentials across Entra tenants, admin
 consent from a personal Microsoft account, a Foundry role without `listkeys`,
 a console-enabled Bedrock model through the invoke-only role, Vertex AI
-billing to the user's project, the time from revoking a grant to refusal),
+billing to the user's project, the time from revoking a grant to refusal,
+and (g): Vertex AI's Claude endpoint answering a per-user federated principal
+granted the role directly; if it does not, each user gets their own service
+account in the app's project, which only that user's principal may act as),
 the template version read from a live stack, a live issuer-key rotation, and
 Foundry's key question (T13) all wait on the owner's accounts. Google's exact
 error strings are recorded from live failures then; real vendor error bodies

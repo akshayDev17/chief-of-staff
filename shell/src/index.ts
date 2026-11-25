@@ -18,7 +18,7 @@ import { userFromAccess } from "./users";
 // APP_ORIGIN, which is in wrangler.jsonc "vars"; see
 // src/providers/README.md): APP_ORIGIN, ISSUER_KEYS (secret), AWS_APP_ROLE_ARN, AWS_REGION, BEDROCK_TEMPLATE_URL, ENTRA_CLIENT_ID,
 // ENTRA_CERT_KEY (secret), ENTRA_CERT_THUMBPRINT, FOUNDRY_CREDENTIAL,
-// GOOGLE_WIF_PROVIDER, GOOGLE_SERVICE_ACCOUNT.
+// GOOGLE_WIF_PROVIDER.
 export interface Env extends ProvidersEnv {
   // Cloudflare Access team domain, `<team>.cloudflareaccess.com` (as the
   // portfolio-app tool writes it) or `https://<team>.cloudflareaccess.com`.

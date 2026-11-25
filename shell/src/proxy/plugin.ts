@@ -107,8 +107,12 @@ export interface ConnectField {
 }
 
 // What tapping "Connect <Provider>" leads to: the connection record at once
-// (and, for Bedrock, the AWS page to open), or a consent page that comes back
-// with the rest of the record (Microsoft's admin consent returns the tenant).
+// (and, for Bedrock, the AWS page to open), or a provider page that comes
+// back under /models/setup/providers/<id>/ (Foundry: Microsoft's sign-in, at
+// `signed-in`, which proves the user's tenant, then its admin consent in that
+// tenant, at `consented`). `pending` is what the plug-in keeps until then, on
+// the user's own check row; it is not secret, and it alone says which page
+// the answer is from.
 export type ConnectStart =
   | { kind: "connection"; fields: ConnectionFields; open?: string }
   | { kind: "consent"; pending: Record<string, string>; open: string };
@@ -137,21 +141,23 @@ export interface ConnectMethod {
   guide: Guide;
   // The non-secret fields the user types. None is ever a key.
   fields: readonly ConnectField[];
-  // From the typed fields to the record (or the consent page). `consentState`
-  // is the value a consent page must return.
+  // From the typed fields to the record (or the first provider page).
+  // `consentState` is the value that page must return.
   // `existing` is the record already stored, if any, so a second tap keeps
   // what the provider side was set up with (Bedrock's external ID).
   start(
     typed: Record<string, string>,
     context: { userId: string; appOrigin: string; consentState: string; existing?: ConnectionFields },
   ): ConnectStart;
-  // After the consent page: the record, from the fields typed before it and
-  // what the page returned. Throws a plain message when consent was refused.
-  finish?(pending: Record<string, string>, returned: URLSearchParams): ConnectionFields;
+  // Back from a provider page, with the pending fields it was sent with: the
+  // record, or the next provider page (with a fresh `consentState`, the old
+  // one being spent). Throws a ConnectProblem, with a plain message, when the
+  // page refused or its answer cannot be trusted.
+  finish?(pending: Record<string, string>, returned: URLSearchParams, context: { appOrigin: string; consentState: string }): Promise<ConnectStart>;
   // What the user needs to make the grant, as trusted HTML, shown beside the
   // fields and, once connected, until the test call passes (Vertex AI: the
-  // app's service-account email and the role command for the stored project).
-  grantHelp?(connection?: ConnectionFields): string;
+  // user's own Google identity and the role command for the stored project).
+  grantHelp?(context: { userId: string; connection?: ConnectionFields }): string;
   // The setup link again, for a record already stored (Bedrock's stack).
   setupLink?(connection: ConnectionFields): string | undefined;
   // The test call's model when the user has picked none at this provider,
@@ -196,8 +202,10 @@ export interface ProviderPlugin {
   // offered to writeConnection is refused, so no secret can be stored there.
   connectionFields: readonly string[];
   // A short-lived credential minted from the user's connection (about an
-  // hour). It lives only in memory for one call: never stored, never logged.
-  mintCredential(connection: ConnectionFields): Promise<unknown>;
+  // hour), for that user alone: `userId` is the signed-in user whose record
+  // it is (Vertex AI mints that user's own Google identity). It lives only in
+  // memory for one call: never stored, never logged.
+  mintCredential(connection: ConnectionFields, context: { userId: string }): Promise<unknown>;
   // The provider's own request, sent straight to the user's own provider.
   // `deployment` is Foundry's deployment name for the model, when the user set one.
   call(input: { credential: unknown; connection: ConnectionFields; model: string; location: string; deployment?: string; request: ModelRequest }): Promise<ProviderReply>;

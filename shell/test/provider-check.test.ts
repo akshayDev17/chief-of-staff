@@ -8,7 +8,7 @@ import type { PriceRow } from "../src/prices/types";
 import { setBudget } from "../src/proxy/budgets";
 import { readConnection, writeConnection } from "../src/proxy/connections";
 import { callModel } from "../src/proxy/proxy";
-import { APP_ORIGIN, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
+import { APP_ORIGIN, fakeMicrosoft, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
 import { dumpEveryTable, testPlugin, userFor } from "./test-plugin";
 
 const T0 = new Date("2026-11-25T10:00:00Z");
@@ -284,30 +284,118 @@ describe("a real call that finds the grant gone", () => {
   });
 });
 
-describe("Connect Microsoft Foundry, through admin consent", () => {
+describe("Connect Microsoft Foundry, through a signed Microsoft sign-in and then admin consent", () => {
   const TENANT = "11111111-2222-4333-8444-555555555555";
-  const plugins = () => {
+  const OTHER_TENANT = "99999999-8888-4777-8666-555555555555";
+  const CLIENT = "00000000-0000-4000-8000-000000000001";
+  const ENDPOINT = "https://example-resource.services.ai.azure.com";
+  const t0 = T0.getTime() / 1000;
+  let ms: Awaited<ReturnType<typeof fakeMicrosoft>>;
+  beforeAll(async () => {
+    ms = await fakeMicrosoft();
+  });
+
+  // Microsoft: the sign-in's code is redeemed for an ID token carrying the
+  // nonce of the sign-in link (a personal account in its own directory unless
+  // `idp` says otherwise); Foundry tokens are recorded by tenant.
+  const world = () => {
+    const w = { nonce: "", tenant: TENANT, idp: "live.com" as string | undefined, minted: [] as string[] };
     const { fetcher } = scriptedFetch([
-      [/login\.microsoftonline\.com/, () => Response.json({ access_token: "entra-token", expires_in: 4500 })],
+      [/discovery\/v2\.0\/keys$/, () => Response.json(ms.keySet)],
+      [/login\.microsoftonline\.com\/[0-9a-f-]+\/oauth2\/v2\.0\/token$/, async (s) => {
+        if (new URLSearchParams(s.body).get("grant_type") === "authorization_code") {
+          return Response.json({ id_token: await ms.idToken({ iss: `https://login.microsoftonline.com/${w.tenant}/v2.0`, aud: CLIENT, tid: w.tenant, idp: w.idp, nonce: w.nonce, iat: t0, nbf: t0, exp: t0 + 3600 }) });
+        }
+        w.minted.push(new URL(s.url).pathname.split("/")[1]!);
+        return Response.json({ access_token: "entra-token", expires_in: 4500 });
+      }],
       [/anthropic\/v1\/messages/, () => Response.json({ content: [{ type: "text", text: "OK" }], usage: { input_tokens: 14, output_tokens: 2 } })],
     ]);
-    return { foundry: foundryPlugin({ APP_ORIGIN, ISSUER_KEYS, ENTRA_CLIENT_ID: "client-1", FOUNDRY_CREDENTIAL: "federated" }, fetcher, () => T0) };
+    return { w, plugins: { foundry: foundryPlugin({ APP_ORIGIN, ISSUER_KEYS, ENTRA_CLIENT_ID: CLIENT, FOUNDRY_CREDENTIAL: "federated" }, fetcher, () => T0) } };
+  };
+  // Back from either Microsoft page: the pending fields alone say which.
+  const back = (p: ReturnType<typeof world>["plugins"], q: Record<string, string>, now = at(1)) =>
+    finishConsent(env.DB, p, { userId, provider: "foundry", returned: new URLSearchParams(q), appOrigin: APP_ORIGIN, now });
+  const signIn = async (p: ReturnType<typeof world>["plugins"], w: ReturnType<typeof world>["w"]) => {
+    const outcome = await connectProvider(env.DB, p, { userId, provider: "foundry", typed: { endpoint: ENDPOINT, tenantId: TENANT }, appOrigin: APP_ORIGIN, now: T0 });
+    const link = new URL((outcome as { open: string }).open);
+    expect(link.pathname).toBe(`/${TENANT}/oauth2/v2.0/authorize`);
+    w.nonce = link.searchParams.get("nonce")!;
+    return link.searchParams.get("state")!;
+  };
+  const consentState = (outcome: unknown) => {
+    const link = new URL((outcome as { open: string }).open);
+    expect(link.pathname).toBe(`/${TENANT}/adminconsent`);
+    return link.searchParams.get("state")!;
   };
 
-  it("stores the tenant only when Microsoft returns this Connect's state, then runs the test call", async () => {
-    const p = plugins();
-    const outcome = await connectProvider(env.DB, p, { userId, provider: "foundry", typed: { endpoint: "https://example-resource.services.ai.azure.com" }, appOrigin: APP_ORIGIN, now: T0 });
-    const state = new URL((outcome as { open: string }).open).searchParams.get("state")!;
+  it("keeps the tenant of the signed sign-in, finishes consent in it, then runs the test call minting only there", async () => {
+    const { w, plugins: p } = world();
+    const state = await signIn(p, w);
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+    const consent = consentState(await back(p, { code: "code-1", state }));
+    expect(consent).not.toBe(state);
     expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
 
-    const forged = await finishConsent(env.DB, p, { userId, provider: "foundry", returned: new URLSearchParams({ tenant: TENANT, admin_consent: "True", state: "not-it" }), now: at(1) });
-    expect(forged).toMatchObject({ problem: expect.stringContaining("not for this Connect") });
-    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
-
-    await finishConsent(env.DB, p, { userId, provider: "foundry", returned: new URLSearchParams({ tenant: TENANT, admin_consent: "True", state }), now: at(1) });
-    expect(await readConnection(env.DB, userId, "foundry")).toEqual({ tenantId: TENANT, endpoint: "https://example-resource.services.ai.azure.com" });
+    await back(p, { tenant: TENANT, admin_consent: "True", state: consent });
+    expect(await readConnection(env.DB, userId, "foundry")).toEqual({ tenantId: TENANT, endpoint: ENDPOINT });
     expect(await readCheck(env.DB, userId, "foundry")).toMatchObject({ state: "passed", result: { modelId: "claude-haiku-5-5", reply: { status: 200, text: "OK" } } });
-    // The state is used once.
-    expect(await finishConsent(env.DB, p, { userId, provider: "foundry", returned: new URLSearchParams({ tenant: TENANT, admin_consent: "True", state }), now: at(2) })).toHaveProperty("problem");
+    expect(w.minted).toEqual([TENANT]);
+  });
+
+  it("refuses a consent callback forged to name another tenant, and stores nothing", async () => {
+    const { w, plugins: p } = world();
+    const consent = consentState(await back(p, { code: "code-1", state: await signIn(p, w) }));
+    const forged = await back(p, { tenant: OTHER_TENANT, admin_consent: "True", state: consent });
+    expect(forged).toMatchObject({ problem: expect.stringContaining("different organisation than the one you signed in with") });
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+    expect(await readCheck(env.DB, userId, "foundry")).toMatchObject({ consentState: undefined, pendingFields: undefined });
+    expect(w.minted).toEqual([]);
+    // That consent state is spent: the right tenant on it is refused too.
+    expect(await back(p, { tenant: TENANT, admin_consent: "True", state: consent })).toMatchObject({ problem: expect.stringContaining("not for this Connect") });
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+  });
+
+  it("refuses a consent callback that skips the sign-in, a foreign state, and a used one", async () => {
+    const { w, plugins: p } = world();
+    const state = await signIn(p, w);
+    // The sign-in's state brought back as if from admin consent, naming any
+    // tenant: the pending fields are the sign-in's, which has no code here.
+    expect(await back(p, { tenant: OTHER_TENANT, admin_consent: "True", state })).toMatchObject({ problem: expect.stringContaining("without a sign-in") });
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+    expect(w.minted).toEqual([]);
+
+    const fresh = await signIn(p, w);
+    expect(await back(p, { code: "c", state: "not-it" })).toMatchObject({ problem: expect.stringContaining("not for this Connect") });
+    expect("open" in (await back(p, { code: "c", state: fresh }))).toBe(true);
+    // Used once: the same sign-in answer again is refused.
+    expect(await back(p, { code: "c", state: fresh })).toMatchObject({ problem: expect.stringContaining("not for this Connect") });
+  });
+
+  it("refuses a work or school sign-in at Connect, naming Bedrock and Vertex AI, and stores nothing", async () => {
+    const { w, plugins: p } = world();
+    w.idp = undefined;
+    const outcome = await back(p, { code: "c", state: await signIn(p, w) });
+    expect(outcome).toMatchObject({ problem: expect.stringMatching(/only with a personal Microsoft account.*work or school account, so nothing was saved\. Connect Amazon Bedrock or Google Vertex AI instead\./) });
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+    expect(await readCheck(env.DB, userId, "foundry")).toMatchObject({ consentState: undefined, pendingFields: undefined });
+    expect(w.minted).toEqual([]);
+  });
+
+  it("refuses a sign-in whose ID token carries another Connect's nonce, and stores nothing", async () => {
+    const { w, plugins: p } = world();
+    const state = await signIn(p, w);
+    w.nonce = "a-nonce-from-another-sign-in";
+    expect(await back(p, { code: "c", state })).toMatchObject({ problem: expect.stringContaining("not made for this Connect") });
+    expect(await readConnection(env.DB, userId, "foundry")).toBeUndefined();
+    expect(await readCheck(env.DB, userId, "foundry")).toMatchObject({ consentState: undefined, pendingFields: undefined });
+  });
+
+  it("is scoped to the signed-in user: another user's answer cannot finish this user's Connect", async () => {
+    const { w, plugins: p } = world();
+    const state = await signIn(p, w);
+    const other = (await userFor("friend-sub")).id;
+    expect(await finishConsent(env.DB, p, { userId: other, provider: "foundry", returned: new URLSearchParams({ code: "c", state }), appOrigin: APP_ORIGIN, now: at(1) })).toHaveProperty("problem");
+    expect("open" in (await back(p, { code: "c", state }))).toBe(true);
   });
 });

@@ -74,7 +74,7 @@ describe("provider connections hold nothing secret", () => {
 
   it("leave no minted credential in any stored row", async () => {
     await writeConnection(env.DB, owner, plugin, { account: "123456789012", region: "global" }, NOW);
-    const credential = (await plugin.mintCredential((await readConnection(env.DB, owner, "bedrock"))!)) as string;
+    const credential = (await plugin.mintCredential((await readConnection(env.DB, owner, "bedrock"))!, { userId: owner })) as string;
     expect(JSON.stringify(await dumpEveryTable())).not.toContain(credential);
   });
 });

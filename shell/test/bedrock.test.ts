@@ -105,7 +105,7 @@ describe("the Bedrock role template", () => {
 describe("the Bedrock credential", () => {
   it("trades the issuer's token for the app's role, unsigned, then chains to the user's role with the external ID, signed", async () => {
     const { fetcher, sent } = aws();
-    const credential = await bedrockPlugin(envWith(), fetcher, () => NOW).mintCredential(connection);
+    const credential = await bedrockPlugin(envWith(), fetcher, () => NOW).mintCredential(connection, { userId: "u" });
     expect(credential).toMatchObject({ accessKeyId: "ASIAUSER", secretAccessKey: "secret-ASIAUSER", sessionToken: "token-ASIAUSER" });
     const [web, role] = sent;
     expect(web!.headers.get("authorization")).toBeNull();
@@ -120,14 +120,14 @@ describe("the Bedrock credential", () => {
 
   it("passes STS's own refusal on, naming the exchange", async () => {
     const { fetcher } = aws(converseOk, { role: stsError("AccessDenied", "User: arn:aws:sts::111122223333:assumed-role/chief-of-staff-app/chief-of-staff is not authorized to perform: sts:AssumeRole") });
-    const error = (await bedrockPlugin(envWith(), fetcher, () => NOW).mintCredential(connection).catch((e: unknown) => e)) as ProviderRefusal;
+    const error = (await bedrockPlugin(envWith(), fetcher, () => NOW).mintCredential(connection, { userId: "u" }).catch((e: unknown) => e)) as ProviderRefusal;
     expect(error).toBeInstanceOf(ProviderRefusal);
     expect(error.refusal).toEqual({ step: "AssumeRole", status: 403, errorName: "AccessDenied", message: expect.stringContaining("not authorized to perform: sts:AssumeRole") });
   });
 
   it("is not configured before T10's app role and issuer key", async () => {
-    await expect(bedrockPlugin(envWith({ AWS_APP_ROLE_ARN: undefined })).mintCredential(connection)).rejects.toMatchObject({ missing: ["AWS_APP_ROLE_ARN"] });
-    await expect(bedrockPlugin(envWith({ ISSUER_KEYS: undefined })).mintCredential(connection)).rejects.toMatchObject({ missing: ["ISSUER_KEYS"] });
+    await expect(bedrockPlugin(envWith({ AWS_APP_ROLE_ARN: undefined })).mintCredential(connection, { userId: "u" })).rejects.toMatchObject({ missing: ["AWS_APP_ROLE_ARN"] });
+    await expect(bedrockPlugin(envWith({ ISSUER_KEYS: undefined })).mintCredential(connection, { userId: "u" })).rejects.toMatchObject({ missing: ["ISSUER_KEYS"] });
   });
 });
 
