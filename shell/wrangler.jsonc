@@ -4,8 +4,7 @@
 // (`<team>.cloudflareaccess.com`, as the tool writes it, or with `https://`)
 // and ACCESS_AUD (the AUD tag of the Access application the portfolio-app
 // tool makes over /chief-of-staff), both from the GitHub environment
-// `production`, where the tool will write them once its requested change
-// lands (README "Releasing the shell").
+// `production`, where the tool writes them (README "Releasing the shell").
 // Without both, the Worker refuses every request (src/access.ts).
 {
   "name": "chief-of-staff-shell",
@@ -19,9 +18,9 @@
   // untouched (src/index.ts; the portfolio-app README, "The app's Worker
   // route and its pass-through").
   "routes": [{ "pattern": "akshayprabhakant.com/chief-of-staff*", "zone_name": "akshayprabhakant.com" }],
-  // The app's one D1 database. The id is a placeholder until T10 creates the
-  // database on the owner's account (a database id is not secret); local
-  // runs and tests never use it, and the release refuses to run with it.
+  // The app's one D1 database, created on the owner's account by the
+  // portfolio-app tool (a database id is not secret); local runs and tests
+  // never use it, and the release refuses to run with the all-zero placeholder.
   // Migrations are numbered .sql files in migrations/ (design-v3 8.4), applied
   // only by the release pipeline (README "Releasing the shell").
   "d1_databases": [
