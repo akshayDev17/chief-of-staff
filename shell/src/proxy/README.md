@@ -66,7 +66,7 @@ No prompt, reply or credential is logged or stored anywhere.
 
 One monthly budget per user per provider (`provider_budgets`), required, with
 no default, no daily and no per-model budget. Models › Setup › Budgets
-(`GET`/`POST /models/setup/budgets`, `budgets-page.ts`) shows each connected
+(`GET`/`POST /chief-of-staff/models/setup/budgets`, `budgets-page.ts`) shows each connected
 provider with a suggestion worked out from the dearest picked model's list
 price (`user_models`, written by T17) and the design's tokens per application
 (`TOKENS_PER_APPLICATION` in `budgets.ts`, from design-v3 12.2) at the

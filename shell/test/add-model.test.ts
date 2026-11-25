@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addModel, listOffer, namesPickedModel, readUserModels } from "../src/models/add";
-import { ADD_MODEL_PATH, handleAddModel } from "../src/models/page";
+import { handleAddModel } from "../src/models/page";
+import { ADD_MODEL_PATH } from "../src/paths";
 import { pickedModels, setBudget } from "../src/proxy/budgets";
 import { foundryPlugin, usageFromChatCompletions } from "../src/providers/foundry";
 import { geminiModelId, usageFromGemini, vertexPlugin } from "../src/providers/vertex";

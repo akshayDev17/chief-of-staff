@@ -61,7 +61,7 @@ describe("the Vertex AI credential", () => {
     });
     const { header, claims } = decodeJwt(body.subjectToken);
     expect(header).toMatchObject({ alg: "RS256", kid: "k1" });
-    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/oidc`, aud: wifAudience(WIF), sub: GOOGLE_SUBJECT });
+    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/chief-of-staff/oidc`, aud: wifAudience(WIF), sub: GOOGLE_SUBJECT });
     expect(claims.aud).toBe(`https:${WIF}`);
     expect(iam!.url).toBe(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(SA)}:generateAccessToken`);
     expect(iam!.headers.get("authorization")).toBe("Bearer federated-token");

@@ -10,7 +10,8 @@ import { providerPlugins, type ProvidersEnv } from "./providers/index";
 import { handleProviders, isProvidersPath } from "./providers/page";
 import { handleAddModel, isAddModelPath } from "./models/page";
 import { handleTaskModels, isTaskModelsPath } from "./models/picker-page";
-import { BUDGETS_PATH, handleBudgets } from "./proxy/budgets-page";
+import { handleBudgets } from "./proxy/budgets-page";
+import { BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH } from "./paths";
 import { userFromAccess } from "./users";
 
 // Variables and secrets the provider plug-ins read (T10 sets them; see
@@ -49,6 +50,10 @@ const json = (body: unknown, status = 200): Response =>
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    // The route `<domain>/chief-of-staff*` also matches sibling paths such as
+    // `/chief-of-staff.html`; they are the origin's, passed on untouched (a
+    // Worker's subrequest to its own zone goes to the origin, not back here).
+    if (!isAppPath(url.pathname)) return fetch(request);
     // The issuer's two public documents are the only paths served without
     // the owner's sign-in: AWS, Google and Microsoft fetch them (T16).
     if (request.method === "GET" && PUBLIC_ISSUER_PATHS.includes(url.pathname)) {
@@ -56,8 +61,13 @@ export default {
     }
     const claims = await readAccessIdentity(request, env);
     if (!claims) return accessDenied();
-    if (url.pathname === "/health" && request.method === "GET") {
+    if (url.pathname === HEALTH_PATH && request.method === "GET") {
       return json({ status: "ok" });
+    }
+    // The app's home. The only screens so far are Models › Setup, so it
+    // opens the first of them until the dashboard has a home screen.
+    if (isHomePath(url.pathname) && request.method === "GET") {
+      return Response.redirect(`${url.origin}${PROVIDERS_PATH}`, 302);
     }
     // The signed-in user's own budgets; a token naming no person is refused.
     if (url.pathname === BUDGETS_PATH && (request.method === "GET" || request.method === "POST")) {
@@ -92,7 +102,7 @@ export default {
       return handleTaskModels(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", now });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
-    if (url.pathname === "/admin/price-table" && request.method === "GET") {
+    if (url.pathname === PRICE_TABLE_PATH && request.method === "GET") {
       const snapshot = await currentSnapshot(env.DB);
       const html = renderPriceTablePage({
         snapshot,

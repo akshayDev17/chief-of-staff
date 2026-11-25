@@ -13,7 +13,8 @@ file and version, so a component's CI job sees only its own changes:
   [uv](https://docs.astral.sh/uv/) (version pinned by `required-version`);
   `uv.lock` pins every dependency to an exact version with hashes. Version in
   `agent/pyproject.toml`.
-- `shell/`: the TypeScript Cloudflare Worker, with `GET /health`, the
+- `shell/`: the TypeScript Cloudflare Worker at `/chief-of-staff` (see
+  "Cloudflare Access" below), with `GET /chief-of-staff/health`, the
   price table (see `shell/prices/README.md`), the model proxy with its
   usage ledger, per-provider budgets and per-user vault (see
   `shell/src/proxy/README.md`), and "Connect <Provider>" for Bedrock, Foundry
@@ -54,37 +55,46 @@ every component directory that exists and skip one that does not yet exist.
 
 ### Cloudflare Access
 
-Until the site's own sign-in exists (T45, T47), the shell Worker sits behind
-one Cloudflare Access application covering its whole address, with one rule
-that allows only the owner's email (T15, design-v3 section 10.3). Two parts:
+The app lives at `https://akshayprabhakant.com/chief-of-staff`: every page,
+API path and issuer document is under that one path (`shell/src/paths.ts`,
+`BASE_PATH`), and `/chief-of-staff` itself is the app's home. The Worker's
+one route is `akshayprabhakant.com/chief-of-staff*` (`shell/wrangler.jsonc`),
+the only pattern that also matches `/chief-of-staff?<query>`. It matches
+sibling paths too, such as `/chief-of-staff.html` or `/chief-of-staffx`: the
+Worker passes each of those, and any other path that is neither
+`/chief-of-staff` nor under `/chief-of-staff/`, to the origin untouched.
 
+Until the site's own sign-in exists (T45, T47), the app sits behind
+Cloudflare Access with one rule that allows only the owner's address (T15,
+design-v3 section 10.3). Two parts:
+
+- **The Access applications** are the owner's `portfolio-app` setup tool's
+  (my-skills-package), the same tool that sets up every app on
+  akshayprabhakant.com; this repository makes none. Its plan for this app:
+  one application with the shared one-address sign-in policy on
+  `akshayprabhakant.com/chief-of-staff` and
+  `akshayprabhakant.com/chief-of-staff/*`, and a second one with a Bypass
+  policy on exactly the issuer's two documents,
+  `/chief-of-staff/oidc/.well-known/openid-configuration` and
+  `/chief-of-staff/oidc/jwks.json`. The tool also puts the deploy secrets
+  in the repository's GitHub environment `production` (below). So the
+  deploy token needs no Access permission, and no address of the owner's is
+  in this repository or its secrets.
 - **The check in the Worker** (`shell/src/access.ts`), run first on every
-  request, HTTP and WebSocket upgrade alike. It reads the
+  request under the prefix, HTTP and WebSocket upgrade alike. It reads the
   `Cf-Access-Jwt-Assertion` header only (a `CF_Authorization` cookie
   without the header is refused), verifies the RS256 signature against the team's keys at
   `<team domain>/cdn-cgi/access/certs` (cached; refetched on an unknown key
   id, at most every 30 seconds), and checks `iss`, `aud`, `exp` and `nbf`.
   Anything else, including a Worker without its configuration, gets a bare
   403. The one exception is the app's OpenID Connect issuer: `GET` on
-  exactly `/oidc/.well-known/openid-configuration` and `/oidc/jwks.json` is
-  served without a token, because AWS, Google and Microsoft fetch them
-  (`shell/src/providers/README.md`). Configuration is two Worker variables set at deploy:
-  `ACCESS_TEAM_DOMAIN` (`https://<team>.cloudflareaccess.com`) and
-  `ACCESS_AUD` (the application's AUD tag).
-- **The Access application itself**, created or updated by
-  `node shell/scripts/sync-access-app.mjs` at deploy time. It reads
-  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `ACCESS_APP_DOMAIN` (the
-  app's host name only, no scheme or path) and `OWNER_EMAIL` from the environment, makes
-  one reusable policy, `chief-of-staff: owner only`, that allows only
-  `OWNER_EMAIL`, attaches it to the self-hosted application `chief-of-staff`
-  covering `ACCESS_APP_DOMAIN`, and prints the application id and AUD tag.
-  It also makes the application `chief-of-staff: issuer documents`, covering
-  exactly the issuer's two paths, with a reusable Bypass policy (`everyone`),
-  the more specific path taking precedence over the whole-address one. It
-  is idempotent: a second run updates both in place. The owner's email is
-  personal data: it lives only in the GitHub Actions secret `OWNER_EMAIL`,
-  never in the repository, and the script never prints it. The shell's
-  release workflow runs it before each deploy (below).
+  exactly `/chief-of-staff/oidc/.well-known/openid-configuration` and
+  `/chief-of-staff/oidc/jwks.json` is served without a token, because AWS,
+  Google and Microsoft fetch them (`shell/src/providers/README.md`).
+  Configuration is two Worker variables set at deploy from the `production`
+  environment: `ACCESS_TEAM_DOMAIN` (`https://<team>.cloudflareaccess.com`)
+  and `ACCESS_AUD` (the AUD tag of the tool's sign-in application, not
+  secret). The tool will write both there once its requested change lands.
 
 ### Continuous integration
 
@@ -100,14 +110,19 @@ Third-party actions are pinned to full commit SHAs.
 
 The shell Worker is its own release unit with its own pipeline,
 `.github/workflows/release-shell.yml` (design-v3 2.4, 8.4, ADR-017). On a
-push to `main` that touches `shell/`, it:
+push to `main` that touches `shell/`, it runs in the GitHub environment
+`production`, where the `portfolio-app` tool (above) puts the secrets
+`CLOUDFLARE_API_TOKEN` (the narrow deploy token, no Access permission) and
+`CLOUDFLARE_ACCOUNT_ID`, and where it will write the variables `ACCESS_AUD`
+and `ACCESS_TEAM_DOMAIN` once its requested change lands, and:
 
 1. runs `make check test` in `shell/`, which applies every migration, in
    order, to a fresh local D1 holding only the made-up persona
    (`scripts/check-migrations.mjs`, seeded from `test/persona-seed.sql`);
-2. stops there with a plain message while `CLOUDFLARE_API_TOKEN` is not set
-   (until T10), and refuses while `wrangler.jsonc` has the placeholder
-   database id;
+2. stops there with a plain message naming the missing one while
+   `CLOUDFLARE_API_TOKEN`, `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is not set in
+   that environment, and
+   refuses while `wrangler.jsonc` has the placeholder database id;
 3. lists the pending migrations and, when any may change or remove data
    (anything but adding tables, indexes, views, columns or rows, and any
    upsert that updates existing rows; every `.sql` file wrangler would apply is
@@ -115,9 +130,10 @@ push to `main` that touches `shell/`, it:
    `wrangler d1 time-travel info chief-of-staff` (`scripts/release-migrations.mjs`);
 4. runs `wrangler d1 migrations apply chief-of-staff --remote`; a failed file
    is rolled back by D1 and stops the release, so the Worker is not deployed;
-5. runs the Access sync script (above) for the application's AUD tag;
-6. deploys the Worker with `wrangler deploy --tag shell-v<version>-<run>`;
-7. creates a GitHub release with that tag naming the migrations applied and
+5. deploys the Worker, with its route, as
+   `wrangler deploy --tag shell-v<version>-<run>`, passing `ACCESS_AUD` and
+   `ACCESS_TEAM_DOMAIN` as its variables;
+6. creates a GitHub release with that tag naming the migrations applied and
    the restore bookmark.
 
 **D1 migrations** are numbered `.sql` files in `shell/migrations/`, forward

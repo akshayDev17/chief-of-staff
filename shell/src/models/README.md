@@ -1,6 +1,6 @@
 # Add a model (T17, design-v3 1.5)
 
-Models › Setup › Add a model (`GET /models/setup/add`, `page.ts`; logic in
+Models › Setup › Add a model (`GET /chief-of-staff/models/setup/add`, `page.ts`; logic in
 `add.ts`). One tab per connected provider; its table lists every chat model
 the current price table sells there at a listed price, plus the models the
 plug-in knows that have no price yet (`connect.knownModels`, for example
@@ -57,7 +57,7 @@ and checked live in M2 step 3 on the owner's accounts.
 
 # Model for each task (T18, design-v3 1.5 and decision 6)
 
-Models › Setup › Model for each task (`GET /models/setup/tasks`,
+Models › Setup › Model for each task (`GET /chief-of-staff/models/setup/tasks`,
 `picker-page.ts`; logic in `tasks.ts`). `TASKS` is the list the app routes
 model calls by, each with the owner's tier (2026-11-24): Smallest for
 matching, extraction and LinkedIn invitations and messages; Middle for

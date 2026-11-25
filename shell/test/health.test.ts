@@ -18,16 +18,16 @@ const get = async (path: string): Promise<Response> => {
   return worker.fetch(new Request(`https://shell.test${path}`, { headers }), { ...ENV, DB: env.DB });
 };
 
-describe("GET /health", () => {
+describe("GET /chief-of-staff/health", () => {
   it("returns a JSON OK", async () => {
-    const response = await get("/health");
+    const response = await get("/chief-of-staff/health");
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.json()).toEqual({ status: "ok" });
   });
 
-  it("answers 404 for an unknown path", async () => {
-    const response = await get("/nope");
+  it("answers 404 for an unknown path under the prefix", async () => {
+    const response = await get("/chief-of-staff/nope");
     expect(response.status).toBe(404);
   });
 });
