@@ -28,7 +28,7 @@
     {
       "binding": "DB",
       "database_name": "chief-of-staff",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "d6fce881-3520-4985-be4e-ec9468251599",
       "migrations_dir": "migrations"
     }
   ],
