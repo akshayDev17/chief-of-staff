@@ -11,6 +11,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": false,
+  // The app's public origin (https://host, no path; src/issuer.ts
+  // readAppOrigin): the issuer and the consent return live under
+  // <APP_ORIGIN>/chief-of-staff. Not secret, so it ships with every release;
+  // the release's --var values are added alongside it.
+  "vars": { "APP_ORIGIN": "https://akshayprabhakant.com" },
   // The app lives at akshayprabhakant.com/chief-of-staff (src/paths.ts). A
   // route pattern cannot hold a query, so this one pattern is the only one
   // that also matches `/chief-of-staff?<query>`; it matches sibling paths
@@ -40,9 +45,10 @@
   // GOOGLE_BILLING_API_KEY arrives as a Worker secret with T10; it is never
   // written here. So do the provider plug-ins' values (README "Connecting the
   // providers"): the secrets ISSUER_KEYS and ENTRA_CERT_KEY, and the
-  // variables APP_ORIGIN, AWS_APP_ROLE_ARN, AWS_REGION, BEDROCK_TEMPLATE_URL,
+  // variables AWS_APP_ROLE_ARN, AWS_REGION, BEDROCK_TEMPLATE_URL,
   // ENTRA_CLIENT_ID, ENTRA_CERT_THUMBPRINT, FOUNDRY_CREDENTIAL,
-  // GOOGLE_WIF_PROVIDER and GOOGLE_SERVICE_ACCOUNT, none of them secret. The vault key (32 random bytes, base64; src/vault.ts) goes
+  // GOOGLE_WIF_PROVIDER and GOOGLE_SERVICE_ACCOUNT, none of them secret
+  // (APP_ORIGIN is in "vars" above). The vault key (32 random bytes, base64; src/vault.ts) goes
   // in Secrets Store as a binding with the first ticket that stores a vault
   // item; the three v1 provider connections need none.
 }
