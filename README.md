@@ -95,7 +95,7 @@ design-v3 section 10.3). Two parts:
   environment: `ACCESS_TEAM_DOMAIN` (`<team>.cloudflareaccess.com`, the bare host the
   tool writes, or the same with `https://`)
   and `ACCESS_AUD` (the AUD tag of the tool's sign-in application, not
-  secret). The tool will write both there once its requested change lands.
+  secret). The tool writes both there.
 
 ### Continuous integration
 
@@ -114,8 +114,8 @@ The shell Worker is its own release unit with its own pipeline,
 push to `main` that touches `shell/`, it runs in the GitHub environment
 `production`, where the `portfolio-app` tool (above) puts the secrets
 `CLOUDFLARE_API_TOKEN` (the narrow deploy token, no Access permission) and
-`CLOUDFLARE_ACCOUNT_ID`, and where it will write the variables `ACCESS_AUD`
-and `ACCESS_TEAM_DOMAIN` once its requested change lands, and:
+`CLOUDFLARE_ACCOUNT_ID` and the variables `ACCESS_AUD` and
+`ACCESS_TEAM_DOMAIN`, and:
 
 1. runs `make check test` in `shell/`, which applies every migration, in
    order, to a fresh local D1 holding only the made-up persona
