@@ -76,10 +76,10 @@ design-v3 section 10.3). Two parts:
   `akshayprabhakant.com/chief-of-staff/*`, and a second one with a Bypass
   policy on exactly the issuer's two documents,
   `/chief-of-staff/oidc/.well-known/openid-configuration` and
-  `/chief-of-staff/oidc/jwks.json`. The tool also makes the repository's
-  GitHub environment `production` (below). So the deploy token needs no
-  Access permission, and no address of the owner's is in this repository or
-  its secrets.
+  `/chief-of-staff/oidc/jwks.json`. The tool also puts the deploy secrets
+  in the repository's GitHub environment `production` (below). So the
+  deploy token needs no Access permission, and no address of the owner's is
+  in this repository or its secrets.
 - **The check in the Worker** (`shell/src/access.ts`), run first on every
   request under the prefix, HTTP and WebSocket upgrade alike. It reads the
   `Cf-Access-Jwt-Assertion` header only (a `CF_Authorization` cookie
@@ -94,7 +94,7 @@ design-v3 section 10.3). Two parts:
   Configuration is two Worker variables set at deploy from the `production`
   environment: `ACCESS_TEAM_DOMAIN` (`https://<team>.cloudflareaccess.com`)
   and `ACCESS_AUD` (the AUD tag of the tool's sign-in application, not
-  secret, written there by the tool).
+  secret). The tool will write both there once its requested change lands.
 
 ### Continuous integration
 
@@ -111,16 +111,17 @@ Third-party actions are pinned to full commit SHAs.
 The shell Worker is its own release unit with its own pipeline,
 `.github/workflows/release-shell.yml` (design-v3 2.4, 8.4, ADR-017). On a
 push to `main` that touches `shell/`, it runs in the GitHub environment
-`production`, which the `portfolio-app` tool sets up (above) with the secrets
+`production`, where the `portfolio-app` tool (above) puts the secrets
 `CLOUDFLARE_API_TOKEN` (the narrow deploy token, no Access permission) and
-`CLOUDFLARE_ACCOUNT_ID` and the variables `ACCESS_AUD` and
-`ACCESS_TEAM_DOMAIN`, and:
+`CLOUDFLARE_ACCOUNT_ID`, and where it will write the variables `ACCESS_AUD`
+and `ACCESS_TEAM_DOMAIN` once its requested change lands, and:
 
 1. runs `make check test` in `shell/`, which applies every migration, in
    order, to a fresh local D1 holding only the made-up persona
    (`scripts/check-migrations.mjs`, seeded from `test/persona-seed.sql`);
-2. stops there with a plain message while `CLOUDFLARE_API_TOKEN`,
-   `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is not set in that environment, and
+2. stops there with a plain message naming the missing one while
+   `CLOUDFLARE_API_TOKEN`, `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is not set in
+   that environment, and
    refuses while `wrangler.jsonc` has the placeholder database id;
 3. lists the pending migrations and, when any may change or remove data
    (anything but adding tables, indexes, views, columns or rows, and any

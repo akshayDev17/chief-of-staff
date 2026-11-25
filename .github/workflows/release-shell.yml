@@ -10,12 +10,13 @@ name: Release shell
 # app on akshayprabhakant.com: the route's two Access applications and the
 # GitHub environment `production` (README "Cloudflare Access"). Until that
 # environment holds the deploy token and the Access application's AUD tag,
-# the release stops after the tests with a plain message and nothing touches
-# any Cloudflare account.
+# the release stops after the tests with a plain message naming what is
+# missing, and nothing touches any Cloudflare account.
 #
 # Environment `production`: secrets CLOUDFLARE_API_TOKEN (the narrow deploy
-# token, no Access permission) and CLOUDFLARE_ACCOUNT_ID; variables
-# ACCESS_AUD and ACCESS_TEAM_DOMAIN.
+# token, no Access permission) and CLOUDFLARE_ACCOUNT_ID, which the tool
+# puts there; variables ACCESS_AUD and ACCESS_TEAM_DOMAIN, which the tool
+# will write once its requested change lands.
 
 on:
   push:
@@ -69,7 +70,7 @@ jobs:
           # Without both, the deployed Worker would refuse every request.
           for name in ACCESS_AUD ACCESS_TEAM_DOMAIN; do
             if [ -z "${!name}" ]; then
-              echo "Release skipped: the production environment variable ${name} is not set (the portfolio-app tool's Access application gives it). Nothing was migrated or deployed."
+              echo "Release skipped: the production environment variable ${name} is not set (the portfolio-app tool will write it once its requested change lands). Nothing was migrated or deployed."
               echo "go=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
