@@ -104,9 +104,9 @@ export type ModelOffer =
   // `noToolUse`: the live check that found the model makes no tool call.
   | { kind: "callable"; modelId: string; locations: BedrockLocation[]; noToolUse?: string }
   // `pricedAt`: where the price table prices it, so its row still shows
-  // its list price.
+  // its list price (a dropped model's too, for a user who added it).
   | { kind: "not_offered"; reason: string; pricedAt: string[] }
-  | { kind: "dropped" };
+  | { kind: "dropped"; pricedAt: string[] };
 
 export interface BedrockOffer {
   region: string;
@@ -260,7 +260,7 @@ export function matchBedrockModels(input: { catalog: BedrockCatalog; priced: rea
       continue;
     }
     if (m.lifecycle !== "ACTIVE" || !isChatModel(m)) {
-      byName[p.name] = { kind: "dropped" };
+      byName[p.name] = { kind: "dropped", pricedAt };
       continue;
     }
     const all = catalogLocations(m, catalog);

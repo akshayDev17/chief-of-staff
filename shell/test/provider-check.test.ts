@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addModel } from "../src/models/add";
-import { PROVIDERS_PATH } from "../src/paths";
+import { ADD_MODEL_PATH, PROVIDERS_PATH } from "../src/paths";
+import { handleAddModel } from "../src/models/page";
 import { handleProviders } from "../src/providers/page";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
 import { bedrockPlugin, TEST_MODEL } from "../src/providers/bedrock";
@@ -408,7 +409,7 @@ describe("Bedrock's own list and the models it no longer offers", () => {
   const listSaying = (byName: Record<string, ModelOffer>): BedrockOffer => ({ region: "us-east-1", readAt: "2026-11-26T14:44:00.000Z", byName });
   const converseUrls = (sent: Sent[]) => sent.filter((s) => s.url.includes("bedrock-runtime")).map((s) => decodeURIComponent(s.url));
 
-  const verdicts: ModelOffer[] = [{ kind: "dropped" }, { kind: "not_offered", reason: "priced by prompt length", pricedAt: ["us-east-1"] }];
+  const verdicts: ModelOffer[] = [{ kind: "dropped", pricedAt: ["global"] }, { kind: "not_offered", reason: "priced by prompt length", pricedAt: ["us-east-1"] }];
 
   it("runs the Connect test call at the test model's built-in profile IDs when the list drops or refuses it", async () => {
     for (const verdict of verdicts) {
@@ -468,8 +469,33 @@ describe("Bedrock's own list and the models it no longer offers", () => {
     expect(converseUrls(sent)).toHaveLength(before);
   });
 
+  it("keeps an added model the list later marks LEGACY at its in-Region price, saying it is legacy, not unpriced", async () => {
+    const { world, plugins, sent } = awsWorld(listSaying({ "DeepSeek v3.2": { kind: "dropped", pricedAt: ["us-east-1"] } }));
+    world.stack = true;
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "DeepSeek v3.2", "input", 0.6, "regional"), price("bedrock", "DeepSeek v3.2", "output", 2.4, "regional"),
+      ],
+    });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'bedrock', 'DeepSeek v3.2', 'us-east-1', ?)").bind(userId, T0.toISOString()).run();
+    await connectBedrock(plugins);
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    const before = converseUrls(sent).length;
+    const page = await (await handleAddModel(new Request(`${APP_ORIGIN}${ADD_MODEL_PATH}?provider=bedrock`), { db: env.DB, plugins, userId, viewer: "owner", now: T0 })).text();
+    const row = page.slice(page.indexOf("<strong>DeepSeek v3.2</strong>"), page.indexOf("</tr>", page.indexOf("<strong>DeepSeek v3.2</strong>")));
+    expect(row).toContain("$0.60 in · $2.40 out");
+    expect(row).toContain("not offered yet: Bedrock&#39;s own model list marks it legacy, or no longer as a chat model");
+    expect(row).not.toContain("no price yet");
+    expect(await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "DeepSeek v3.2", now: T0 })).toMatchObject({ kind: "refused", reason: "cannot_call", location: "us-east-1" });
+    expect(converseUrls(sent)).toHaveLength(before);
+  });
+
   it("refuses an added built-in model the list marks dropped with its reason, sending nothing to Bedrock", async () => {
-    const { world, plugins, sent } = awsWorld(listSaying({ "Claude Haiku 5.5": { kind: "dropped" } }));
+    const { world, plugins, sent } = awsWorld(listSaying({ "Claude Haiku 5.5": { kind: "dropped", pricedAt: ["global"] } }));
     world.stack = true;
     await writeSnapshot(env.DB, {
       takenAt: "2026-11-24T07:00:00Z",

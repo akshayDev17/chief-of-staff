@@ -95,6 +95,8 @@ describe("matching the price table to Bedrock's own list", () => {
       "Claude Opus 4.1", "Claude Sonnet 4.5", "Llama 3 70B", "Llama 3 8B", "Llama 3.1 70B", "Llama 3.1 8B", "Llama 3.3 70B",
       "Llama 4 Maverick 17B", "Llama 4 Scout 17B", "Mistral 7B", "Mixtral 8x7B", "Palmyra X4", "Palmyra X5", "R1",
     ]);
+    // Kept where the price table prices it, for a user who added it before.
+    expect(offer.byName["Llama 4 Scout 17B"]).toEqual({ kind: "dropped", pricedAt: ["us-east-1"] });
   });
 
   it("says why each other priced name is not offered", () => {

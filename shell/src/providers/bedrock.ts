@@ -262,7 +262,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     locations(model) {
       const o = offerFor(model);
       if (o?.kind === "callable") return o.locations.map((l) => l.location);
-      return o?.kind === "not_offered" && o.pricedAt.length ? o.pricedAt : ["global"];
+      return o?.pricedAt.length ? o.pricedAt : ["global"];
     },
     locationLabel(location, model) {
       if (location === "global") return "Global";

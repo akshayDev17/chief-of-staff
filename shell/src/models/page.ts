@@ -200,6 +200,8 @@ const CSS = `
 }
 td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
 td[data-l="Model"] { white-space: nowrap; }
+/* The "no tool use" note wraps, so the Pick button stays in view. */
+td[data-l="Model"] .small { white-space: normal; max-width: 28em; }
 @media (max-width: 759px) { td[data-l="Model"] { white-space: normal; } }
 form.pick { display: grid; gap: 4px; min-width: 12em; }
 form.pick label { color: var(--muted); }
