@@ -179,10 +179,12 @@ export interface ConnectMethod {
   // list marks LEGACY), which Add a model leaves out unless the user already
   // added it. Absent: every model is listed.
   listed?(model: string): boolean;
-  // False for a model known to make no tool call (a live call with one tool
-  // got none, or a refusal), shown on Add a model and the per-task picker.
-  // Absent, or true: no such fault is known.
-  toolUse?(model: string): boolean;
+  // For a model known to make no tool call (a live call with one tool got
+  // none, or a refusal), the check that found it ("tested live on Gemma 3 4B
+  // (google.gemma-3-4b-it): no tool call"), shown on Add a model; the
+  // per-task picker marks the model too. Absent, or undefined: no such fault
+  // is known.
+  noToolUse?(model: string): string | undefined;
   // Foundry only: the deployment name the guide asks the user to keep, the
   // model's ID, filled in on Add a model and changed by a user who named the
   // deployment differently; undefined for a model it cannot call. Absent

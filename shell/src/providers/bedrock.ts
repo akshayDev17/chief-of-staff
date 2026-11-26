@@ -104,7 +104,6 @@ function builtInOffer(model: string, region: string): ModelOffer | undefined {
       { location: "global", callId: `global.${id}`, kind: "global" },
       { location: region, callId: `${geo}.${id}`, kind: geo },
     ],
-    toolUse: true,
   };
 }
 
@@ -186,10 +185,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
   const region = regionOf(env);
   // A model the list does not price at this region keeps its built-in ID
   // (a model added before the list was read, the test model).
-  const offerFor = (model: string): ModelOffer | undefined => {
-    const listed = offer?.byName[model];
-    return listed?.kind === "callable" ? listed : (builtInOffer(model, region) ?? listed);
-  };
+  const offerFor = (model: string): ModelOffer | undefined => offer?.byName[model] ?? builtInOffer(model, region);
   const locationOf = (model: string, location: string): BedrockLocation | undefined => {
     const o = offerFor(model);
     return o?.kind === "callable" ? o.locations.find((l) => l.location === location) : undefined;
@@ -214,7 +210,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one invoke-only role, chief-of-staff-model-caller.',
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
-        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude and OpenAI GPT models (not gpt-oss) are sold through AWS Marketplace: accept each one's terms once in the Bedrock console (Model access). Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude, OpenAI GPT (not gpt-oss) and Writer Palmyra X models are sold through AWS Marketplace: accept each one's terms once in the Bedrock console (Model access). Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "Go back to the Chief of staff tab and finish the Connect step so the test call runs.",
       ],
@@ -251,9 +247,9 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       return offer ? "the app has no Bedrock ID for it" : "the app has not read Bedrock's own model list yet (Admin's one-time AWS step)";
     },
     listed: (model) => offerFor(model)?.kind !== "dropped",
-    toolUse(model) {
+    noToolUse(model) {
       const o = offerFor(model);
-      return o?.kind !== "callable" || o.toolUse;
+      return o?.kind === "callable" ? o.noToolUse : undefined;
     },
     // Converse's reply does not name the model.
     replyModel: () => undefined,

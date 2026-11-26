@@ -89,13 +89,14 @@ function actionCell(row: OfferRow, plugin: ProviderPlugin, viewer: Viewer): stri
 
 // A model known to make no tool call. Tasks name no tools yet, so the
 // per-task picker shows the same flag and offers the model for every task.
-const NO_TOOL_USE = `<div><span class="pill warn" title="A live call with one tool got no tool call from this model">no tool use</span></div><div class="small muted">for tasks that need no tools</div>`;
+const noToolUse = (tested: string): string =>
+  `<div><span class="pill warn" title="${esc(tested)}">no tool use</span></div><div class="small muted">${esc(tested)}; for tasks that need no tools</div>`;
 
 function table(input: AddPageInput, plugin: ProviderPlugin): string {
   if (!input.rows.length) return `<p class="small muted">The price table lists no chat model at ${esc(plugin.connect.guide.name)} yet.</p>`;
   const body = input.rows
     .map(
-      (r) => `<tr${r.added ? ' class="added"' : ""}><td data-l="Model"><strong>${esc(r.model)}</strong>${r.toolUse ? "" : NO_TOOL_USE}</td>
+      (r) => `<tr${r.added ? ' class="added"' : ""}><td data-l="Model"><strong>${esc(r.model)}</strong>${r.noToolUse ? noToolUse(r.noToolUse) : ""}</td>
 ${priceCells(r, plugin)}
 ${actionCell(r, plugin, input.viewer)}</tr>`,
     )

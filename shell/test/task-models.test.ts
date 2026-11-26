@@ -79,7 +79,7 @@ describe("a model known to make no tool call", () => {
   it("says so wherever the picker names it", async () => {
     await addModel(userId, "bedrock", "test-haiku");
     await addModel(userId, "vertex", "test-gemini");
-    bedrock.connect.toolUse = (m) => m !== "test-haiku";
+    bedrock.connect.noToolUse = (m) => (m === "test-haiku" ? "tested live on test-haiku: no tool call" : undefined);
     const page = await (await open()).text();
     expect(page).toContain("test-haiku · bedrock · no tool use");
     expect(page).not.toContain("test-gemini · vertex · no tool use");

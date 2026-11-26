@@ -47,10 +47,12 @@ the three lines of design-v3 1.5 and nothing stored, when:
   Foundry deployment shows "That deployment name or model ID doesn't exist
   here." with Foundry's own reply under it.
 
-A model known to make no tool call (`connect.toolUse`) shows **no tool use**
-on its row and wherever the per-task picker names it. It can still be picked:
-tasks name no tools yet, so the picker cannot keep it from a task that sends
-tools (a TODO for T18 in `picker-page.ts`). A model the provider no longer
+A model known to make no tool call (`connect.noToolUse`) shows **no tool use**
+on its row, with the model the live check was made on ("tested live on Gemma
+3 4B (google.gemma-3-4b-it): no tool call"), and wherever the per-task picker
+names it. It can still be picked: tasks name no tools yet, so the picker
+cannot keep it from a task that sends tools (a TODO for T18 in
+`picker-page.ts`). A model the provider no longer
 offers (`connect.listed`) is left out, unless the user already added it.
 
 **Bedrock.** The list comes from Bedrock's own model list

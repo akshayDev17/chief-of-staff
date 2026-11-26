@@ -125,7 +125,7 @@ describe("matching the price table to Bedrock's own list", () => {
   });
 
   it("marks the models that made no tool call, and no others", () => {
-    const noTools = Object.entries(offer.byName).filter(([, o]) => o.kind === "callable" && !o.toolUse).map(([name]) => name).sort();
+    const noTools = Object.entries(offer.byName).filter(([, o]) => o.kind === "callable" && o.noToolUse).map(([name]) => name).sort();
     expect(noTools).toEqual([
       "Gemma 3 12B", "Gemma 3 27B", "Gemma 3 4B", "NVIDIA Nemotron 3 Super 120B A12B", "NVIDIA Nemotron Nano 2", "NVIDIA Nemotron Nano 2 VL", "Nemotron Nano 3 30B",
     ]);
@@ -167,8 +167,24 @@ describe("the Bedrock plug-in with the list", () => {
     expect(c.locations("Claude 3 Haiku")).toEqual(["us-east-1"]);
     expect(c.listed!("Llama 3.3 70B")).toBe(false);
     expect(c.listed!("Claude 3 Haiku")).toBe(true);
-    expect(c.toolUse!("Gemma 3 4B")).toBe(false);
-    expect(c.toolUse!("Qwen3 32B")).toBe(true);
+    expect(c.noToolUse!("Gemma 3 4B")).toBe("tested live on Gemma 3 4B (google.gemma-3-4b-it): no tool call");
+    expect(c.noToolUse!("Nemotron Nano 3 30B")).toBe("tested live on Nemotron Nano 2 9B (nvidia.nemotron-nano-9b-v2): no tool call");
+    expect(c.noToolUse!("Qwen3 32B")).toBeUndefined();
+  });
+
+  it("honours the list's verdict on a built-in model: one marked LEGACY is not listed and cannot be called", () => {
+    const legacy: BedrockCatalog = { ...catalog, models: catalog.models.map((m) => (m.modelId === "anthropic.claude-haiku-5-5" ? { ...m, lifecycle: "LEGACY" } : m)) };
+    const lc = bedrockPlugin({}, fetch, () => new Date(), matchBedrockModels({ catalog: legacy, priced })).connect;
+    expect(lc.listed!("Claude Haiku 5.5")).toBe(false);
+    expect(lc.canCall("Claude Haiku 5.5")).toBe(false);
+    expect(lc.notCallableReason("Claude Haiku 5.5")).toBe("Bedrock's own model list marks it legacy, or no longer as a chat model");
+  });
+
+  it("honours the list's long-prompt refusal on a built-in model, rather than count it low", () => {
+    const o = matchBedrockModels({ catalog, priced: [{ name: "Claude Sonnet 5.5", deployments: ["global", "regional"], longPrompt: true }] });
+    const lc = bedrockPlugin({}, fetch, () => new Date(), o).connect;
+    expect(lc.canCall("Claude Sonnet 5.5")).toBe(false);
+    expect(lc.notCallableReason("Claude Sonnet 5.5")).toContain("long-prompt prices");
   });
 
   it("before the list is read, offers only its built-in models, and says why", () => {

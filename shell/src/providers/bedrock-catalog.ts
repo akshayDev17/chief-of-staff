@@ -86,7 +86,7 @@ export interface PricedName {
 
 export interface ReviewedModels {
   names: Record<string, string>;
-  noToolUse: Array<{ prefix: string; evidence: string }>;
+  noToolUse: Array<{ prefix: string; tested: string; evidence: string }>;
 }
 
 export const REVIEWED: ReviewedModels = reviewedFile;
@@ -101,7 +101,8 @@ export interface BedrockLocation {
 }
 
 export type ModelOffer =
-  | { kind: "callable"; modelId: string; locations: BedrockLocation[]; toolUse: boolean }
+  // `noToolUse`: the live check that found the model makes no tool call.
+  | { kind: "callable"; modelId: string; locations: BedrockLocation[]; noToolUse?: string }
   // `pricedAt`: where the price table prices it, so its row still shows
   // its list price.
   | { kind: "not_offered"; reason: string; pricedAt: string[] }
@@ -220,7 +221,7 @@ function modelFor(name: string, catalog: BedrockCatalog, reviewed: ReviewedModel
   return found.length === 1 ? found[0]! : found.length ? "several" : "none";
 }
 
-export const toolUseOf = (modelId: string, reviewed: ReviewedModels = REVIEWED): boolean => !reviewed.noToolUse.some((r) => modelId.startsWith(r.prefix));
+export const noToolUseOf = (modelId: string, reviewed: ReviewedModels = REVIEWED): string | undefined => reviewed.noToolUse.find((r) => modelId.startsWith(r.prefix))?.tested;
 
 // Every location Bedrock's lists offer the model at, from the app's region,
 // Global first: Global is the app's default where it is offered (design-v3 1.5).
@@ -274,7 +275,7 @@ export function matchBedrockModels(input: { catalog: BedrockCatalog; priced: rea
       continue;
     }
     const offered = all.filter((l) => pricedAt.includes(l.location));
-    byName[p.name] = { kind: "callable", modelId: m.modelId, locations: offered.length ? offered : all, toolUse: toolUseOf(m.modelId, reviewed) };
+    byName[p.name] = { kind: "callable", modelId: m.modelId, locations: offered.length ? offered : all, noToolUse: noToolUseOf(m.modelId, reviewed) };
   }
   return { region: catalog.region, readAt: catalog.readAt, byName };
 }

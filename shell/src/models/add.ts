@@ -39,8 +39,9 @@ export interface OfferRow {
   tier?: Tier;
   // The plug-in can call it: it knows the provider's own ID for the model.
   callable: boolean;
-  // False where the model is known to make no tool call (connect.toolUse).
-  toolUse: boolean;
+  // Where the model is known to make no tool call, the check that found it
+  // (connect.noToolUse).
+  noToolUse?: string;
   // Foundry only: the deployment name filled in (the user's own, once added).
   deployment?: string;
   added?: UserModel;
@@ -175,7 +176,7 @@ async function offerRow(db: D1Database, userId: string, plugin: ProviderPlugin, 
         : undefined,
     tier: input && output ? await lookupTier(db, { provider: plugin.provider, model }) : undefined,
     callable: plugin.connect.canCall(model),
-    toolUse: plugin.connect.toolUse?.(model) ?? true,
+    noToolUse: plugin.connect.noToolUse?.(model),
     deployment: added?.deployment ?? plugin.connect.deploymentName?.(model),
     added,
   };

@@ -132,13 +132,14 @@ describe("Add a model: what the plug-in knows of each model", () => {
   });
 
   it("marks a model known to make no tool call, and it can still be picked", async () => {
-    plugin.connect.toolUse = (m) => m !== "test-haiku";
+    plugin.connect.noToolUse = (m) => (m === "test-haiku" ? "tested live on Test Haiku (test.haiku-1): no tool call" : undefined);
     const rows = await listOffer(env.DB, plugins, userId, "bedrock");
-    expect(rows.find((r) => r.model === "test-haiku")).toMatchObject({ toolUse: false, callable: true });
+    expect(rows.find((r) => r.model === "test-haiku")).toMatchObject({ noToolUse: "tested live on Test Haiku (test.haiku-1): no tool call", callable: true });
     const page = await (await open(plugins)).text();
     const at = page.indexOf("<strong>test-haiku</strong>");
     const tr = page.slice(at, page.indexOf("</tr>", at));
-    expect(tr).toContain('<span class="pill warn" title="A live call with one tool got no tool call from this model">no tool use</span>');
+    expect(tr).toContain('<span class="pill warn" title="tested live on Test Haiku (test.haiku-1): no tool call">no tool use</span>');
+    expect(tr).toContain("tested live on Test Haiku (test.haiku-1): no tool call; for tasks that need no tools");
     expect(tr).toContain('type="submit"');
     const sonnet = page.indexOf("<strong>test-sonnet</strong>");
     expect(page.slice(sonnet, page.indexOf("</tr>", sonnet))).not.toContain("no tool use");
