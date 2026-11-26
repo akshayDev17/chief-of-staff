@@ -51,6 +51,11 @@ const SESSION_NAME = "chief-of-staff";
 // Bedrock's own IDs for the models the app knows, from each model card's
 // "Programmatic Access" table (read 2026-11-25; launch dates on the cards).
 // Global and cross-Region calls prefix the ID with `global.` or the geography.
+// The map holds only the four Claude models T16 added for the Connect test
+// call. That is a known shortfall, not a rule: Add a model is meant to offer
+// every chat model Bedrock sells at a listed price, of every model family
+// (T17, design-v3 1.5), and every other model shows "not offered yet" until
+// the T17 fix adds its ID here.
 export const BEDROCK_MODEL_IDS: Readonly<Record<string, string>> = {
   "Claude Haiku 5.5": "anthropic.claude-haiku-5-5",
   "Claude Sonnet 5.5": "anthropic.claude-sonnet-5-5",
@@ -139,7 +144,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         "An AWS account with a payment method for Marketplace purchases.",
         "Type your 12-digit AWS account ID (not secret) and tap <strong>Connect Amazon Bedrock</strong>: AWS opens a ready-filled stack.",
         "Tick the acknowledgement and tap <strong>Create stack</strong>. It makes a role that can only call models, for this app alone.",
-        "Enable your model once in the Bedrock console (Model access). For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        "Enable each model you pick once in the Bedrock console (Model access), and Claude Haiku 5.5, which the test call uses. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "The app checks the connection and runs the test call by itself.",
       ],
@@ -167,9 +172,10 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     testModel: "Claude Haiku 5.5",
     knownModels: Object.keys(BEDROCK_MODEL_IDS),
     // Converse speaks every model family, but the call needs Bedrock's own ID
-    // for the model, read from its model card: a model the app has no ID for
-    // is not offered until its ID is added above.
+    // for the model, read from its model card. A model the app has no ID for
+    // is not offered yet (the shortfall above), until its ID is added.
     canCall: (model) => model in BEDROCK_MODEL_IDS,
+    notCallableReason: "the app has no Bedrock ID for it",
     // Converse's reply does not name the model.
     replyModel: () => undefined,
     // The 5.5 models have no in-Region ID ("N/A" on their cards): Global, or

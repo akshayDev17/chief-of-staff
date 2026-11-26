@@ -72,7 +72,7 @@ function priceCells(row: OfferRow, plugin: ProviderPlugin): string {
 function actionCell(row: OfferRow, plugin: ProviderPlugin, viewer: Viewer): string {
   if (!row.price) return `<td data-l=""><button type="button" class="btn small" disabled>Cannot be picked</button></td>`;
   if (!row.callable) {
-    return `<td data-l=""><button type="button" class="btn small" disabled>Cannot be picked</button><div class="small muted">the app cannot call it at ${esc(plugin.connect.guide.short)} yet</div></td>`;
+    return `<td data-l=""><button type="button" class="btn small" disabled>Cannot be picked</button><div class="small muted">not offered yet: ${esc(plugin.connect.notCallableReason)}</div></td>`;
   }
   const label = row.added ? "Test again" : "Pick";
   const added = row.added ? `<span class="pill ok">added</span> ` : "";
@@ -170,11 +170,11 @@ ${foundryHint}`
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
 <p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers</a> · <a href="${BUDGETS_PATH}">Budgets</a> · <strong>Add a model</strong> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
 <h2>Add a model</h2>
-<p>Pick from every chat model your provider sells at a listed price. The price comes from the app's own price table, with its source and date; nothing to type. Each model's strength comes from its input price: Smallest under $0.50 per million tokens, Middle $0.50 to under $2.50, Strongest $2.50 and up.</p>
+<p>Pick from every chat model your provider sells at a listed price, of every model family. The price comes from the app's own price table, with its source and date; nothing to type. Each model's strength comes from its input price: Smallest under $0.50 per million tokens, Middle $0.50 to under $2.50, Strongest $2.50 and up.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
 ${content}
-<p class="small muted" style="margin-top:8px">A model can be picked only after its test call passes. A reply naming a different model is refused with a plain reason. A model with no price yet cannot be added, because the budget stop needs a real price.</p>
+<p class="small muted" style="margin-top:8px">A model can be picked only after its test call passes. A reply naming a different model is refused with a plain reason. A model with no price yet cannot be added, because the budget stop needs a real price. A model the app cannot call yet says "not offered yet" and why.</p>
 <div class="row"><a class="btn" href="${TASK_MODELS_PATH}">Next: the model for each task</a></div>
 </main>
 </body>

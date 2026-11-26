@@ -199,7 +199,10 @@ export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim
 // The ID is the deployment name the guide asks the user to keep ("By
 // default, the deployment uses the model name"). A price-table name is mapped
 // only where the page names exactly one ID plainly for the same model. A
-// model the table prices but this map leaves out cannot be picked: a
+// model the table prices but this map leaves out is not offered yet: a
+// known shortfall against Add a model's list of every chat model Foundry
+// sells at a listed price (T17, design-v3 1.5), not a rule, closed by the
+// T17 fix once each ID is confirmed. Left out today: a
 // Fireworks or Baseten row, a retired or dated version, and a meter whose
 // catalog ID would be a guess ("DeepSeek V3.2 SP", "Mistral MM3.5",
 // "Mistral Codestral", "Grok 4.1", "Grok 4.2", "Grok4 Fast",
@@ -460,8 +463,8 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
       vendor: "Foundry",
       recommendedForFriends: false,
       steps: [
-        "A personal Microsoft account (not a work or school account) with a paid Azure subscription with pay-as-you-go billing (not a free trial, student, credit-only or reseller subscription), billed in a country where Anthropic sells Claude, with a Foundry project in a region that offers the model.",
-        "For Claude: Build → Catalog → Model Catalog → the model (Claude Haiku 5.5 for the test call) → Deploy → Custom settings, then accept the Marketplace terms. Keep the suggested deployment name.",
+        "A personal Microsoft account (not a work or school account) with a paid Azure subscription with pay-as-you-go billing (not a free trial, student, credit-only or reseller subscription), with a Foundry project in a region that offers the models you pick. For Claude, the subscription must also be billed in a country where Anthropic sells Claude.",
+        "Deploy each model you pick, and Claude Haiku 5.5, which the test call uses: Build → Catalog → Model Catalog → the model → Deploy → Custom settings; for Claude, then accept the Marketplace terms. Keep the suggested deployment name.",
         "Type your Foundry resource address and your Directory (tenant) ID (Azure portal → Microsoft Entra ID → Overview → Tenant ID), and tap <strong>Connect Microsoft Foundry</strong>: sign in with your personal Microsoft account, then tap <strong>Accept</strong>. Your directory is taken from this sign-in, so only you can connect it. A work or school account can't connect Foundry here: connect Amazon Bedrock or Google Vertex AI instead.",
         "On your resource: Access control (IAM) → Add → Add role assignment → the role → “Chief of staff” → Review + assign.",
         "Turn off key authentication on the resource, so no key can be read from it.",
@@ -544,6 +547,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
     testModel: "Claude Haiku 5.5",
     knownModels: FOUNDRY_CLAUDE_MODELS,
     canCall: (model) => model in FOUNDRY_MODEL_IDS,
+    notCallableReason: "the app has no Foundry ID for it",
     deploymentName,
     locations: () => ["global", "data-zone"],
     locationLabel: (location) => (location === "global" ? "Global Standard" : location === "data-zone" ? "Data Zone Standard" : location),

@@ -332,7 +332,7 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
     case "no_price":
       return `${o.model} has no price yet, so it cannot be added: the budget stop needs a real price.`;
     case "cannot_call":
-      return `The app cannot call ${o.model} at ${name} yet.`;
+      return `${o.model} is not offered at ${name} yet: ${plugin?.connect.notCallableReason ?? "the app cannot call it"}.`;
     case "bad_deployment":
       return viewer === "friend"
         ? "Foundry's name for a model is letters, digits, hyphens, dots or underscores, at most 64."
