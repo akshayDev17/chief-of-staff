@@ -6,6 +6,9 @@
 //
 // Before sending a call to a provider the core refuses it when:
 // - no plug-in serves the provider (`no_plugin`);
+// - the plug-in cannot call the model (`not_callable`, with the plug-in's
+//   reason): a model the user added that the provider's list now drops or
+//   refuses;
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
 // - the user has set no monthly budget for the provider (`no_budget`), except
@@ -70,7 +73,7 @@ export interface ModelCall {
   fallback?: ModelChoice;
 }
 
-export type Refusal = "no_plugin" | "no_price" | "no_budget" | "budget_spent" | "not_connected" | "credential_failed";
+export type Refusal = "no_plugin" | "not_callable" | "no_price" | "no_budget" | "budget_spent" | "not_connected" | "credential_failed";
 
 export const TEST_TASK = "test_call";
 
@@ -164,6 +167,7 @@ async function attempt(
 
   const plugin = plugins[provider];
   if (!plugin) return refuse("no_plugin", `${PROVIDER_NAMES[provider]} is not available yet`);
+  if (!plugin.connect.canCall(model)) return refuse("not_callable", `${model} is not offered at ${PROVIDER_NAMES[provider]} yet: ${plugin.connect.notCallableReason(model)}`);
 
   const prices = await listPrices(db, choice, false);
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);

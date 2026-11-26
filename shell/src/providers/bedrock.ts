@@ -183,9 +183,11 @@ const CONSOLE_MODEL_ACCESS: Link = { label: "Open Bedrock's model access", href:
 // (readBedrockOffer), absent until the app has read that list once.
 export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date(), offer?: BedrockOffer): ProviderPlugin {
   const region = regionOf(env);
-  // A model the list does not price at this region keeps its built-in ID
-  // (a model added before the list was read, the test model).
-  const offerFor = (model: string): ModelOffer | undefined => offer?.byName[model] ?? builtInOffer(model, region);
+  // The test model always keeps its built-in IDs and locations, whatever the
+  // list says of it; another built-in model keeps them only where the list
+  // does not name it (before the list is read, or not priced at this region).
+  const offerFor = (model: string): ModelOffer | undefined =>
+    model === TEST_MODEL ? builtInOffer(model, region) : (offer?.byName[model] ?? builtInOffer(model, region));
   const locationOf = (model: string, location: string): BedrockLocation | undefined => {
     const o = offerFor(model);
     return o?.kind === "callable" ? o.locations.find((l) => l.location === location) : undefined;
@@ -196,7 +198,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       ? quickCreateLink({ region, templateUrl: env.BEDROCK_TEMPLATE_URL, appRoleArn: env.AWS_APP_ROLE_ARN, externalId })
       : undefined;
 
-  const modelId = (model: string, location: string): string => locationOf(model, location)?.callId ?? BEDROCK_MODEL_IDS[model] ?? model;
+  const modelId = (model: string, location: string): string => locationOf(model, location)?.callId ?? model;
 
   const connect: ConnectMethod = {
     guide: {

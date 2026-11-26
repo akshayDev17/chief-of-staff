@@ -32,7 +32,10 @@ records the connection as revoked, for T49's alert
 
 ## What the proxy does with a call
 
-1. Prices it: the model needs an input and an output list price at its
+1. Refuses a model the plug-in cannot call (`not_callable`, with the
+   plug-in's `notCallableReason`): one the user added that the provider's
+   list now drops or refuses. Nothing is sent to the provider.
+2. Prices it: the model needs an input and an output list price at its
    location in the current price table (`lookupPrice`, T11), else it is refused
    (`no_price`). Once the reply is in, every kind of token it used is costed
    at its own row: the long-prompt rows when the provider billed at them, and
@@ -44,21 +47,21 @@ records the connection as revoked, for T49's alert
    rate used (`costed_conservatively`), and the maintainers get a
    `price_missing` alert on Admin · Price table, at most one a UTC day for
    each model, location and token kind.
-2. Enforces the provider's monthly budget: none set is refused (`no_budget`),
+3. Enforces the provider's monthly budget: none set is refused (`no_budget`),
    except for the Connect test call (`sendTestCall`, task `test_call`), which
    runs before budgets are set;
    the user's spend at that provider since 00:00 UTC on the 1st reaching it is
    refused (`budget_spent`) until the 1st, with the date it resumes. The call
    that crosses the budget is the last one: the check runs before each call,
    whose cost is known only from the reply.
-3. Reads the user's connection (`not_connected`) and mints a credential
+4. Reads the user's connection (`not_connected`) and mints a credential
    (`credential_failed`).
-4. Sends the call and writes one ledger row (`model_calls`), answered or not.
-5. Falls back once, to the task's fallback on another provider, when the main
+5. Sends the call and writes one ledger row (`model_calls`), answered or not.
+6. Falls back once, to the task's fallback on another provider, when the main
    provider's budget is spent, its credential fails, or it refuses or fails the
    call (408, 429, 5xx, or no reply). The fallback passes every check above
    within its own provider's budget, and its ledger row carries `fallback` 1
-   and the reason. A setup refusal (no budget, no price, not connected) and the
+   and the reason. A setup refusal (not callable, no budget, no price, not connected) and the
    request's own fault (another 4xx) are returned as they are.
 
 No prompt, reply or credential is logged or stored anywhere.

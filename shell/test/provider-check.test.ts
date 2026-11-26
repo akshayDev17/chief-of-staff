@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
-import { bedrockPlugin } from "../src/providers/bedrock";
+import { bedrockPlugin, TEST_MODEL } from "../src/providers/bedrock";
+import type { BedrockOffer, ModelOffer } from "../src/providers/bedrock-catalog";
 import { foundryPlugin } from "../src/providers/foundry";
 import { writeSnapshot } from "../src/prices/store";
 import type { PriceRow } from "../src/prices/types";
@@ -43,7 +44,7 @@ beforeEach(async () => {
 });
 
 // AWS as the scenario has it: whether the user's stack exists, and what Converse says.
-function awsWorld() {
+function awsWorld(offer?: BedrockOffer) {
   const world = { stack: false, converse: (): Response => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3 } }) };
   const { fetcher, sent } = scriptedFetch([
     [/sts\.us-east-1/, (s: Sent) => {
@@ -55,7 +56,7 @@ function awsWorld() {
     [/cloudformation/, () => new Response("<Outputs><member><OutputKey>TemplateVersion</OutputKey><OutputValue>1.0.0</OutputValue></member></Outputs>")],
   ]);
   const plugins = {
-    bedrock: bedrockPlugin({ APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json" }, fetcher, () => T0),
+    bedrock: bedrockPlugin({ APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json" }, fetcher, () => T0, offer),
   };
   return { world, plugins, sent };
 }
@@ -397,5 +398,53 @@ describe("Connect Microsoft Foundry, through a signed Microsoft sign-in and then
     const other = (await userFor("friend-sub")).id;
     expect(await finishConsent(env.DB, p, { userId: other, provider: "foundry", returned: new URLSearchParams({ code: "c", state }), appOrigin: APP_ORIGIN, now: at(1) })).toHaveProperty("problem");
     expect("open" in (await back(p, { code: "c", state }))).toBe(true);
+  });
+});
+
+describe("Bedrock's own list and the models it no longer offers", () => {
+  const listSaying = (byName: Record<string, ModelOffer>): BedrockOffer => ({ region: "us-east-1", readAt: "2026-11-26T14:44:00.000Z", byName });
+  const converseUrls = (sent: Sent[]) => sent.filter((s) => s.url.includes("bedrock-runtime")).map((s) => decodeURIComponent(s.url));
+
+  it("keeps the Connect test call on the test model's built-in profile IDs, whatever the list says of it", async () => {
+    const verdicts: ModelOffer[] = [{ kind: "dropped" }, { kind: "not_offered", reason: "priced by prompt length", pricedAt: ["us-east-1"] }];
+    for (const verdict of verdicts) {
+      const { world, plugins, sent } = awsWorld(listSaying({ [TEST_MODEL]: verdict }));
+      world.stack = true;
+      await connectBedrock(plugins);
+      expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "global", result: { model: TEST_MODEL, modelId: "global.amazon.nova-2-lite-v1:0" } });
+      expect(converseUrls(sent)).toEqual(["https://bedrock-runtime.us-east-1.amazonaws.com/model/global.amazon.nova-2-lite-v1:0/converse"]);
+      const c = plugins.bedrock.connect;
+      expect(c.locations(TEST_MODEL)).toEqual(["global", "us-east-1"]);
+      expect(c.modelId(TEST_MODEL, "us-east-1")).toBe("us.amazon.nova-2-lite-v1:0");
+      expect(c.canCall(TEST_MODEL)).toBe(true);
+      await disconnectProvider(env.DB, userId, "bedrock");
+    }
+  });
+
+  it("refuses an added built-in model the list marks dropped with its reason, sending nothing to Bedrock", async () => {
+    const { world, plugins, sent } = awsWorld(listSaying({ "Claude Haiku 5.5": { kind: "dropped" } }));
+    world.stack = true;
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "Claude Haiku 5.5", "input", 1), price("bedrock", "Claude Haiku 5.5", "output", 5),
+      ],
+    });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'bedrock', 'Claude Haiku 5.5', 'global', ?)").bind(userId, T0.toISOString()).run();
+    await connectBedrock(plugins);
+    // The Connect test call skips the model it can no longer call.
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", result: { model: TEST_MODEL } });
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    const before = converseUrls(sent).length;
+    const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => T0);
+    expect(outcome).toMatchObject({
+      kind: "refused",
+      reason: "not_callable",
+      detail: "Claude Haiku 5.5 is not offered at Amazon Bedrock yet: Bedrock's own model list marks it legacy, or no longer as a chat model",
+    });
+    expect(converseUrls(sent)).toHaveLength(before);
   });
 });

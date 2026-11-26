@@ -167,13 +167,15 @@ export function verdictText(result: CheckResult, plugin: ProviderPlugin): string
 }
 
 // The test call's model and location: the first model the user picked at
-// this provider, else the plug-in's own test model, at the region the user
-// chose or else the app's default for that model.
+// this provider, while the plug-in can still call it, else the plug-in's own
+// test model, at the region the user chose or else the app's default for that
+// model.
 async function testChoice(db: D1Database, userId: string, plugin: ProviderPlugin, check: Check | undefined): Promise<{ model: string; location: string; deployment?: string }> {
   const picked = await db
     .prepare("SELECT model, location, deployment FROM user_models WHERE user_id = ? AND provider = ? ORDER BY added_at LIMIT 1")
     .bind(userId, plugin.provider)
-    .first<{ model: string; location: string; deployment: string | null }>();
+    .first<{ model: string; location: string; deployment: string | null }>()
+    .then((m) => (m && plugin.connect.canCall(m.model) ? m : null));
   const model = picked?.model ?? plugin.connect.testModel;
   const locations = plugin.connect.locations(model);
   const location = check?.region && locations.includes(check.region) ? check.region : picked && locations.includes(picked.location) ? picked.location : locations[0]!;

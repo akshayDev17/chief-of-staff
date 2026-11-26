@@ -307,6 +307,8 @@ export async function addModel(
   }
   if (outcome.kind === "provider_error") return refuse("no_reply", { ...at, note: `${plugin.connect.guide.short} did not answer the test call.` });
   switch (outcome.reason) {
+    case "not_callable":
+      return refuse("cannot_call", at);
     case "no_price":
       return refuse("no_price", at);
     case "budget_spent":
