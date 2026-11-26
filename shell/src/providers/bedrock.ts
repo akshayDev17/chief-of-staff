@@ -143,7 +143,10 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       steps: [
         "An AWS account with a payment method for Marketplace purchases.",
         "Type your 12-digit AWS account ID (not secret) and tap <strong>Connect Amazon Bedrock</strong>: AWS opens a ready-filled stack.",
-        "Tick the acknowledgement and tap <strong>Create stack</strong>. It makes a role that can only call models, for this app alone.",
+        'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one invoke-only role, chief-of-staff-model-caller.',
+        "Press <strong>Create stack</strong>.",
+        "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
+        "Go back to the COS tab and finish the Connect step so the test call runs.",
         "Enable each model you pick once in the Bedrock console (Model access). Enable Claude Haiku 5.5 too, even if you want other model families: the Connect test call runs on it today. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "The app checks the connection and runs the test call by itself.",
