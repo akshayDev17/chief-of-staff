@@ -60,8 +60,8 @@ plug-in. Each plug-in's file cites the vendor pages it follows, read
 
 The callers speak each provider's own format: Converse on Bedrock (every
 model family, for each model whose Bedrock ID is in `BEDROCK_MODEL_IDS`;
-today only the four Claude models T16 added for the test call, a shortfall
-the T17 fix closes), Anthropic's Messages format for
+today only the four Claude models T16 added and Nova 2.0 Lite, the Connect
+test call's model, a shortfall the T17 fix closes), Anthropic's Messages format for
 Claude on Foundry (`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`),
 Chat Completions for every other Foundry model
 (`/openai/v1/chat/completions`, by the user's deployment name) and

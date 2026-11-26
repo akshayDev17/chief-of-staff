@@ -48,7 +48,8 @@ the three lines of design-v3 1.5 and nothing stored, when:
 
 **Known shortfall.** The `canCall` refusal above is narrower than this
 screen's rule. `BEDROCK_MODEL_IDS` holds only the four Claude models T16
-added for the Connect test call, so Bedrock offers no other family;
+added and Nova 2.0 Lite, the Connect test call's model, so Bedrock offers no
+other model;
 Vertex AI calls no publisher but Anthropic and Google; and
 `FOUNDRY_MODEL_IDS` leaves out the models whose catalog ID is not
 confirmed. None of this is a rule or a
