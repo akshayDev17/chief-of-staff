@@ -231,7 +231,9 @@ reaches the Worker with the next release.
 Nothing here has run against a cloud account. M2 steps 1, 2, 10 and the
 Connect checks of step 11 (federated credentials across Entra tenants, admin
 consent from a personal Microsoft account, a Foundry role without `listkeys`,
-a console-enabled Bedrock model through the model-caller role, Vertex AI
+a console-enabled Bedrock model through the model-caller role, the
+`aws-marketplace:ProductId` condition holding for Bedrock's automatic
+first-call subscription (`bedrock-template/README.md`), Vertex AI
 billing to the user's project, the time from revoking a grant to refusal,
 and (g): Vertex AI's Claude endpoint answering a per-user federated principal
 granted the role directly; if it does not, each user gets their own service
