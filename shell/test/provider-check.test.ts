@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addModel } from "../src/models/add";
+import { PROVIDERS_PATH } from "../src/paths";
+import { handleProviders } from "../src/providers/page";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
 import { bedrockPlugin, TEST_MODEL } from "../src/providers/bedrock";
 import type { BedrockOffer, ModelOffer } from "../src/providers/bedrock-catalog";
@@ -416,6 +418,9 @@ describe("Bedrock's own list and the models it no longer offers", () => {
       expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "global", result: { model: TEST_MODEL, modelId: "global.amazon.nova-2-lite-v1:0" } });
       expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "us-east-1", at(1))).toBeUndefined();
       expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "us-east-1", result: { modelId: "us.amazon.nova-2-lite-v1:0" } });
+      const page = await (await handleProviders(new Request(`${APP_ORIGIN}${PROVIDERS_PATH}?provider=bedrock&change=region`), { db: env.DB, plugins, userId, viewer: "owner", appOrigin: APP_ORIGIN, now: at(1) })).text();
+      expect(page).toContain("us.amazon.nova-2-lite-v1:0 (US cross-Region from us-east-1)");
+      expect(page).toContain(">US cross-Region from us-east-1</option>");
       expect(converseUrls(sent)).toEqual([
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/global.amazon.nova-2-lite-v1:0/converse",
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1:0/converse",

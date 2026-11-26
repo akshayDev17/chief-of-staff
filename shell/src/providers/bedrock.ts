@@ -199,6 +199,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
 
   const modelId = (model: string, location: string): string | undefined => locationOf(model, location)?.callId;
   const testOffer = builtInOffer(TEST_MODEL, region);
+  const testLocations = testOffer?.kind === "callable" ? testOffer.locations : [];
 
   const connect: ConnectMethod = {
     guide: {
@@ -238,7 +239,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     },
     setupLink: (connection) => setupLink(connection.externalId!),
     testModel: TEST_MODEL,
-    testModelIds: Object.fromEntries(testOffer?.kind === "callable" ? testOffer.locations.map((l) => [l.location, l.callId]) : []),
+    testModelIds: Object.fromEntries(testLocations.map((l) => [l.location, l.callId])),
     knownModels: Object.keys(BEDROCK_MODEL_IDS),
     // Converse speaks every model family, but the call needs Bedrock's own ID
     // for the model: one Bedrock's list gives for its price-list name.
@@ -265,7 +266,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     },
     locationLabel(location, model) {
       if (location === "global") return "Global";
-      const l = model ? locationOf(model, location) : undefined;
+      const l = model ? (locationOf(model, location) ?? (model === TEST_MODEL ? testLocations.find((t) => t.location === location) : undefined)) : undefined;
       if (l?.kind === "in-region") return `${location} in-Region`;
       if (l) return `${l.kind.toUpperCase()} cross-Region from ${location}`;
       return location;
