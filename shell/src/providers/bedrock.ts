@@ -144,7 +144,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         "An AWS account with a payment method for Marketplace purchases.",
         "Type your 12-digit AWS account ID (not secret) and tap <strong>Connect Amazon Bedrock</strong>: AWS opens a ready-filled stack.",
         "Tick the acknowledgement and tap <strong>Create stack</strong>. It makes a role that can only call models, for this app alone.",
-        "Enable each model you pick once in the Bedrock console (Model access), and Claude Haiku 5.5, which the test call uses. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        "Enable each model you pick once in the Bedrock console (Model access). Enable Claude Haiku 5.5 too, even if you want other model families: the Connect test call runs on it today. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "The app checks the connection and runs the test call by itself.",
       ],

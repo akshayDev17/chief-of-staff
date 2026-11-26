@@ -145,8 +145,8 @@ export function vertexPlugin(env: GoogleFederationEnv, fetcher: typeof fetch = f
       vendor: "Google",
       recommendedForFriends: false,
       steps: [
-        "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). For Claude: its Model Garden card → Enable.",
-        "Enabling Claude asks Anthropic's use-case form (business name, business domain, use case). This is expected and is filled once per billing account. An individual may enter their own name, their own site or none, and a plain personal use case.",
+        "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). Enable Claude Haiku 5.5 on its Model Garden card (→ Enable) even if you want other model families: the Connect test call runs on it today. Enable any other Claude model you pick the same way.",
+        "Enabling a Claude model asks Anthropic's use-case form (business name, business domain, use case). This is expected and is filled once per billing account. An individual may enter their own name, their own site or none, and a plain personal use case.",
         "Type your project ID and tap <strong>Connect Google Vertex AI</strong>.",
         "Run the one-line Cloud Shell command shown, which makes a role that can only call models. If you cannot create custom roles, use Google's <strong>Vertex AI User</strong> role (<code>roles/aiplatform.user</code>) instead.",
         "In IAM → Grant access, paste your own identity shown below (copy button), pick that role and Save. It is yours alone, so no other user of this app can use your project. No key file is made.",

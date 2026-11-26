@@ -46,11 +46,12 @@ the three lines of design-v3 1.5 and nothing stored, when:
   Foundry deployment shows "That deployment name or model ID doesn't exist
   here." with Foundry's own reply under it.
 
-**Known shortfall.** That last refusal is narrower than this screen's
-rule. `BEDROCK_MODEL_IDS` holds only the four Claude models T16 added for
-the Connect test call, so Bedrock offers no other family; Vertex AI calls
-no publisher but Anthropic and Google; and `FOUNDRY_MODEL_IDS` leaves out
-the models whose catalog ID is not confirmed. None of this is a rule or a
+**Known shortfall.** The `canCall` refusal above is narrower than this
+screen's rule. `BEDROCK_MODEL_IDS` holds only the four Claude models T16
+added for the Connect test call, so Bedrock offers no other family;
+Vertex AI calls no publisher but Anthropic and Google; and
+`FOUNDRY_MODEL_IDS` leaves out the models whose catalog ID is not
+confirmed. None of this is a rule or a
 product choice (the owner, on how the list narrowed: "why can COS only call
 anthropic models?" and "when did i ever lay such a stipulation?"); the T17
 fix fills the gap, and until then the screen says "not offered yet" rather
