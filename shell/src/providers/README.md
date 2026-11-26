@@ -173,7 +173,15 @@ sign-in's and admin consent's). Google's pool needs no service account and no
 service-account impersonation grant for Vertex AI: each user grants their own
 principal. Nothing is guessed during T10.
 
-The Worker reads:
+The Worker reads the values below. Each variable except `APP_ORIGIN` is set
+as an environment variable of the GitHub environment `production` (Settings →
+Environments → production → Environment variables), never in the Cloudflare
+dashboard: every release deploys the ones set there as Worker variables and
+leaves out the ones that are not (`scripts/release-deploy.sh`; the
+repository README, "Setting the provider variables", has the steps), and a
+deploy replaces whatever the dashboard held.
+The two secrets are stored with `npx wrangler secret put`, which a deploy
+keeps.
 
 | Name | Kind | What |
 | --- | --- | --- |
@@ -189,7 +197,8 @@ The Worker reads:
 | `GOOGLE_WIF_PROVIDER` | variable | the workload identity pool provider's full name; each user's own principal is derived from it |
 
 Until they are set, every page still renders, and a test call says plainly
-which of the app's own values is missing.
+which of the app's own values is missing. A variable added to `production`
+reaches the Worker with the next release.
 
 ## Waiting on T10 (checked live in M2)
 

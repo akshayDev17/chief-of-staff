@@ -115,7 +115,11 @@ push to `main` that touches `shell/`, it runs in the GitHub environment
 `production`, where the `portfolio-app` tool (above) puts the secrets
 `CLOUDFLARE_API_TOKEN` (the narrow deploy token, no Access permission) and
 `CLOUDFLARE_ACCOUNT_ID` and the variables `ACCESS_AUD` and
-`ACCESS_TEAM_DOMAIN`, and:
+`ACCESS_TEAM_DOMAIN`, and where the owner adds the provider plug-ins'
+variables `AWS_APP_ROLE_ARN`, `AWS_REGION`, `BEDROCK_TEMPLATE_URL`,
+`ENTRA_CLIENT_ID`, `ENTRA_CERT_THUMBPRINT`, `FOUNDRY_CREDENTIAL` and
+`GOOGLE_WIF_PROVIDER` as environment variables (`shell/src/providers/README.md`,
+"What the owner sets up"), and:
 
 1. runs `make check test` in `shell/`, which applies every migration, in
    order, to a fresh local D1 holding only the made-up persona
@@ -132,11 +136,42 @@ push to `main` that touches `shell/`, it runs in the GitHub environment
 4. runs `wrangler d1 migrations apply chief-of-staff --remote`; a failed file
    is rolled back by D1 and stops the release, so the Worker is not deployed;
 5. deploys the Worker, with its route, as
-   `wrangler deploy --tag shell-v<version>-<run>`, passing `ACCESS_AUD` and
-   `ACCESS_TEAM_DOMAIN` as variables alongside the `APP_ORIGIN` in
-   `shell/wrangler.jsonc` (a deploy keeps the Worker's secrets);
+   `wrangler deploy --tag shell-v<version>-<run>` (`shell/scripts/release-deploy.sh`),
+   passing `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and each provider variable set
+   in that environment as variables alongside the `APP_ORIGIN` in
+   `shell/wrangler.jsonc`; a provider variable not set there is left out and
+   never stops the release. A deploy keeps the Worker's secrets but replaces
+   its variables, so a variable set only in the Cloudflare dashboard is gone
+   after the next release: set them in the `production` environment;
 6. creates a GitHub release with that tag naming the migrations applied and
    the restore bookmark.
+
+**Setting the provider variables.** The seven values the provider plug-ins
+read are not entered anywhere in the app: no setup page has an input for
+them. Each goes in the same place as `ACCESS_AUD`, and the release carries it
+to the Worker:
+
+1. On GitHub, open the repository's **Settings → Environments → production**.
+2. Under **Environment variables**, choose **Add environment variable** (not
+   a secret: none of these is secret).
+3. Enter the name exactly as below and the value the named step printed, and
+   save. Repeat for each value you have; leave out the ones you do not.
+4. Push or merge a change under `shell/` to `main`: the next release deploys
+   every variable set there. One set only in the Cloudflare dashboard is
+   wiped by that release.
+
+| Name | Where its value comes from (`shell/src/providers/README.md`, "What the owner sets up") | Needed |
+| --- | --- | --- |
+| `AWS_APP_ROLE_ARN` | `node scripts/provider-setup.mjs values`, step 2 (the app role you create) | required for Bedrock |
+| `AWS_REGION` | the same step 2 (`us-east-1`) | optional; the Worker uses `us-east-1` without it |
+| `BEDROCK_TEMPLATE_URL` | the run summary of the template's first publish (`.github/workflows/release-bedrock-template.yml`) | required for Bedrock: no Connect link without it |
+| `GOOGLE_WIF_PROVIDER` | `node scripts/provider-setup.mjs values`, step 3 (the pool provider's full name) | required for Vertex AI |
+| `ENTRA_CLIENT_ID` | the Entra registration of step 4: its Application (client) ID | required for Foundry |
+| `ENTRA_CERT_THUMBPRINT` | `node scripts/provider-setup.mjs keys <dir>` | required for Foundry with `certificate`; not read with `federated` |
+| `FOUNDRY_CREDENTIAL` | step 4: `certificate`, or `federated` only once M2 step 11.1 passes | optional; `certificate` without it |
+
+The secrets `ISSUER_KEYS` and `ENTRA_CERT_KEY` are stored with
+`npx wrangler secret put` instead (the same section), which a release keeps.
 
 **D1 migrations** are numbered `.sql` files in `shell/migrations/`, forward
 only, applied by that pipeline and never by hand. **Every schema change takes

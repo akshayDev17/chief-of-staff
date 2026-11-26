@@ -82,7 +82,8 @@ The Entra certificate, valid until ${x509.validTo}.
     ${cert}
   Store its private key as the Worker secret:
     npx wrangler secret put ENTRA_CERT_KEY < ${certKey}
-  And set the Worker variable (not secret):
+  And set the Worker variable (not secret) in the GitHub environment
+  \`production\`, as an environment variable:
     ENTRA_CERT_THUMBPRINT=${thumbprint}
 
 Keep ${out} somewhere safe and private: a later key rotation starts from issuer-keys.json.`);

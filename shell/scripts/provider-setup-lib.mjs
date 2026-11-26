@@ -175,9 +175,9 @@ export function renderChecklist(v) {
 ${json(v.aws.appRoleTrustPolicy)}
   Its permission policy:
 ${json(v.aws.appRolePermissionPolicy)}
-  Worker variables:
+  Worker variables (GitHub environment \`production\`, as environment variables):
 ${vars(v.aws.workerVariables)}
-  BEDROCK_TEMPLATE_URL: set after the template's first publish (its run summary prints it).
+  BEDROCK_TEMPLATE_URL: set in \`production\` after the template's first publish (its run summary prints it).
   Template bucket ${v.aws.templateBucket}, bucket policy:
 ${json(v.aws.templateBucketPolicy)}
   GitHub's identity provider (once per account):
@@ -195,7 +195,7 @@ ${v.google.commands.map((c) => `  ${c}`).join("\n")}
   Vertex AI: each user grants the role on their own project to their own
   principal in the pool, shown on their Connect screen:
     ${v.google.userPrincipal}
-  Worker variables:
+  Worker variables (GitHub environment \`production\`, as environment variables):
 ${vars(v.google.workerVariables)}
 
 4. Microsoft Foundry, in the owner's Entra tenant
@@ -213,7 +213,7 @@ ${json(v.entra.registration)}
   "Accounts in any organizational directory and personal Microsoft accounts".
   Only if M2 step 11.1 passes, a federated credential:
 ${json(v.entra.federatedCredential)}
-  Worker variables (ENTRA_CERT_THUMBPRINT and the ENTRA_CERT_KEY secret come from \`provider-setup.mjs keys\`):
+  Worker variables (GitHub environment \`production\`, as environment variables; ENTRA_CERT_THUMBPRINT and the ENTRA_CERT_KEY secret come from \`provider-setup.mjs keys\`):
 ${vars(v.entra.workerVariables)}
 `;
 }
