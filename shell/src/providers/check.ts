@@ -273,7 +273,10 @@ export async function refreshSetupVersion(
     .catch(() => undefined);
   if (version && version !== check.templateVersion) {
     check.templateVersion = version;
-    await saveCheck(db, userId, check);
+    await db
+      .prepare("UPDATE provider_checks SET template_version = ? WHERE user_id = ? AND provider = ?")
+      .bind(version, userId, check.provider)
+      .run();
   }
   return version ?? check.templateVersion;
 }
