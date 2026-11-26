@@ -24,7 +24,26 @@ import type { Usage } from "../proxy/plugin";
 // Each model priced by prompt length, by the provider's own model ID (which
 // contains it), and the prompt length above which every token is billed at
 // the long-prompt rates.
-const LONG_PROMPT_OVER: ReadonlyArray<readonly [string, number]> = [["claude-haiku-5-5", 100_000]];
+//
+// The OpenAI GPT models on Bedrock, from their Bedrock model cards (read
+// 2026-11-27, no page dates; for example
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html):
+// "Long-context rates apply to the full request when input exceeds 272,000
+// tokens", and on GPT-5.4 and GPT-5.5 "Long-context rates apply to all input
+// and output tokens, not just tokens above 272K". No card says whether cached
+// input counts toward the 272,000, so it does here, as for Claude: reaching
+// the long-prompt rates sooner never counts less than AWS charges.
+const LONG_PROMPT_OVER: ReadonlyArray<readonly [string, number]> = [
+  ["claude-haiku-5-5", 100_000],
+  ["openai.gpt-5.4", 272_000],
+  ["openai.gpt-5.5", 272_000],
+  ["openai.gpt-5.6-", 272_000],
+  ["openai.gpt-6", 272_000],
+];
+
+// Whether the app knows the prompt length at which `modelId` is billed at its
+// long-prompt rates.
+export const hasLongPromptRule = (modelId: string): boolean => LONG_PROMPT_OVER.some(([id]) => modelId.includes(id));
 
 export function isLongPrompt(modelId: string, promptTokens: number): boolean {
   const rule = LONG_PROMPT_OVER.find(([id]) => modelId.includes(id));

@@ -106,11 +106,17 @@ export function setupValues(i) {
           },
         ],
       },
-      // Only the next hop: each user's own invoke-only role, which in turn
-      // trusts this role only with that user's external ID.
+      // The next hop: each user's own invoke-only role, which in turn trusts
+      // this role only with that user's external ID. And Bedrock's own model
+      // list, read once a day for Add a model (src/providers/bedrock-catalog.ts,
+      // T17): ListFoundationModels has no resource type, so it takes "*";
+      // nothing here can call a model.
       appRolePermissionPolicy: {
         Version: "2012-10-17",
-        Statement: [{ Effect: "Allow", Action: "sts:AssumeRole", Resource: `arn:aws:iam::*:role/${ROLE_NAME}` }],
+        Statement: [
+          { Effect: "Allow", Action: "sts:AssumeRole", Resource: `arn:aws:iam::*:role/${ROLE_NAME}` },
+          { Sid: "ReadBedrockModelList", Effect: "Allow", Action: ["bedrock:ListFoundationModels", "bedrock:ListInferenceProfiles"], Resource: "*" },
+        ],
       },
       templateBucket: i.BEDROCK_TEMPLATE_BUCKET,
       templateBucketPolicy: {
@@ -198,7 +204,8 @@ export function renderChecklist(v) {
   ${v.aws.oidcProviderCommand}
   Role ${v.aws.appRoleName}, trust policy:
 ${json(v.aws.appRoleTrustPolicy)}
-  Its permission policy:
+  Its permission policy (a role made before 2026-11-27 needs its second
+  statement added: it lets the app read Bedrock's own model list):
 ${json(v.aws.appRolePermissionPolicy)}
   Worker variables (GitHub environment \`production\`, as environment variables):
 ${vars(v.aws.workerVariables)}

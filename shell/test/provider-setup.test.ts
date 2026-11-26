@@ -6,6 +6,7 @@ import { BASE_PATH } from "../src/paths";
 import { AWS_AUDIENCE, AWS_SUBJECT, ROLE_NAME } from "../src/providers/bedrock";
 import { CONSENT_RETURN_PATH, ENTRA_FEDERATED_AUDIENCE, ENTRA_SUBJECT, SIGN_IN_RETURN_PATH } from "../src/providers/foundry";
 import { PRICE_READER_SUBJECT, USER_SUBJECT, userPrincipal, wifAudience } from "../src/google-federation";
+import { CATALOG_ACTIONS } from "../src/providers/bedrock-catalog";
 
 const inputs = {
   APP_ORIGIN: "https://cos.example.com",
@@ -35,7 +36,11 @@ describe("the owner's setup values", () => {
       StringEquals: { "cos.example.com/chief-of-staff/oidc:aud": "sts.amazonaws.com", "cos.example.com/chief-of-staff/oidc:sub": "chief-of-staff:bedrock" },
     });
     expect(v.aws.appRoleTrustPolicy.Statement[0].Principal).toEqual({ Federated: "arn:aws:iam::111122223333:oidc-provider/cos.example.com/chief-of-staff/oidc" });
-    expect(v.aws.appRolePermissionPolicy.Statement).toEqual([{ Effect: "Allow", Action: "sts:AssumeRole", Resource: "arn:aws:iam::*:role/chief-of-staff-model-caller" }]);
+    expect(v.aws.appRolePermissionPolicy.Statement).toEqual([
+      { Effect: "Allow", Action: "sts:AssumeRole", Resource: "arn:aws:iam::*:role/chief-of-staff-model-caller" },
+      // What the daily read of Bedrock's model list calls (bedrock-catalog.ts).
+      { Sid: "ReadBedrockModelList", Effect: "Allow", Action: [...CATALOG_ACTIONS], Resource: "*" },
+    ]);
     expect(v.aws.workerVariables.AWS_APP_ROLE_ARN).toBe("arn:aws:iam::111122223333:role/chief-of-staff-app");
     // The template bucket is public for the templates only.
     expect(v.aws.templateBucketPolicy.Statement[0].Resource).toBe("arn:aws:s3:::cos-templates/chief-of-staff-bedrock-role/*");

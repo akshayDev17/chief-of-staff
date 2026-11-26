@@ -59,9 +59,10 @@ plug-in. Each plug-in's file cites the vendor pages it follows, read
 2026-11-25.
 
 The callers speak each provider's own format: Converse on Bedrock (every
-model family, for each model whose Bedrock ID is in `BEDROCK_MODEL_IDS`;
-today only the four Claude models T16 added and Nova 2.0 Lite, the Connect
-test call's model, a shortfall the T17 fix closes), Anthropic's Messages format for
+model family; each model's ID and locations come from Bedrock's own model
+list, read daily by the app's own role and matched to the price table,
+`bedrock-catalog.ts`; until the first read, only the built-in
+`BEDROCK_MODEL_IDS`), Anthropic's Messages format for
 Claude on Foundry (`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`),
 Chat Completions for every other Foundry model
 (`/openai/v1/chat/completions`, by the user's deployment name) and
@@ -69,7 +70,7 @@ Chat Completions for every other Foundry model
 (T17, `src/models/README.md`) and are checked live in M2 step 3. Add a model
 lists every chat model each provider sells at a listed price, of every
 family; a model no caller here reaches yet (on Vertex AI, any publisher but
-Anthropic and Google) shows "not offered yet" until the T17 fix adds it.
+Anthropic and Google) shows "not offered yet" until a follow-up fix adds it.
 
 ## The issuer (`src/issuer.ts`)
 
@@ -162,8 +163,10 @@ After "Connect", the test call runs by itself; there is no test-call button.
 
 ## Region
 
-The app picks the test call's region from what the model supports: Global on
-Bedrock (or the cross-Region profile of the app's geography); on Foundry the
+The app picks the test call's region from what the model supports: on
+Bedrock, Global where Bedrock names a Global profile for the model and the
+price table prices it there, else the app's region (the model's own ID where
+it runs on demand there, or the geography profile Bedrock names); on Foundry the
 deployment type is chosen when the user deploys the model; on Vertex AI a
 specific location (`vertex-locations.ts`, from Google's model pages: the `us`
 multi-region for Claude 4.7 and later and for Gemini, `us-east5` for older
@@ -179,7 +182,12 @@ values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
 `GOOGLE_PROJECT_NUMBER`, `GITHUB_REPOSITORY`, `GITHUB_OWNER_ID`,
 `GITHUB_REPOSITORY_ID` and `BEDROCK_TEMPLATE_BUCKET` in the environment)
 prints every other value: the AWS identity provider and the
-app role's trust and permission policies, the Google pool and provider, and
+app role's trust and permission policies (the permission policy lets it
+assume each user's invoke-only role and read Bedrock's own model list,
+`bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`; a role
+made before 2026-11-27 needs that second statement added, else the daily
+refresh raises a refresh-failed alert and Bedrock offers only its built-in
+models), the Google pool and provider, and
 the Entra registration with its two return addresses (the Microsoft
 sign-in's and admin consent's). Google's pool needs no service account, no
 service-account impersonation grant and no API key: each user grants their
@@ -231,7 +239,15 @@ account in the app's project, which only that user's principal may act as),
 the Cloud Billing Catalog answering the price reader's federated token with
 the app's project as quota project (design-v3 1.6, item 9; if Google refuses
 it, the owner is told and no API key is made),
-the template version read from a live stack, a live issuer-key rotation, and
-Foundry's key question (T13) all wait on the owner's accounts. Google's exact
+the template version read from a live stack, a live issuer-key rotation,
+the app's own role reading Bedrock's model list (`ListFoundationModels` and
+`ListInferenceProfiles` through `AssumeRoleWithWebIdentity`; the owner's own
+sign-in read both on 2026-11-26, the role has not), and Foundry's key
+question (T13) all wait on the owner's accounts. On Bedrock, these are still
+open from the owner's family check (us-east-1, 2026-11-26 and 2026-11-27):
+whether Converse reports a GPT model's implicit cache reads and its "30m"
+writes, and whether a call on `bedrock-runtime` to a model priced under a
+`-mantle-` usage type bills at that row (the price table keeps the higher of
+the two where both are listed). Google's exact
 error strings are recorded from live failures then; real vendor error bodies
 saved for tests go only into the private test-examples store.

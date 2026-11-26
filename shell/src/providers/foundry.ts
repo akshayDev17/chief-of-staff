@@ -547,7 +547,7 @@ export function foundryPlugin(env: FoundryEnv, fetcher: typeof fetch = fetch, no
     testModel: "Claude Haiku 5.5",
     knownModels: FOUNDRY_CLAUDE_MODELS,
     canCall: (model) => model in FOUNDRY_MODEL_IDS,
-    notCallableReason: "the app has no Foundry ID for it",
+    notCallableReason: () => "the app has no Foundry ID for it",
     deploymentName,
     locations: () => ["global", "data-zone"],
     locationLabel: (location) => (location === "global" ? "Global Standard" : location === "data-zone" ? "Data Zone Standard" : location),

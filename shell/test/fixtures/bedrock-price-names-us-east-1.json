@@ -1,0 +1,1058 @@
+{
+ "source": "AWS price-list files AmazonBedrock and AmazonBedrockFoundationModels, us-east-1, published 2026-11-23 (read by T11 on 2026-11-24), parsed by rowsFromAwsOffer: each chat model's name, the deployment types it has an input price at, and whether it lists long-prompt rows or 30-minute cache-write usage types",
+ "region": "us-east-1",
+ "names": [
+  {
+   "name": "Claude 2.0",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 2.1",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3 Haiku",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3 Opus",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3 Sonnet",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3.5 Haiku",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3.5 Sonnet",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3.5 Sonnet v2",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude 3.7 Sonnet",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Fable 5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Fable 5.1",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Fable 5.2",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Haiku 4.5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Haiku 5.5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Instant",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Mythos 5",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Mythos 5.1",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Mythos 5.2",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Mythos Preview",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 4",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 4.1",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 4.5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 4.6",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 4.7",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 4.8",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Opus 5.5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Sonnet 4",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Sonnet 4.5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Sonnet 4.6",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Sonnet 5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Claude Sonnet 5.5",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Command",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Command R",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Command R+",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Command-Light",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "DeepSeek V3.1",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "DeepSeek v3.2",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Devstral",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "GLM 4.7",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "GLM 4.7 Flash",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "GLM 5",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "GPT OSS Safeguard 120B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "GPT OSS Safeguard 20B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "GPT-5.4",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": false
+  },
+  {
+   "name": "GPT-5.5",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": false
+  },
+  {
+   "name": "GPT-5.6 Luna",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-5.6 Sol",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-5.6 Terra",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6 Astra",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6 Luna",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6 Sol",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6.1 Sol",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6.1 Terra",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6.2 Astra",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-6.2 Sol",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-Daybreak-5.6-Sol",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": true,
+   "cache30m": true
+  },
+  {
+   "name": "GPT-Daybreak-Red-5.6-Sol",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": true
+  },
+  {
+   "name": "Gemma 3 12B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Gemma 3 27B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Gemma 3 4B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Grok 4.7",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Jamba 1.5 Large",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Jamba 1.5 Mini",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Jamba-Instruct",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Jurassic Mid",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Jurassic Ultra",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Kimi K2 Thinking",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Kimi K2.5",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Kimi K3",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": true
+  },
+  {
+   "name": "Llama 3 70B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3 8B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.1 70B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.1 8B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.2 11B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.2 1B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.2 3B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.2 90B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 3.3 70B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 4 Maverick 17B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama 4 Scout 17B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama2-13B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Llama2-70B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Magistral Small 1.2",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "MiniMax M2.5",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Minimax M2",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Minimax M2.1",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Ministral 14B 3.0",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Ministral 3B 3.0",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Ministral 8B 3.0",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Mistral 7B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Mistral Large",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Mistral Large 3",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Mistral Small",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Mixtral 8x7B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "NVIDIA Nemotron 3 Super 120B A12B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "NVIDIA Nemotron Nano 2",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "NVIDIA Nemotron Nano 2 VL",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nemotron Nano 3 30B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova 2.0 Lite",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova 2.0 Omni",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova 2.0 Pro",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova Lite",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova Micro",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova Premier",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Nova Pro",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Palmyra X4",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Palmyra X5",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Pixtral Large 25.02",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 235B A22B 2507",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 32B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 Coder 30B A3B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 Coder 480B A35B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 Coder Next",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 Next 80B A3B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Qwen3 VL 235B A22B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "R1",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Voxtral Mini 1.0",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Voxtral Small 1.0",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "Writer Palmyra Vision 7B",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "google.gemma-4-26b-a4b",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "google.gemma-4-31b",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "google.gemma-4-e2b",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "gpt-oss-120b",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "gpt-oss-20b",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "xai.grok-4.3",
+   "deployments": [
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  },
+  {
+   "name": "xai.grok-4.6",
+   "deployments": [
+    "global",
+    "regional"
+   ],
+   "longPrompt": false,
+   "cache30m": false
+  }
+ ]
+}

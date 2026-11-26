@@ -119,6 +119,40 @@ describe("Add a model: the list", () => {
   });
 });
 
+describe("Add a model: what the plug-in knows of each model", () => {
+  it("says why each model it cannot call is not offered, in its own words", async () => {
+    plugin.connect.canCall = (m) => m !== "test-haiku";
+    plugin.connect.notCallableReason = (m) => `no ID for ${m}`;
+    const page = await (await open(plugins)).text();
+    const at = page.indexOf("<strong>test-haiku</strong>");
+    expect(page.slice(at, page.indexOf("</tr>", at))).toContain("not offered yet: no ID for test-haiku");
+    const refused = await pick(plugins, "bedrock", { model: "test-haiku" });
+    expect(await refused.text()).toContain("test-haiku is not offered at Test bedrock yet: no ID for test-haiku.");
+    expect(plugin.calls).toHaveLength(0);
+  });
+
+  it("marks a model known to make no tool call, and it can still be picked", async () => {
+    plugin.connect.toolUse = (m) => m !== "test-haiku";
+    const rows = await listOffer(env.DB, plugins, userId, "bedrock");
+    expect(rows.find((r) => r.model === "test-haiku")).toMatchObject({ toolUse: false, callable: true });
+    const page = await (await open(plugins)).text();
+    const at = page.indexOf("<strong>test-haiku</strong>");
+    const tr = page.slice(at, page.indexOf("</tr>", at));
+    expect(tr).toContain('<span class="pill warn" title="A live call with one tool got no tool call from this model">no tool use</span>');
+    expect(tr).toContain('type="submit"');
+    const sonnet = page.indexOf("<strong>test-sonnet</strong>");
+    expect(page.slice(sonnet, page.indexOf("</tr>", sonnet))).not.toContain("no tool use");
+  });
+
+  it("leaves out a model the provider no longer offers, unless the user added it", async () => {
+    plugin.replies.push(ok({ input: 1, output: 1 }));
+    expect((await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "test-haiku", now: NOW })).kind).toBe("added");
+    plugin.connect.listed = (m) => m !== "test-haiku" && m !== "test-sonnet";
+    expect((await listOffer(env.DB, plugins, userId, "bedrock")).map((r) => r.model)).toEqual(["test-haiku", "test-half-priced", "test-not-yet-priced"]);
+    expect((await pick(plugins, "bedrock", { model: "test-sonnet" })).status).toBe(400);
+  });
+});
+
 describe("Add a model: picking", () => {
   it("runs the test call by itself through the proxy and adds the model only when it passes", async () => {
     plugin.replies.push(ok({ input: 40, output: 2 }, { model: "test-sonnet-20261101", text: "OK" }));

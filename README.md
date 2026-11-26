@@ -170,6 +170,17 @@ to the Worker:
 | `ENTRA_CERT_THUMBPRINT` | `node scripts/provider-setup.mjs keys <dir>` | required for Foundry with `certificate`; not read with `federated` |
 | `FOUNDRY_CREDENTIAL` | step 4: `certificate`, or `federated` only once M2 step 11.1 passes | optional; `certificate` without it |
 
+**The app role reads Bedrock's model list.** The permission policy step 2
+prints for the app's own AWS role has two statements: assume each user's
+invoke-only role, and `bedrock:ListFoundationModels` and
+`bedrock:ListInferenceProfiles`, with which the daily price refresh reads
+which models Bedrock offers (Add a model lists them). A role made before
+2026-11-27 has only the first: in the AWS console open **IAM → Roles →**
+`chief-of-staff-app` **→ Permissions**, edit its policy and replace it with the one
+step 2 prints now. Until then the refresh raises a refresh-failed alert on
+Admin · Price table and Bedrock offers only its built-in models. The
+friends' CloudFormation template does not change.
+
 The secrets `ISSUER_KEYS` and `ENTRA_CERT_KEY` are stored with
 `npx wrangler secret put` instead (the same section), which a release keeps.
 

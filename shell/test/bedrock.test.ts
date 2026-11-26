@@ -146,10 +146,12 @@ describe("the Bedrock caller", () => {
     expect(plugin.connect.replyText(reply.body)).toBe("OK");
   });
 
-  it("uses the cross-Region profile of the app's geography, and encodes model IDs in the path", async () => {
+  it("calls a built-in model at the app's region through its geography profile, and encodes model IDs in the path", async () => {
     const { fetcher, sent } = aws();
     const plugin = bedrockPlugin(envWith({ AWS_REGION: "eu-west-1" }), fetcher, () => NOW);
-    await plugin.call({ credential, connection, model: "Claude Haiku 4.5", location: "cross-region", request: {} });
+    expect(plugin.connect.locations("Claude Haiku 4.5")).toEqual(["global", "eu-west-1"]);
+    expect(plugin.connect.locationLabel("eu-west-1", "Claude Haiku 4.5")).toBe("EU cross-Region from eu-west-1");
+    await plugin.call({ credential, connection, model: "Claude Haiku 4.5", location: "eu-west-1", request: {} });
     expect(sent[0]!.url).toBe("https://bedrock-runtime.eu-west-1.amazonaws.com/model/eu.anthropic.claude-haiku-4-5-20251001-v1%3A0/converse");
     expect(BEDROCK_MODEL_IDS["Claude Sonnet 5.5"]).toBe("anthropic.claude-sonnet-5-5");
   });

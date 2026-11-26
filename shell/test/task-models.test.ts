@@ -75,6 +75,17 @@ const named = (r?: { provider: string; model: string }) => (r ? `${r.provider}/$
 const routes = async (uid = userId) =>
   Object.fromEntries((await readTaskRoutes(env.DB, uid)).routes.map((r) => [r.task.id, r]));
 
+describe("a model known to make no tool call", () => {
+  it("says so wherever the picker names it", async () => {
+    await addModel(userId, "bedrock", "test-haiku");
+    await addModel(userId, "vertex", "test-gemini");
+    bedrock.connect.toolUse = (m) => m !== "test-haiku";
+    const page = await (await open()).text();
+    expect(page).toContain("test-haiku · bedrock · no tool use");
+    expect(page).not.toContain("test-gemini · vertex · no tool use");
+  });
+});
+
 describe("the task list", () => {
   it("has the owner's tiers: smallest for matching, extraction and LinkedIn, middle for the rest, none strongest", () => {
     expect(Object.fromEntries(TASKS.map((t) => [t.id, t.tier]))).toEqual({

@@ -34,8 +34,8 @@ beforeEach(async () => {
     rows: [
       price("bedrock", "Nova 2.0 Lite", "input", 0.1),
       price("bedrock", "Nova 2.0 Lite", "output", 0.5),
-      price("bedrock", "Nova 2.0 Lite", "input", 0.11, "cross-region"),
-      price("bedrock", "Nova 2.0 Lite", "output", 0.55, "cross-region"),
+      { ...price("bedrock", "Nova 2.0 Lite", "input", 0.11, "regional"), region: "us-east-1" },
+      { ...price("bedrock", "Nova 2.0 Lite", "output", 0.55, "regional"), region: "us-east-1" },
       { ...price("foundry", "Claude Haiku 5.5", "input", 0.1), region: "global", source: "maintainer-read" },
       { ...price("foundry", "Claude Haiku 5.5", "output", 0.5), region: "global", source: "maintainer-read" },
     ],
@@ -160,9 +160,9 @@ describe("the automatic test call", () => {
     const { world, plugins, sent } = awsWorld();
     world.stack = true;
     await connectBedrock(plugins);
-    expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "cross-region", at(2))).toBeUndefined();
-    expect(sent.filter((s) => s.url.includes("bedrock-runtime")).at(-1)!.url).toContain("/model/us.amazon.nova-2-lite-v1%3A0/converse");
-    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "cross-region", regionSetBy: "user", state: "passed" });
+    expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "us-east-1", at(2))).toBeUndefined();
+    expect(sent.filter((s) => s.url.includes("bedrock-runtime")).at(-1)!.url).toBe("https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1%3A0/converse");
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "us-east-1", regionSetBy: "user", state: "passed" });
     expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "mars-1", at(3))).toMatch(/not offered at that region/);
   });
 

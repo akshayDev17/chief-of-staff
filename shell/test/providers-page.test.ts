@@ -177,10 +177,10 @@ describe("Models › Setup › Providers", () => {
     const plugins = world();
     await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
     const change = await text(await open(plugins, "?provider=bedrock&change=region"));
-    expect(change).toContain('<option value="global" selected>Global</option><option value="cross-region">US cross-Region</option>');
-    expect((await post(plugins, "/bedrock/region", { region: "cross-region" })).status).toBe(303);
-    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "cross-region", regionSetBy: "user" });
-    expect(await text(await open(plugins))).toContain("<strong>Region:</strong> US cross-Region, chosen by you.");
+    expect(change).toContain('<option value="global" selected>Global</option><option value="us-east-1">US cross-Region from us-east-1</option>');
+    expect((await post(plugins, "/bedrock/region", { region: "us-east-1" })).status).toBe(303);
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "us-east-1", regionSetBy: "user" });
+    expect(await text(await open(plugins))).toContain("<strong>Region:</strong> US cross-Region from us-east-1, chosen by you.");
   });
 
   it("shows the monthly budget once set", async () => {

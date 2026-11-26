@@ -39,6 +39,8 @@ export interface OfferRow {
   tier?: Tier;
   // The plug-in can call it: it knows the provider's own ID for the model.
   callable: boolean;
+  // False where the model is known to make no tool call (connect.toolUse).
+  toolUse: boolean;
   // Foundry only: the deployment name filled in (the user's own, once added).
   deployment?: string;
   added?: UserModel;
@@ -173,18 +175,23 @@ async function offerRow(db: D1Database, userId: string, plugin: ProviderPlugin, 
         : undefined,
     tier: input && output ? await lookupTier(db, { provider: plugin.provider, model }) : undefined,
     callable: plugin.connect.canCall(model),
+    toolUse: plugin.connect.toolUse?.(model) ?? true,
     deployment: added?.deployment ?? plugin.connect.deploymentName?.(model),
     added,
   };
 }
 
 // Every chat model the provider sells at a listed price, and every model the
-// plug-in knows that the table has no price for yet, by name.
+// plug-in knows that the table has no price for yet, by name. A model the
+// provider no longer offers (`connect.listed`) is left out, unless the user
+// added it, so they still see why it cannot be picked again.
 export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<OfferRow[]> {
   const plugin = plugins[provider];
   if (!plugin) return [];
   const added = new Map((await readUserModels(db, userId)).filter((m) => m.provider === provider).map((m) => [m.model, m]));
-  const names = [...new Set([...(await tableModels(db, provider)), ...plugin.connect.knownModels])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const names = [...new Set([...(await tableModels(db, provider)), ...plugin.connect.knownModels])]
+    .filter((model) => added.has(model) || (plugin.connect.listed?.(model) ?? true))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return Promise.all(names.map((model) => offerRow(db, userId, plugin, model, added.get(model))));
 }
 
@@ -332,7 +339,7 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
     case "no_price":
       return `${o.model} has no price yet, so it cannot be added: the budget stop needs a real price.`;
     case "cannot_call":
-      return `${o.model} is not offered at ${name} yet: ${plugin?.connect.notCallableReason ?? "the app cannot call it"}.`;
+      return `${o.model} is not offered at ${name} yet: ${plugin?.connect.notCallableReason(o.model) ?? "the app cannot call it"}.`;
     case "bad_deployment":
       return viewer === "friend"
         ? "Foundry's name for a model is letters, digits, hyphens, dots or underscores, at most 64."

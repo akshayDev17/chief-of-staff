@@ -50,7 +50,7 @@ const tokens = (u: TestResult["usage"]): string => {
 };
 
 function priceCells(row: OfferRow, plugin: ProviderPlugin): string {
-  const region = `${esc(plugin.connect.locationLabel(row.location))}, chosen by ${row.locationSetBy === "user" ? "you" : "the app"}`;
+  const region = `${esc(plugin.connect.locationLabel(row.location, row.model))}, chosen by ${row.locationSetBy === "user" ? "you" : "the app"}`;
   if (!row.price) {
     const waiting =
       plugin.provider === "foundry" && /^claude\b/i.test(row.model)
@@ -72,7 +72,7 @@ function priceCells(row: OfferRow, plugin: ProviderPlugin): string {
 function actionCell(row: OfferRow, plugin: ProviderPlugin, viewer: Viewer): string {
   if (!row.price) return `<td data-l=""><button type="button" class="btn small" disabled>Cannot be picked</button></td>`;
   if (!row.callable) {
-    return `<td data-l=""><button type="button" class="btn small" disabled>Cannot be picked</button><div class="small muted">not offered yet: ${esc(plugin.connect.notCallableReason)}</div></td>`;
+    return `<td data-l=""><button type="button" class="btn small" disabled>Cannot be picked</button><div class="small muted">not offered yet: ${esc(plugin.connect.notCallableReason(row.model))}</div></td>`;
   }
   const label = row.added ? "Test again" : "Pick";
   const added = row.added ? `<span class="pill ok">added</span> ` : "";
@@ -87,11 +87,15 @@ function actionCell(row: OfferRow, plugin: ProviderPlugin, viewer: Viewer): stri
 <div class="row">${added}<button type="submit" class="btn small">${label}</button></div></form></td>`;
 }
 
+// A model known to make no tool call. Tasks name no tools yet, so the
+// per-task picker shows the same flag and offers the model for every task.
+const NO_TOOL_USE = `<div><span class="pill warn" title="A live call with one tool got no tool call from this model">no tool use</span></div><div class="small muted">for tasks that need no tools</div>`;
+
 function table(input: AddPageInput, plugin: ProviderPlugin): string {
   if (!input.rows.length) return `<p class="small muted">The price table lists no chat model at ${esc(plugin.connect.guide.name)} yet.</p>`;
   const body = input.rows
     .map(
-      (r) => `<tr${r.added ? ' class="added"' : ""}><td data-l="Model"><strong>${esc(r.model)}</strong></td>
+      (r) => `<tr${r.added ? ' class="added"' : ""}><td data-l="Model"><strong>${esc(r.model)}</strong>${r.toolUse ? "" : NO_TOOL_USE}</td>
 ${priceCells(r, plugin)}
 ${actionCell(r, plugin, input.viewer)}</tr>`,
     )
@@ -115,7 +119,7 @@ function outcomeBox(input: AddPageInput, plugin: ProviderPlugin): string {
     const named = t.repliedModel ? `reply names ${t.repliedModel}` : undefined;
     const spent = [tokens(t.usage), formatCost(t.costUsd)].filter(Boolean).join(" · ");
     return `<div class="tc tc-ok" role="status"><p class="tc-verdict"><strong>${esc(o.model.model)} added.</strong> Its test call ran by itself and passed.</p>
-${replyLine(plugin, t.status, [`${t.modelId} (${plugin.connect.locationLabel(t.location)})`, named, t.text ? `“${t.text}”` : undefined])}
+${replyLine(plugin, t.status, [`${t.modelId} (${plugin.connect.locationLabel(t.location, o.model.model)})`, named, t.text ? `“${t.text}”` : undefined])}
 <p class="tc-fix small">${esc(spent)}. It is now one of your models for each task.</p></div>`;
   }
   const r = o.reply;
@@ -174,7 +178,7 @@ ${foundryHint}`
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
 ${content}
-<p class="small muted" style="margin-top:8px">A model can be picked only after its test call passes. A reply naming a different model is refused with a plain reason. A model with no price yet cannot be added, because the budget stop needs a real price. A model the app cannot call yet says "not offered yet" and why.</p>
+<p class="small muted" style="margin-top:8px">A model can be picked only after its test call passes. A reply naming a different model is refused with a plain reason. A model with no price yet cannot be added, because the budget stop needs a real price. A model the app cannot call yet says "not offered yet" and why. A model marked "no tool use" made no tool call when tested with one, so it suits only tasks that need no tools.</p>
 <div class="row"><a class="btn" href="${TASK_MODELS_PATH}">Next: the model for each task</a></div>
 </main>
 </body>

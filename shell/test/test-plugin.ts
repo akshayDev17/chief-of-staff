@@ -30,7 +30,7 @@ export const testPlugin = (provider: Provider, opts: { failMint?: boolean; refus
       testModel: provider === "vertex" ? "test-gemini" : "test-sonnet",
       knownModels: [],
       canCall: () => true,
-      notCallableReason: "the test plug-in cannot call it",
+      notCallableReason: () => "the test plug-in cannot call it",
       replyModel: (body) => {
         const model = (body as { model?: unknown } | null)?.model;
         return typeof model === "string" ? model : undefined;

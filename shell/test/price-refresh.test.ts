@@ -7,12 +7,12 @@ import { refreshPrices } from "../src/prices/refresh";
 import { SNAPSHOTS_KEPT, currentSnapshot, listSnapshots, readSnapshotRows, recentAlerts, rollBackLatestSnapshot } from "../src/prices/store";
 import worker from "../src/index";
 import type { GoogleFederationEnv } from "../src/google-federation";
-import { fakeFetch, googleEnv, type Overrides } from "./fake-sources";
+import { awsEnv, fakeFetch, googleEnv, type Overrides } from "./fake-sources";
 import azure from "./fixtures/azure-retail-eastus2.json";
 
 const entries = maintainerFile.entries as MaintainerEntry[];
 const refresh = async (day: string, overrides: Overrides = {}, google?: GoogleFederationEnv) =>
-  refreshPrices({ db: env.DB, fetcher: fakeFetch(overrides), google: google ?? (await googleEnv()), maintainerEntries: entries, now: new Date(`${day}T06:00:00Z`) });
+  refreshPrices({ db: env.DB, fetcher: fakeFetch(overrides), google: google ?? (await googleEnv()), aws: await awsEnv(), maintainerEntries: entries, now: new Date(`${day}T06:00:00Z`) });
 const failing = () => new Response("upstream down", { status: 503 });
 
 describe("the daily refresh", () => {
@@ -111,7 +111,7 @@ describe("the daily refresh", () => {
     const [good] = entries;
     const broken = [{ ...good!, model: "Claude Broken", meters: [{ token_kind: "input" as const, long_prompt: false, usd_per_mtok: -1 }] }];
     await expect(refreshPrices({
-      db: env.DB, fetcher: fakeFetch(), google: await googleEnv(), maintainerEntries: [...entries, ...broken], now: new Date("2026-11-24T06:00:00Z"),
+      db: env.DB, fetcher: fakeFetch(), google: await googleEnv(), aws: await awsEnv(), maintainerEntries: [...entries, ...broken], now: new Date("2026-11-24T06:00:00Z"),
     })).rejects.toThrow();
     expect((await currentSnapshot(env.DB))?.id).toBe(first.snapshotId);
     expect(await listSnapshots(env.DB)).toHaveLength(1);

@@ -1,0 +1,49 @@
+{
+  "about": "Reviewed facts about Bedrock's models that Bedrock's own lists do not give (src/providers/bedrock-catalog.ts). `names`: an AWS price-list model name and the Bedrock model ID it prices, for each name the matching rule (the same name or ID as ListFoundationModels gives, ignoring case) misses; each was checked against the usage types of that name's price rows, which carry the model ID or a close form of it. `noToolUse`: Bedrock model IDs, by prefix, whose live Converse call with one tool made no tool call or refused tools. Checked against the us-east-1 catalog and the price-list files in test/fixtures/; test/bedrock-catalog.test.ts fails when an entry no longer matches them.",
+  "checkedOn": "2026-11-27",
+  "names": {
+    "Devstral": "mistral.devstral-2-123b",
+    "GPT-5.4": "openai.gpt-5.4",
+    "GPT-5.5": "openai.gpt-5.5",
+    "Gemma 3 12B": "google.gemma-3-12b-it",
+    "Gemma 3 27B": "google.gemma-3-27b-it",
+    "Gemma 3 4B": "google.gemma-3-4b-it",
+    "Llama 3 70B": "meta.llama3-70b-instruct-v1:0",
+    "Llama 3 8B": "meta.llama3-8b-instruct-v1:0",
+    "Llama 3.1 70B": "meta.llama3-1-70b-instruct-v1:0",
+    "Llama 3.1 8B": "meta.llama3-1-8b-instruct-v1:0",
+    "Llama 3.3 70B": "meta.llama3-3-70b-instruct-v1:0",
+    "Llama 4 Maverick 17B": "meta.llama4-maverick-17b-instruct-v1:0",
+    "Llama 4 Scout 17B": "meta.llama4-scout-17b-instruct-v1:0",
+    "Magistral Small 1.2": "mistral.magistral-small-2509",
+    "Ministral 3B 3.0": "mistral.ministral-3-3b-instruct",
+    "Ministral 8B 3.0": "mistral.ministral-3-8b-instruct",
+    "Mistral 7B": "mistral.mistral-7b-instruct-v0:2",
+    "Mistral Large": "mistral.mistral-large-2402-v1:0",
+    "Mistral Small": "mistral.mistral-small-2402-v1:0",
+    "Mixtral 8x7B": "mistral.mixtral-8x7b-instruct-v0:1",
+    "NVIDIA Nemotron Nano 2": "nvidia.nemotron-nano-9b-v2",
+    "NVIDIA Nemotron Nano 2 VL": "nvidia.nemotron-nano-12b-v2",
+    "Nova 2.0 Lite": "amazon.nova-2-lite-v1:0",
+    "Pixtral Large 25.02": "mistral.pixtral-large-2502-v1:0",
+    "Qwen3 32B": "qwen.qwen3-32b-v1:0",
+    "Qwen3 Coder 30B A3B": "qwen.qwen3-coder-30b-a3b-v1:0",
+    "R1": "deepseek.r1-v1:0",
+    "Voxtral Mini 1.0": "mistral.voxtral-mini-3b-2507",
+    "Voxtral Small 1.0": "mistral.voxtral-small-24b-2507"
+  },
+  "noToolUse": [
+    {
+      "prefix": "google.gemma-3-",
+      "evidence": "Owner's account, us-east-1, 2026-11-26: google.gemma-3-4b-it answered the one-tool call with Python code and stopReason max_tokens, no toolUse block."
+    },
+    {
+      "prefix": "nvidia.nemotron-",
+      "evidence": "Owner's account, us-east-1, 2026-11-26: nvidia.nemotron-nano-9b-v2 answered the one-tool call with its thinking as plain text and stopReason max_tokens, no toolUse block."
+    },
+    {
+      "prefix": "deepseek.r1",
+      "evidence": "Owner's account, us-east-1, 2026-11-26: us.deepseek.r1-v1:0 refused the one-tool call, ValidationException \"This model doesn't support tool use.\""
+    }
+  ]
+}
