@@ -31,7 +31,10 @@
 // `cachedContentTokenCount`, `candidatesTokenCount` and `thoughtsTokenCount`
 // for output) and the model that answered in `modelVersion`. The Gemini
 // caller follows Gemini's generateContent format and is checked live in M2
-// step 3 (T10); a model of any other publisher is not called yet.
+// step 3 (T10). A model of any other publisher Vertex AI sells at a listed
+// price is not called yet: a known shortfall against Add a model's list of
+// every chat model of every family (T17, design-v3 1.5), not a rule, closed
+// by the T17 fix.
 //
 // Pages read 2026-11-25 (Google shows no page dates; every
 // cloud.google.com address redirects to docs.cloud.google.com):
@@ -142,8 +145,8 @@ export function vertexPlugin(env: GoogleFederationEnv, fetcher: typeof fetch = f
       vendor: "Google",
       recommendedForFriends: false,
       steps: [
-        "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). For Claude: its Model Garden card → Enable.",
-        "Enabling Claude asks Anthropic's use-case form (business name, business domain, use case). This is expected and is filled once per billing account. An individual may enter their own name, their own site or none, and a plain personal use case.",
+        "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). Enable Claude Haiku 5.5 on its Model Garden card (→ Enable) even if you want other model families: the Connect test call runs on it today. Enable any other Claude model you pick the same way.",
+        "Enabling a Claude model asks Anthropic's use-case form (business name, business domain, use case). This is expected and is filled once per billing account. An individual may enter their own name, their own site or none, and a plain personal use case.",
         "Type your project ID and tap <strong>Connect Google Vertex AI</strong>.",
         "Run the one-line Cloud Shell command shown, which makes a role that can only call models. If you cannot create custom roles, use Google's <strong>Vertex AI User</strong> role (<code>roles/aiplatform.user</code>) instead.",
         "In IAM → Grant access, paste your own identity shown below (copy button), pick that role and Save. It is yours alone, so no other user of this app can use your project. No key file is made.",
@@ -179,6 +182,7 @@ export function vertexPlugin(env: GoogleFederationEnv, fetcher: typeof fetch = f
     testModel: "Claude Haiku 5.5",
     knownModels: Object.keys(VERTEX_LOCATIONS),
     canCall: (model) => isClaude(model) || isGemini(model),
+    notCallableReason: "the app calls only Claude and Gemini models on Vertex AI so far",
     locations: (model) => [...(VERTEX_LOCATIONS[model] ?? ["global"])],
     locationLabel: (location) => (location === "global" ? "Global" : location === "us" ? "US multi-region" : location === "eu" ? "EU multi-region" : location),
     modelId: (model) => (isGemini(model) ? geminiModelId(model) : vertexModelId(model)),

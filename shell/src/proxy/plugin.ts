@@ -167,8 +167,14 @@ export interface ConnectMethod {
   // a model (T17) even while the table has no price for them ("no price yet").
   knownModels: readonly string[];
   // Whether the plug-in can call the model: it knows the provider's own ID
-  // for it and speaks its format. Add a model offers no other.
+  // for it and speaks its format. Add a model lists every chat model the
+  // provider sells at a listed price, of every family (T17), and a model the
+  // plug-in cannot call yet is shown as "not offered yet" with
+  // `notCallableReason`, never picked.
   canCall(model: string): boolean;
+  // Why a model the plug-in cannot call is not offered yet, in plain words
+  // after "not offered yet: " ("the app has no Bedrock ID for it").
+  notCallableReason: string;
   // Foundry only: the deployment name the guide asks the user to keep, the
   // model's ID, filled in on Add a model and changed by a user who named the
   // deployment differently; undefined for a model it cannot call. Absent

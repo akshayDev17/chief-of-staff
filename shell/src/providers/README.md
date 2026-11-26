@@ -59,12 +59,17 @@ plug-in. Each plug-in's file cites the vendor pages it follows, read
 2026-11-25.
 
 The callers speak each provider's own format: Converse on Bedrock (every
-model family Bedrock's own ID is known for), Anthropic's Messages format for
+model family, for each model whose Bedrock ID is in `BEDROCK_MODEL_IDS`;
+today only the four Claude models T16 added for the test call, a shortfall
+the T17 fix closes), Anthropic's Messages format for
 Claude on Foundry (`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`),
 Chat Completions for every other Foundry model
 (`/openai/v1/chat/completions`, by the user's deployment name) and
 `generateContent` for Gemini on Vertex AI. The last two came with Add a model
-(T17, `src/models/README.md`) and are checked live in M2 step 3.
+(T17, `src/models/README.md`) and are checked live in M2 step 3. Add a model
+lists every chat model each provider sells at a listed price, of every
+family; a model no caller here reaches yet (on Vertex AI, any publisher but
+Anthropic and Google) shows "not offered yet" until the T17 fix adds it.
 
 ## The issuer (`src/issuer.ts`)
 

@@ -328,6 +328,7 @@ describe("Add a model on Microsoft Foundry", () => {
     const tr = page.slice(at, page.indexOf("</tr>", at));
     expect(tr).toContain("$0.56 in · $1.68 out");
     expect(tr).toContain("Cannot be picked");
+    expect(tr).toContain("not offered yet: the app has no Foundry ID for it");
     expect(tr).not.toContain('name="deployment"');
     expect(await addModel(env.DB, regs, { userId, provider: "foundry", model: "DeepSeek V3.2 (Fireworks)", now: NOW })).toMatchObject({ kind: "refused", reason: "cannot_call" });
     expect(sent).toHaveLength(0);

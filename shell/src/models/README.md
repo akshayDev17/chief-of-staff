@@ -2,7 +2,8 @@
 
 Models › Setup › Add a model (`GET /chief-of-staff/models/setup/add`, `page.ts`; logic in
 `add.ts`). One tab per connected provider; its table lists every chat model
-the current price table sells there at a listed price, plus the models the
+the current price table sells there at a listed price, of every model family
+(the owner, 2026-11-24: "list every chat model each provider sells at a listed price, not just Claude, OpenAI and Gemini"), plus the models the
 plug-in knows that have no price yet (`connect.knownModels`, for example
 Foundry's Claude models before the maintainers' reading of a listing is
 recorded).
@@ -30,9 +31,11 @@ the three lines of design-v3 1.5 and nothing stored, when:
 - the model has "no price yet" (no input and output price at its region): no
   call is made, because the budget stop needs a real price, and the proxy
   refuses a direct call to it too;
-- the plug-in cannot call it (`connect.canCall`: Bedrock needs Bedrock's own
-  ID for the model, `BEDROCK_MODEL_IDS`, and Foundry its catalog ID,
-  `FOUNDRY_MODEL_IDS`; Vertex AI calls Claude and Gemini);
+- the plug-in cannot call it yet (`connect.canCall`): the row says "not
+  offered yet" with the plug-in's `notCallableReason`. Bedrock needs
+  Bedrock's own ID for the model (`BEDROCK_MODEL_IDS`) and Foundry its
+  catalog ID (`FOUNDRY_MODEL_IDS`); Vertex AI has callers only for Claude
+  and Gemini so far;
 - the reply names a different model than the one picked
   (`connect.replyModel`, `namesPickedModel`): Messages and Chat Completions
   `model`, Gemini's `modelVersion`; Bedrock's Converse names none. The reply
@@ -42,6 +45,17 @@ the three lines of design-v3 1.5 and nothing stored, when:
 - the provider refuses the call: the plug-in's plain reason, so a misspelt
   Foundry deployment shows "That deployment name or model ID doesn't exist
   here." with Foundry's own reply under it.
+
+**Known shortfall.** The `canCall` refusal above is narrower than this
+screen's rule. `BEDROCK_MODEL_IDS` holds only the four Claude models T16
+added for the Connect test call, so Bedrock offers no other family;
+Vertex AI calls no publisher but Anthropic and Google; and
+`FOUNDRY_MODEL_IDS` leaves out the models whose catalog ID is not
+confirmed. None of this is a rule or a
+product choice (the owner, on how the list narrowed: "why can COS only call
+anthropic models?" and "when did i ever lay such a stipulation?"); the T17
+fix fills the gap, and until then the screen says "not offered yet" rather
+than promise a model it cannot call.
 
 `readUserModels(db, userId)` returns the user's added models at every
 provider: what the per-task picker (T18) offers. Every query is scoped to the
