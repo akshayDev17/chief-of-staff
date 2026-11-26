@@ -163,6 +163,11 @@ export interface ConnectMethod {
   // The test call's model when the user has picked none at this provider,
   // as the price table names it.
   testModel: string;
+  // The Connect test call's own IDs for `testModel`, by location, the app's
+  // default first, used by that call alone whatever the provider's list says
+  // of the model (Bedrock's built-in profile IDs). Absent: the test call
+  // uses `locations` and `modelId` as any call does.
+  testModelIds?: Readonly<Record<string, string>>;
   // The models the plug-in knows by the price table's names, offered on Add
   // a model (T17) even while the table has no price for them ("no price yet").
   knownModels: readonly string[];
@@ -172,9 +177,19 @@ export interface ConnectMethod {
   // plug-in cannot call yet is shown as "not offered yet" with
   // `notCallableReason`, never picked.
   canCall(model: string): boolean;
-  // Why a model the plug-in cannot call is not offered yet, in plain words
-  // after "not offered yet: " ("the app has no Bedrock ID for it").
-  notCallableReason: string;
+  // Why `model`, which the plug-in cannot call, is not offered yet, in plain
+  // words after "not offered yet: " ("the app has no Foundry ID for it").
+  notCallableReason(model: string): string;
+  // False for a model the provider no longer offers (Bedrock: one its own
+  // list marks LEGACY), which Add a model leaves out unless the user already
+  // added it. Absent: every model is listed.
+  listed?(model: string): boolean;
+  // For a model known to make no tool call (a live call with one tool got
+  // none, or a refusal), the check that found it ("tested live on Gemma 3 4B
+  // (google.gemma-3-4b-it): no tool call"), shown on Add a model; the
+  // per-task picker marks the model too. Absent, or undefined: no such fault
+  // is known.
+  noToolUse?(model: string): string | undefined;
   // Foundry only: the deployment name the guide asks the user to keep, the
   // model's ID, filled in on Add a model and changed by a user who named the
   // deployment differently; undefined for a model it cannot call. Absent
@@ -186,9 +201,12 @@ export interface ConnectMethod {
   replyModel(body: unknown): string | undefined;
   // The locations the plug-in can call `model` at, the app's default first.
   locations(model: string): string[];
-  locationLabel(location: string): string;
-  // The provider's own name for the model at that location, as its reply shows it.
-  modelId(model: string, location: string): string;
+  // How a location reads, for `model` where it is given (Bedrock: the app's
+  // region is in-Region for one model and a geography profile for another).
+  locationLabel(location: string, model?: string): string;
+  // The provider's own name for the model at that location, as its reply
+  // shows it; undefined where the plug-in cannot call it there.
+  modelId(model: string, location: string): string | undefined;
   // The test call: the smallest request that proves the connection.
   testRequest(model: string, location: string): ModelRequest;
   // The text of a passed test call's reply ("OK").
@@ -214,7 +232,8 @@ export interface ProviderPlugin {
   mintCredential(connection: ConnectionFields, context: { userId: string }): Promise<unknown>;
   // The provider's own request, sent straight to the user's own provider.
   // `deployment` is Foundry's deployment name for the model, when the user set one.
-  call(input: { credential: unknown; connection: ConnectionFields; model: string; location: string; deployment?: string; request: ModelRequest }): Promise<ProviderReply>;
+  // `modelId`: the Connect test call's own ID for the test model (`testModelIds`).
+  call(input: { credential: unknown; connection: ConnectionFields; model: string; location: string; deployment?: string; modelId?: string; request: ModelRequest }): Promise<ProviderReply>;
   // The price source the proxy prices this provider's calls from (T11).
   priceSource: readonly SourceId[];
   connect: ConnectMethod;

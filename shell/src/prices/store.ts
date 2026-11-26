@@ -1,6 +1,7 @@
 // The price table in D1: dated snapshots kept beside each other. The current
 // table is the newest snapshot not rolled back.
 
+import type { BedrockCatalog } from "../providers/bedrock-catalog";
 import { ROLL_BACK_REFUSED, ROLL_BACK_STATEMENTS } from "./rollback";
 import type { PriceRow, SourceResult } from "./types";
 
@@ -39,11 +40,13 @@ export async function listSnapshots(db: D1Database): Promise<Snapshot[]> {
   return results.map(toSnapshot);
 }
 
-// The header, its rows and the pruning go in one batch, which D1 runs as one
-// transaction: a write that fails leaves the previous snapshot current.
+// The header, its rows, Bedrock's model list read beside them (T17,
+// src/providers/bedrock-catalog.ts) and the pruning go in one batch, which D1
+// runs as one transaction: a write that fails leaves the previous snapshot
+// current.
 export async function writeSnapshot(
   db: D1Database,
-  s: { takenAt: string; status: "good" | "partial"; results: SourceResult[]; rows: PriceRow[] },
+  s: { takenAt: string; status: "good" | "partial"; results: SourceResult[]; rows: PriceRow[]; bedrockCatalog?: BedrockCatalog },
 ): Promise<number> {
   const header = db
     .prepare("INSERT INTO price_snapshots (taken_at, status, results) VALUES (?, ?, ?) RETURNING id")
@@ -63,9 +66,17 @@ export async function writeSnapshot(
     ]);
     statements.push(insert.bind(JSON.stringify(chunk)));
   }
-  // Older snapshots beyond the kept number go, with their rows.
+  if (s.bedrockCatalog) {
+    statements.push(
+      db
+        .prepare("INSERT INTO bedrock_catalogs (snapshot_id, region, read_at, catalog) SELECT max(id), ?1, ?2, ?3 FROM price_snapshots")
+        .bind(s.bedrockCatalog.region, s.bedrockCatalog.readAt, JSON.stringify(s.bedrockCatalog)),
+    );
+  }
+  // Older snapshots beyond the kept number go, with their rows and lists.
   statements.push(
     db.prepare("DELETE FROM price_rows WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
+    db.prepare("DELETE FROM bedrock_catalogs WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
     db.prepare("DELETE FROM price_snapshots WHERE id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
   );
   const [created] = await db.batch<{ id: number }>(statements);
@@ -84,6 +95,12 @@ const toRow = (r: RowRecord): PriceRow => ({
   longPrompt: r.long_prompt === 1, batch: r.batch === 1, usdPerMTok: r.usd_per_mtok, source: r.source,
   dateRead: r.date_read, stale: r.stale === 1, disagreement: r.disagreement === 1,
 });
+
+// Bedrock's model list stored with a snapshot, if one was.
+export async function readStoredBedrockCatalog(db: D1Database, snapshotId: number): Promise<BedrockCatalog | undefined> {
+  const r = await db.prepare("SELECT catalog FROM bedrock_catalogs WHERE snapshot_id = ?").bind(snapshotId).first<{ catalog: string }>();
+  return r ? (JSON.parse(r.catalog) as BedrockCatalog) : undefined;
+}
 
 export async function readSnapshotRows(db: D1Database, snapshotId: number): Promise<PriceRow[]> {
   const { results } = await db.prepare("SELECT * FROM price_rows WHERE snapshot_id = ?").bind(snapshotId).all<RowRecord>();

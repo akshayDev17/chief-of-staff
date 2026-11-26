@@ -29,6 +29,7 @@ import {
   finishConsent,
   readCheck,
   runCheck,
+  testLocations,
   verdictText,
   type Check,
   type CheckResult,
@@ -83,7 +84,7 @@ function replyLine(result: CheckResult, plugin: ProviderPlugin): string {
   if (!r) return result.note ? `<p class="tc-reply">${esc(result.note)}</p>` : "";
   if (result.verdict === "passed") {
     const text = r.text ? ` · “${esc(r.text)}”` : "";
-    return `<p class="tc-reply">${esc(short)} replied: ${statusText(r.status)} · ${esc(result.modelId)} (${esc(plugin.connect.locationLabel(result.location))})${text}</p>`;
+    return `<p class="tc-reply">${esc(short)} replied: ${statusText(r.status)} · ${esc(result.modelId)} (${esc(plugin.connect.locationLabel(result.location, result.model))})${text}</p>`;
   }
   const parts = [statusText(r.status), r.errorName, r.message ? `“${r.message}”` : ""].filter(Boolean).map((p) => esc(p!));
   return `<p class="tc-reply">${esc(short)} replied: ${parts.join(" · ")}</p>`;
@@ -152,16 +153,15 @@ function regionLine(panel: ProviderPanel, changing: boolean): string {
   const { plugin, check } = panel;
   const c = plugin.connect;
   if (!c.guide.regionChoice || !check?.region) return "";
-  const label = esc(c.locationLabel(check.region));
+  const model = check.result?.model ?? c.testModel;
+  const label = esc(c.locationLabel(check.region, model));
   const how =
     check.regionSetBy === "user"
       ? `${label}, chosen by you. The test call proves it.`
       : `chosen by the app from what your model supports: ${label}. The test call proves it.`;
   if (!changing) return `<p class="small" style="margin-top:8px"><strong>Region:</strong> ${how} <a href="${providerHref(plugin.provider, "&change=region")}">Change</a></p>`;
-  const model = check.result?.model ?? c.testModel;
-  const options = c
-    .locations(model)
-    .map((l) => `<option value="${esc(l)}"${l === check.region ? " selected" : ""}>${esc(c.locationLabel(l))}</option>`)
+  const options = testLocations(plugin, model)
+    .map((l) => `<option value="${esc(l)}"${l === check.region ? " selected" : ""}>${esc(c.locationLabel(l, model))}</option>`)
     .join("");
   return `<form class="row" method="post" action="${action(plugin.provider, "region")}" style="margin-top:8px">
 <label class="small" for="${plugin.provider}-region"><strong>Region</strong> for ${esc(model)}</label>

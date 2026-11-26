@@ -17,6 +17,11 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
   failed write leaves the previous snapshot current and raises a
   refresh-failed alert. Two listings giving one row different prices keep the
   higher one, flagged, and raise an alert.
+- **Bedrock's model list.** The same refresh reads Bedrock's own model list
+  with the app's own AWS role (`src/providers/bedrock-catalog.ts`) and stores
+  it with the snapshot (`migrations/0010_create_bedrock_catalogs.sql`), so it
+  is pruned and rolled back with the prices. A read that fails keeps the
+  previous list and raises a refresh-failed alert naming the owner's step.
 - **Rollback.** After a bad refresh a maintainer runs `make roll-back-prices`
   (`scripts/roll-back-prices.mjs --remote`, through Wrangler; it needs T10's
   Cloudflare token in `CLOUDFLARE_API_TOKEN`). It marks the newest snapshot

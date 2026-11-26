@@ -32,8 +32,9 @@ the three lines of design-v3 1.5 and nothing stored, when:
   call is made, because the budget stop needs a real price, and the proxy
   refuses a direct call to it too;
 - the plug-in cannot call it yet (`connect.canCall`): the row says "not
-  offered yet" with the plug-in's `notCallableReason`. Bedrock needs
-  Bedrock's own ID for the model (`BEDROCK_MODEL_IDS`) and Foundry its
+  offered yet" with the plug-in's reason for that model
+  (`notCallableReason(model)`). Bedrock needs the model's ID from Bedrock's
+  own model list, matched to the price-list name (below), and Foundry its
   catalog ID (`FOUNDRY_MODEL_IDS`); Vertex AI has callers only for Claude
   and Gemini so far;
 - the reply names a different model than the one picked
@@ -46,17 +47,45 @@ the three lines of design-v3 1.5 and nothing stored, when:
   Foundry deployment shows "That deployment name or model ID doesn't exist
   here." with Foundry's own reply under it.
 
-**Known shortfall.** The `canCall` refusal above is narrower than this
-screen's rule. `BEDROCK_MODEL_IDS` holds only the four Claude models T16
-added and Nova 2.0 Lite, the Connect test call's model, so Bedrock offers no
-other model;
-Vertex AI calls no publisher but Anthropic and Google; and
-`FOUNDRY_MODEL_IDS` leaves out the models whose catalog ID is not
-confirmed. None of this is a rule or a
-product choice (the owner, on how the list narrowed: "why can COS only call
-anthropic models?" and "when did i ever lay such a stipulation?"); the T17
-fix fills the gap, and until then the screen says "not offered yet" rather
-than promise a model it cannot call.
+A model known to make no tool call (`connect.noToolUse`) shows **no tool use**
+on its row, with the model the live check was made on ("tested live on Gemma
+3 4B (google.gemma-3-4b-it): no tool call"), and wherever the per-task picker
+names it. It can still be picked: tasks name no tools yet, so the picker
+cannot keep it from a task that sends tools (a TODO for T18 in
+`picker-page.ts`). A model the provider no longer
+offers (`connect.listed`) is left out, unless the user already added it.
+
+**Bedrock.** The list comes from Bedrock's own model list
+(`src/providers/bedrock-catalog.ts`), which the app's own AWS role reads once
+a day with the price table (ListFoundationModels and ListInferenceProfiles,
+the owner's AWS step) and which is stored with the price snapshot. Each AWS
+price-list name is matched to a Bedrock model ID by a rule (the same name or
+ID as Bedrock's list gives, ignoring case) or by a reviewed entry in
+`src/providers/bedrock-models.json`; `test/bedrock-catalog.test.ts` checks
+that file against the owner's saved listing and price list. Only those
+matches can be picked: any other name says "not offered yet" and why, and a
+model Bedrock marks LEGACY is left out. Each model is called at Global where
+Bedrock names a Global profile for it and the price table prices it there,
+else in the app's region, at its own ID where it runs on demand or at the
+geography profile Bedrock names. Gemma 3, Nemotron and DeepSeek R1 are
+marked "no tool use" (the owner's live check, 2026-11-26). A model priced by
+prompt length whose threshold the app does not know is not offered, rather
+than costed too low. Once the list names a model, its verdict wins for every
+model. The built-in IDs (`BEDROCK_MODEL_IDS`: four Claude models and Nova 2.0
+Lite, the Connect test call's model) serve only names the list has no entry
+for: before the list has been read once, when Bedrock offers only those and
+says why for the rest, or a name not priced at this region. The Connect test
+call alone always uses the test model's built-in profile IDs, whatever the
+list says of it.
+
+**Known shortfall.** The `canCall` refusal above is still narrower than this
+screen's rule on two providers: Vertex AI calls no publisher but Anthropic
+and Google, and `FOUNDRY_MODEL_IDS` leaves out the models whose catalog ID is
+not confirmed. Neither is a rule or a product choice (the owner, on how the
+list narrowed: "why can COS only call anthropic models?" and "when did i
+ever lay such a stipulation?"); follow-up fixes fill those gaps, and until
+then the screen says "not offered yet" rather than promise a model it cannot
+call.
 
 `readUserModels(db, userId)` returns the user's added models at every
 provider: what the per-task picker (T18) offers. Every query is scoped to the

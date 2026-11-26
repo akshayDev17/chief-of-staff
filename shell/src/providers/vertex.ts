@@ -34,7 +34,7 @@
 // step 3 (T10). A model of any other publisher Vertex AI sells at a listed
 // price is not called yet: a known shortfall against Add a model's list of
 // every chat model of every family (T17, design-v3 1.5), not a rule, closed
-// by the T17 fix.
+// by a follow-up fix.
 //
 // Pages read 2026-11-25 (Google shows no page dates; every
 // cloud.google.com address redirects to docs.cloud.google.com):
@@ -182,7 +182,7 @@ export function vertexPlugin(env: GoogleFederationEnv, fetcher: typeof fetch = f
     testModel: "Claude Haiku 5.5",
     knownModels: Object.keys(VERTEX_LOCATIONS),
     canCall: (model) => isClaude(model) || isGemini(model),
-    notCallableReason: "the app calls only Claude and Gemini models on Vertex AI so far",
+    notCallableReason: () => "the app calls only Claude and Gemini models on Vertex AI so far",
     locations: (model) => [...(VERTEX_LOCATIONS[model] ?? ["global"])],
     locationLabel: (location) => (location === "global" ? "Global" : location === "us" ? "US multi-region" : location === "eu" ? "EU multi-region" : location),
     modelId: (model) => (isGemini(model) ? geminiModelId(model) : vertexModelId(model)),

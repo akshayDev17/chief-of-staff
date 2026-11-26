@@ -50,6 +50,9 @@ export function parseAwsUsageType(usagetype: string): ParsedUsage | undefined {
   if (SKIP.test(u)) return undefined;
   let tokenKind: TokenKind | undefined;
   if (/cache[_-]?read|cached[_-]?input/.test(u)) tokenKind = "cached_input";
+  // A model's one short-lived cache write is `cache_write`: 5 minutes on
+  // Claude and Nova, 30 minutes ("cache_write_tokens_30m") on the GPT-5.6 and
+  // GPT-6 models and Kimi K3, which list no other (src/providers/bedrock.ts).
   else if (/cache[_-]?write/.test(u)) tokenKind = /write[_-]?1h|[_-]1h([_-]|$)/.test(u) ? "cache_write_1h" : "cache_write";
   else if (/input[_-]?tokens?/.test(u)) tokenKind = "input";
   else if (/output[_-]?tokens?/.test(u)) tokenKind = "output";

@@ -39,6 +39,9 @@ export interface OfferRow {
   tier?: Tier;
   // The plug-in can call it: it knows the provider's own ID for the model.
   callable: boolean;
+  // Where the model is known to make no tool call, the check that found it
+  // (connect.noToolUse).
+  noToolUse?: string;
   // Foundry only: the deployment name filled in (the user's own, once added).
   deployment?: string;
   added?: UserModel;
@@ -173,18 +176,23 @@ async function offerRow(db: D1Database, userId: string, plugin: ProviderPlugin, 
         : undefined,
     tier: input && output ? await lookupTier(db, { provider: plugin.provider, model }) : undefined,
     callable: plugin.connect.canCall(model),
+    noToolUse: plugin.connect.noToolUse?.(model),
     deployment: added?.deployment ?? plugin.connect.deploymentName?.(model),
     added,
   };
 }
 
 // Every chat model the provider sells at a listed price, and every model the
-// plug-in knows that the table has no price for yet, by name.
+// plug-in knows that the table has no price for yet, by name. A model the
+// provider no longer offers (`connect.listed`) is left out, unless the user
+// added it, so they still see why it cannot be picked again.
 export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<OfferRow[]> {
   const plugin = plugins[provider];
   if (!plugin) return [];
   const added = new Map((await readUserModels(db, userId)).filter((m) => m.provider === provider).map((m) => [m.model, m]));
-  const names = [...new Set([...(await tableModels(db, provider)), ...plugin.connect.knownModels])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const names = [...new Set([...(await tableModels(db, provider)), ...plugin.connect.knownModels])]
+    .filter((model) => added.has(model) || (plugin.connect.listed?.(model) ?? true))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return Promise.all(names.map((model) => offerRow(db, userId, plugin, model, added.get(model))));
 }
 
@@ -243,7 +251,8 @@ export async function addModel(
   const offer = offers.find((r) => r.model === model);
   if (!offer) return refuse("not_offered");
   if (!offer.price) return refuse("no_price", { location: offer.location });
-  if (!offer.callable) return refuse("cannot_call", { location: offer.location });
+  const modelId = plugin.connect.modelId(model, offer.location);
+  if (!offer.callable || !modelId) return refuse("cannot_call", { location: offer.location });
 
   let deployment: string | undefined;
   if (plugin.connect.deploymentName) {
@@ -251,7 +260,6 @@ export async function addModel(
     if (!DEPLOYMENT.test(deployment)) return refuse("bad_deployment", { location: offer.location });
   }
   const { location } = offer;
-  const modelId = plugin.connect.modelId(model, location);
   const outcome = await sendTestCall(
     db,
     plugins,
@@ -263,7 +271,7 @@ export async function addModel(
 
   if (outcome.kind === "answered") {
     const repliedModel = plugin.connect.replyModel(outcome.body);
-    const otherIds = offers.filter((r) => r.model !== model).map((r) => plugin.connect.modelId(r.model, r.location));
+    const otherIds = offers.filter((r) => r.model !== model).flatMap((r) => plugin.connect.modelId(r.model, r.location) ?? []);
     if (repliedModel && !namesPickedModel(repliedModel, modelId, deployment, otherIds)) {
       return refuse("wrong_model", { ...at, reply: { status: outcome.status, repliedModel } });
     }
@@ -299,6 +307,8 @@ export async function addModel(
   }
   if (outcome.kind === "provider_error") return refuse("no_reply", { ...at, note: `${plugin.connect.guide.short} did not answer the test call.` });
   switch (outcome.reason) {
+    case "not_callable":
+      return refuse("cannot_call", at);
     case "no_price":
       return refuse("no_price", at);
     case "budget_spent":
@@ -332,7 +342,7 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
     case "no_price":
       return `${o.model} has no price yet, so it cannot be added: the budget stop needs a real price.`;
     case "cannot_call":
-      return `${o.model} is not offered at ${name} yet: ${plugin?.connect.notCallableReason ?? "the app cannot call it"}.`;
+      return `${o.model} is not offered at ${name} yet: ${plugin?.connect.notCallableReason(o.model) ?? "the app cannot call it"}.`;
     case "bad_deployment":
       return viewer === "friend"
         ? "Foundry's name for a model is letters, digits, hyphens, dots or underscores, at most 64."

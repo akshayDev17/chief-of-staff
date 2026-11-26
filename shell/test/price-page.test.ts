@@ -8,7 +8,7 @@ import { refreshPrices } from "../src/prices/refresh";
 import { readSnapshotRows, writeSnapshot } from "../src/prices/store";
 import type { PriceRow } from "../src/prices/types";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
-import { fakeFetch, googleEnv } from "./fake-sources";
+import { awsEnv, fakeFetch, googleEnv } from "./fake-sources";
 import azure from "./fixtures/azure-retail-eastus2.json";
 
 let key: TestKey;
@@ -35,7 +35,7 @@ const page = async (query = "") => {
 // Google's source fails until the app's pool exists.
 const fill = async (googleConfigured = true) =>
   refreshPrices({
-    db: env.DB, fetcher: fakeFetch(), google: googleConfigured ? await googleEnv() : {},
+    db: env.DB, fetcher: fakeFetch(), google: googleConfigured ? await googleEnv() : {}, aws: await awsEnv(),
     maintainerEntries: maintainerFile.entries as MaintainerEntry[], now: new Date("2026-11-24T06:00:00Z"),
   });
 
@@ -82,7 +82,7 @@ describe("Admin · Price table", () => {
     await fill();
     const withoutLuna = () => Response.json({ ...azure, Items: azure.Items.filter((i) => !i.meterName.startsWith("6-luna")) });
     const { results } = await refreshPrices({
-      db: env.DB, fetcher: fakeFetch({ azure: withoutLuna }), google: await googleEnv(),
+      db: env.DB, fetcher: fakeFetch({ azure: withoutLuna }), google: await googleEnv(), aws: await awsEnv(),
       maintainerEntries: maintainerFile.entries as MaintainerEntry[], now: new Date("2026-11-25T06:00:00Z"),
     });
     const read = results.find((r) => r.source === "azure-retail")!;

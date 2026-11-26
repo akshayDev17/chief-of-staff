@@ -1,7 +1,12 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { addModel } from "../src/models/add";
+import { ADD_MODEL_PATH, PROVIDERS_PATH } from "../src/paths";
+import { handleAddModel } from "../src/models/page";
+import { handleProviders } from "../src/providers/page";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
-import { bedrockPlugin } from "../src/providers/bedrock";
+import { bedrockPlugin, TEST_MODEL } from "../src/providers/bedrock";
+import type { BedrockOffer, ModelOffer } from "../src/providers/bedrock-catalog";
 import { foundryPlugin } from "../src/providers/foundry";
 import { writeSnapshot } from "../src/prices/store";
 import type { PriceRow } from "../src/prices/types";
@@ -34,8 +39,8 @@ beforeEach(async () => {
     rows: [
       price("bedrock", "Nova 2.0 Lite", "input", 0.1),
       price("bedrock", "Nova 2.0 Lite", "output", 0.5),
-      price("bedrock", "Nova 2.0 Lite", "input", 0.11, "cross-region"),
-      price("bedrock", "Nova 2.0 Lite", "output", 0.55, "cross-region"),
+      { ...price("bedrock", "Nova 2.0 Lite", "input", 0.11, "regional"), region: "us-east-1" },
+      { ...price("bedrock", "Nova 2.0 Lite", "output", 0.55, "regional"), region: "us-east-1" },
       { ...price("foundry", "Claude Haiku 5.5", "input", 0.1), region: "global", source: "maintainer-read" },
       { ...price("foundry", "Claude Haiku 5.5", "output", 0.5), region: "global", source: "maintainer-read" },
     ],
@@ -43,7 +48,7 @@ beforeEach(async () => {
 });
 
 // AWS as the scenario has it: whether the user's stack exists, and what Converse says.
-function awsWorld() {
+function awsWorld(offer?: BedrockOffer) {
   const world = { stack: false, converse: (): Response => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3 } }) };
   const { fetcher, sent } = scriptedFetch([
     [/sts\.us-east-1/, (s: Sent) => {
@@ -55,7 +60,7 @@ function awsWorld() {
     [/cloudformation/, () => new Response("<Outputs><member><OutputKey>TemplateVersion</OutputKey><OutputValue>1.0.0</OutputValue></member></Outputs>")],
   ]);
   const plugins = {
-    bedrock: bedrockPlugin({ APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json" }, fetcher, () => T0),
+    bedrock: bedrockPlugin({ APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json" }, fetcher, () => T0, offer),
   };
   return { world, plugins, sent };
 }
@@ -160,9 +165,9 @@ describe("the automatic test call", () => {
     const { world, plugins, sent } = awsWorld();
     world.stack = true;
     await connectBedrock(plugins);
-    expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "cross-region", at(2))).toBeUndefined();
-    expect(sent.filter((s) => s.url.includes("bedrock-runtime")).at(-1)!.url).toContain("/model/us.amazon.nova-2-lite-v1%3A0/converse");
-    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "cross-region", regionSetBy: "user", state: "passed" });
+    expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "us-east-1", at(2))).toBeUndefined();
+    expect(sent.filter((s) => s.url.includes("bedrock-runtime")).at(-1)!.url).toBe("https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1%3A0/converse");
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "us-east-1", regionSetBy: "user", state: "passed" });
     expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "mars-1", at(3))).toMatch(/not offered at that region/);
   });
 
@@ -397,5 +402,122 @@ describe("Connect Microsoft Foundry, through a signed Microsoft sign-in and then
     const other = (await userFor("friend-sub")).id;
     expect(await finishConsent(env.DB, p, { userId: other, provider: "foundry", returned: new URLSearchParams({ code: "c", state }), appOrigin: APP_ORIGIN, now: at(1) })).toHaveProperty("problem");
     expect("open" in (await back(p, { code: "c", state }))).toBe(true);
+  });
+});
+
+describe("Bedrock's own list and the models it no longer offers", () => {
+  const listSaying = (byName: Record<string, ModelOffer>): BedrockOffer => ({ region: "us-east-1", readAt: "2026-11-26T14:44:00.000Z", byName });
+  const converseUrls = (sent: Sent[]) => sent.filter((s) => s.url.includes("bedrock-runtime")).map((s) => decodeURIComponent(s.url));
+
+  const verdicts: ModelOffer[] = [{ kind: "dropped", pricedAt: ["global"] }, { kind: "not_offered", reason: "priced by prompt length", pricedAt: ["us-east-1"] }];
+
+  it("runs the Connect test call at the test model's built-in profile IDs when the list drops or refuses it", async () => {
+    for (const verdict of verdicts) {
+      const { world, plugins, sent } = awsWorld(listSaying({ [TEST_MODEL]: verdict }));
+      world.stack = true;
+      await connectBedrock(plugins);
+      expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "global", result: { model: TEST_MODEL, modelId: "global.amazon.nova-2-lite-v1:0" } });
+      expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "us-east-1", at(1))).toBeUndefined();
+      expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "us-east-1", result: { modelId: "us.amazon.nova-2-lite-v1:0" } });
+      const page = await (await handleProviders(new Request(`${APP_ORIGIN}${PROVIDERS_PATH}?provider=bedrock&change=region`), { db: env.DB, plugins, userId, viewer: "owner", appOrigin: APP_ORIGIN, now: at(1) })).text();
+      expect(page).toContain("us.amazon.nova-2-lite-v1:0 (US cross-Region from us-east-1)");
+      expect(page).toContain(">US cross-Region from us-east-1</option>");
+      expect(converseUrls(sent)).toEqual([
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/global.amazon.nova-2-lite-v1:0/converse",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1:0/converse",
+      ]);
+      await disconnectProvider(env.DB, userId, "bedrock");
+    }
+  });
+
+  it("refuses the test model on Add a model and in a task call when the list drops or refuses it, with its reason", async () => {
+    const reasons = ["Bedrock's own model list marks it legacy, or no longer as a chat model", "priced by prompt length"];
+    for (const [i, verdict] of verdicts.entries()) {
+      const { world, plugins, sent } = awsWorld(listSaying({ [TEST_MODEL]: verdict }));
+      world.stack = true;
+      await connectBedrock(plugins);
+      await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+      const before = converseUrls(sent).length;
+      const added = await addModel(env.DB, plugins, { userId, provider: "bedrock", model: TEST_MODEL, now: T0 });
+      expect(added).toMatchObject({ kind: "refused", reason: verdict.kind === "dropped" ? "not_offered" : "cannot_call" });
+      expect(plugins.bedrock.connect.notCallableReason(TEST_MODEL)).toBe(reasons[i]);
+      const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: TEST_MODEL, location: "global", request: {} } }, () => T0);
+      expect(outcome).toMatchObject({ kind: "refused", reason: "not_callable", detail: `${TEST_MODEL} is not offered at Amazon Bedrock yet: ${reasons[i]}` });
+      expect(converseUrls(sent)).toHaveLength(before);
+      await disconnectProvider(env.DB, userId, "bedrock");
+    }
+  });
+
+  it("refuses a model still offered, but no longer at its stored location, sending nothing to Bedrock", async () => {
+    const inRegionOnly: ModelOffer = { kind: "callable", modelId: "anthropic.claude-haiku-5-5", locations: [{ location: "us-east-1", callId: "us.anthropic.claude-haiku-5-5", kind: "us" }] };
+    const { world, plugins, sent } = awsWorld(listSaying({ "Claude Haiku 5.5": inRegionOnly }));
+    world.stack = true;
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "Claude Haiku 5.5", "input", 1), price("bedrock", "Claude Haiku 5.5", "output", 5),
+      ],
+    });
+    await connectBedrock(plugins);
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    const before = converseUrls(sent).length;
+    const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => T0);
+    expect(outcome).toMatchObject({ kind: "refused", reason: "not_callable", detail: "Amazon Bedrock does not offer Claude Haiku 5.5 at global any more" });
+    expect(converseUrls(sent)).toHaveLength(before);
+  });
+
+  it("keeps an added model the list later marks LEGACY at its in-Region price, saying it is legacy, not unpriced", async () => {
+    const { world, plugins, sent } = awsWorld(listSaying({ "DeepSeek v3.2": { kind: "dropped", pricedAt: ["us-east-1"] } }));
+    world.stack = true;
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "DeepSeek v3.2", "input", 0.6, "regional"), price("bedrock", "DeepSeek v3.2", "output", 2.4, "regional"),
+      ],
+    });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'bedrock', 'DeepSeek v3.2', 'us-east-1', ?)").bind(userId, T0.toISOString()).run();
+    await connectBedrock(plugins);
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    const before = converseUrls(sent).length;
+    const page = await (await handleAddModel(new Request(`${APP_ORIGIN}${ADD_MODEL_PATH}?provider=bedrock`), { db: env.DB, plugins, userId, viewer: "owner", now: T0 })).text();
+    const row = page.slice(page.indexOf("<strong>DeepSeek v3.2</strong>"), page.indexOf("</tr>", page.indexOf("<strong>DeepSeek v3.2</strong>")));
+    expect(row).toContain("$0.60 in · $2.40 out");
+    expect(row).toContain("not offered yet: Bedrock&#39;s own model list marks it legacy, or no longer as a chat model");
+    expect(row).not.toContain("no price yet");
+    expect(await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "DeepSeek v3.2", now: T0 })).toMatchObject({ kind: "refused", reason: "cannot_call", location: "us-east-1" });
+    expect(converseUrls(sent)).toHaveLength(before);
+  });
+
+  it("refuses an added built-in model the list marks dropped with its reason, sending nothing to Bedrock", async () => {
+    const { world, plugins, sent } = awsWorld(listSaying({ "Claude Haiku 5.5": { kind: "dropped", pricedAt: ["global"] } }));
+    world.stack = true;
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "Claude Haiku 5.5", "input", 1), price("bedrock", "Claude Haiku 5.5", "output", 5),
+      ],
+    });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'bedrock', 'Claude Haiku 5.5', 'global', ?)").bind(userId, T0.toISOString()).run();
+    await connectBedrock(plugins);
+    // The Connect test call skips the model it can no longer call.
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", result: { model: TEST_MODEL } });
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    const before = converseUrls(sent).length;
+    const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => T0);
+    expect(outcome).toMatchObject({
+      kind: "refused",
+      reason: "not_callable",
+      detail: "Claude Haiku 5.5 is not offered at Amazon Bedrock yet: Bedrock's own model list marks it legacy, or no longer as a chat model",
+    });
+    expect(converseUrls(sent)).toHaveLength(before);
   });
 });

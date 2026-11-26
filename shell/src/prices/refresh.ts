@@ -8,13 +8,18 @@
 //   rows added and dropped against the previous snapshot.
 // - Two sources (or two listings in one source) giving one row different
 //   prices keep the higher price, flagged, with a sources-disagree alert.
+// - Bedrock's own model list (T17, src/providers/bedrock-catalog.ts) is read
+//   with the prices and stored with the snapshot. A read that fails keeps the
+//   previous list, with its own read time, and raises a refresh-failed alert.
 
+import { regionOf, type BedrockEnv } from "../providers/bedrock";
+import { readBedrockCatalog } from "../providers/bedrock-catalog";
 import { readAws } from "./aws";
 import { readAzure } from "./azure";
 import type { GoogleFederationEnv } from "../google-federation";
 import { readGoogle } from "./google";
 import { rowsFromMaintainerEntries, type MaintainerEntry } from "./maintainer";
-import { addAlert, currentSnapshot, readSnapshotRows, writeSnapshot } from "./store";
+import { addAlert, currentSnapshot, readSnapshotRows, readStoredBedrockCatalog, writeSnapshot } from "./store";
 import { rowKey, type PriceRow, type SourceId, type SourceRead, type SourceResult } from "./types";
 
 export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: string[] } {
@@ -48,6 +53,8 @@ export interface RefreshInput {
   fetcher: typeof fetch;
   // The app's own Google identity, for the price reader's token (src/prices/google.ts).
   google: GoogleFederationEnv;
+  // The app's own AWS role, for Bedrock's model list.
+  aws: BedrockEnv;
   maintainerEntries: MaintainerEntry[];
   now: Date;
 }
@@ -55,7 +62,8 @@ export interface RefreshInput {
 export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: number; results: SourceResult[] }> {
   const { db, fetcher, now } = input;
   const today = now.toISOString().slice(0, 10);
-  const reads: SourceRead[] = await Promise.all([
+  const [catalogRead, ...reads]: [Awaited<ReturnType<typeof readBedrockCatalog>>, ...SourceRead[]] = await Promise.all([
+    readBedrockCatalog(fetcher, input.aws, regionOf(input.aws), now),
     readAzure(fetcher, today),
     readAws(fetcher, today),
     readGoogle(fetcher, input.google, now, today),
@@ -91,6 +99,7 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
     };
   });
   const failed = results.filter((r) => !r.ok);
+  const bedrockCatalog = catalogRead.ok ? catalogRead.catalog : last ? await readStoredBedrockCatalog(db, last.id) : undefined;
   let snapshotId: number;
   try {
     snapshotId = await writeSnapshot(db, {
@@ -98,12 +107,21 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
       status: failed.length ? "partial" : "good",
       results,
       rows: merged.rows,
+      bedrockCatalog,
     });
   } catch (error) {
     const detail = `could not store the snapshot, the previous one stays current: ${error instanceof Error ? error.message : String(error)}`;
     console.warn(`price refresh failed: ${detail}`);
     await addAlert(db, now, "refresh_failed", detail);
     throw error;
+  }
+  if (!catalogRead.ok) {
+    const detail =
+      `bedrock-model-list: ${catalogRead.error}. ` +
+      (bedrockCatalog ? `The list read ${bedrockCatalog.readAt} stays in use. ` : "Until the first read, Bedrock offers only the app's built-in models. ") +
+      "The app's own AWS role needs bedrock:ListFoundationModels and bedrock:ListInferenceProfiles (the owner's AWS step, shell/src/providers/README.md).";
+    console.warn(`price refresh failed: ${detail}`);
+    await addAlert(db, now, "refresh_failed", detail);
   }
   for (const f of failed) {
     const detail = `${f.source}: ${f.error}`;

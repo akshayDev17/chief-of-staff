@@ -12,8 +12,13 @@
 // task's suggested strength marked "proposed" until accepted (again, for an
 // accepted task whose proposal has changed). A proposed model of the other
 // strength, where the user has none of the task's own, says so. Any task can be
-// changed to any of the user's models, the Strongest included. Friend
-// screens say "Admin" for the owner and never "tier".
+// changed to any of the user's models, the Strongest included. A model known
+// to make no tool call (the plug-in's `noToolUse`, shown on Add a model too)
+// reads "no tool use" wherever it is named. Friend screens say "Admin" for
+// the owner and never "tier".
+//
+// TODO(T18): tasks name no tools yet. Once a task's agent sends tools, never
+// propose a "no tool use" model for it, and refuse one chosen for it.
 
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
@@ -29,11 +34,14 @@ export interface PickerPageInput {
   routes: TaskRoute[];
   // Each provider's short name on screen ("Bedrock").
   providerName: (p: Provider) => string;
+  // True for a model known to make no tool call.
+  noToolUse: (m: { provider: Provider; model: string }) => boolean;
   problem?: string;
   said?: string;
 }
 
-const modelName = (m: Offered, input: PickerPageInput): string => `${m.model} · ${input.providerName(m.provider)}`;
+const modelName = (m: Offered, input: PickerPageInput): string =>
+  `${m.model} · ${input.providerName(m.provider)}${input.noToolUse(m) ? " · no tool use" : ""}`;
 
 function changeForm(r: TaskRoute, now: Route | undefined, input: PickerPageInput): string {
   const option = (m: Offered, selected: boolean) =>
@@ -170,7 +178,8 @@ export async function handleTaskModels(
   const page = async (extra: { problem?: string; said?: string } = {}, status = 200) => {
     const { offered, routes } = await readTaskRoutes(db, userId);
     const providerName = (p: Provider) => plugins[p]?.connect.guide.short ?? PROVIDER_NAMES[p];
-    return html(renderPickerPage({ viewer, offered, routes, providerName, ...extra }), status);
+    const noToolUse = (m: { provider: Provider; model: string }) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
+    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, ...extra }), status);
   };
 
   if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });

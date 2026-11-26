@@ -28,6 +28,7 @@ import { AppNotConfigured, mintIdToken, readIssuer } from "../issuer";
 import type { ConnectionFields, ConnectMethod, Failure, Link, ProviderPlugin, Usage } from "../proxy/plugin";
 import { isLongPrompt, readBody, splitCacheWrites, TEST_MAX_TOKENS, TEST_PROMPT } from "./anthropic";
 import { assumeRole, assumeRoleWithWebIdentity, signV4, withoutHost, xmlText, type AwsCredentials } from "./aws";
+import type { BedrockLocation, BedrockOffer, ModelOffer } from "./bedrock-catalog";
 
 export interface BedrockEnv {
   APP_ORIGIN?: string;
@@ -48,14 +49,20 @@ export const AWS_AUDIENCE = "sts.amazonaws.com";
 export const AWS_SUBJECT = "chief-of-staff:bedrock";
 const SESSION_NAME = "chief-of-staff";
 
-// Bedrock's own IDs for the models the app knows, from each model card's
-// "Programmatic Access" table (read 2026-11-25; launch dates on the cards).
-// Global and cross-Region calls prefix the ID with `global.` or the geography.
-// The map holds the four Claude models T16 added, and Amazon Nova 2 Lite, the
-// Connect test call's model (below). That is a known shortfall, not a rule: Add a model is meant to offer
-// every chat model Bedrock sells at a listed price, of every model family
-// (T17, design-v3 1.5), and every other model shows "not offered yet" until
-// the T17 fix adds its ID here.
+// Which models Add a model offers, and at which IDs and locations, comes
+// from Bedrock's own model list, read daily by the app's own role and
+// matched to the price table's names (src/providers/bedrock-catalog.ts, T17):
+// every chat model Bedrock sells at a listed price, of every model family.
+//
+// The app's built-in IDs, from each model card's "Programmatic Access" table
+// (read 2026-11-25 and 2026-11-27; launch dates on the cards): the four
+// Claude models T16 added and Amazon Nova 2 Lite, the Connect test call's
+// model (below), at Global or the geography profile of the app's region.
+// Once the list names a model, its verdict wins, for these models too; a
+// built-in ID serves only a name the list has no entry for (before the list
+// has been read once, the owner's AWS step adding the two List actions to
+// the app's role, or a name not priced at this region). The Connect test call
+// alone always uses the test model's built-in profile IDs (`testModelIds`).
 export const BEDROCK_MODEL_IDS: Readonly<Record<string, string>> = {
   "Claude Haiku 5.5": "anthropic.claude-haiku-5-5",
   "Claude Sonnet 5.5": "anthropic.claude-sonnet-5-5",
@@ -87,6 +94,41 @@ export function geography(region: string): string {
 
 export const regionOf = (env: BedrockEnv): string => env.AWS_REGION?.trim() || "us-east-1";
 
+// A built-in model's locations: each has a Global profile and a geography
+// profile, and no in-Region ID.
+function builtInOffer(model: string, region: string): ModelOffer | undefined {
+  const id = BEDROCK_MODEL_IDS[model];
+  if (!id) return undefined;
+  const geo = geography(region);
+  return {
+    kind: "callable",
+    modelId: id,
+    locations: [
+      { location: "global", callId: `global.${id}`, kind: "global" },
+      { location: region, callId: `${geo}.${id}`, kind: geo },
+    ],
+  };
+}
+
+// Bedrock's 30-minute cache: the models whose price list sells their cache
+// writes as "cache_write_tokens_30m" (the price parser files those rows as
+// the model's cache_write rows, its only kind of cache write), from the
+// us-east-1 price-list files of 2026-11-23; test/bedrock-catalog.test.ts
+// checks the list against them. A write Converse reports with the "30m" TTL
+// is costed at that row for these models only; for any other model it is
+// counted as a 1-hour write, the dearer kind, as any write of unknown TTL is.
+const THIRTY_MINUTE_CACHE: ReadonlySet<string> = new Set([
+  "openai.gpt-5.6-luna", "openai.gpt-5.6-sol", "openai.gpt-5.6-terra",
+  "openai.gpt-6-astra", "openai.gpt-6-luna", "openai.gpt-6-sol",
+  "openai.gpt-6.1-sol", "openai.gpt-6.1-terra", "openai.gpt-6.2-astra", "openai.gpt-6.2-sol",
+  "moonshotai.kimi-k3",
+]);
+
+// A model ID without its inference profile's prefix ("global.", "us.").
+export const baseModelId = (callId: string): string => callId.replace(/^(?:global|us-gov|us|eu|apac|au|jp|ca)\./, "");
+
+export const hasThirtyMinuteCache = (callId: string): boolean => THIRTY_MINUTE_CACHE.has(baseModelId(callId));
+
 export function quickCreateLink(input: { region: string; templateUrl: string; appRoleArn: string; externalId: string }): string {
   // https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html
   // (read 2026-11-25): .../#/stacks/create/review?templateURL=...&stackName=...&param_<name>=<value>
@@ -103,6 +145,12 @@ const randomHex = (bytes: number): string => [...crypto.getRandomValues(new Uint
 
 const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
+// Usage from a Converse reply. Reasoning models (gpt-oss, DeepSeek R1,
+// MiniMax, Nemotron) count their reasoning in `outputTokens`: on every call
+// of the owner's family check, input + output = total (us-east-1,
+// 2026-11-26 and 2026-11-27). Should a reply's `totalTokens` ever exceed the
+// counts it gives, the rest is counted as output, so a family that counts
+// otherwise is never costed below what AWS bills.
 export function usageFromConverse(body: unknown, modelId: string): Usage | undefined {
   const u = (body as { usage?: Record<string, unknown> } | null)?.usage;
   if (!u || typeof u !== "object") return undefined;
@@ -110,12 +158,14 @@ export function usageFromConverse(body: unknown, modelId: string): Usage | undef
   const byTtl = (ttl: string) => details.filter((d) => d?.ttl === ttl).reduce((sum, d) => sum + count(d.inputTokens), 0);
   const input = count(u.inputTokens);
   const cachedInput = count(u.cacheReadInputTokens);
-  const writes = splitCacheWrites(count(u.cacheWriteInputTokens), byTtl("5m"), byTtl("1h"));
+  const shortWrites = byTtl("5m") + (hasThirtyMinuteCache(modelId) ? byTtl("30m") : 0);
+  const writes = splitCacheWrites(count(u.cacheWriteInputTokens), shortWrites, byTtl("1h"));
+  const counted = input + cachedInput + writes.cacheWrite + writes.cacheWrite1h + count(u.outputTokens);
   return {
     input,
     cachedInput,
     ...writes,
-    output: count(u.outputTokens),
+    output: count(u.outputTokens) + Math.max(0, count(u.totalTokens) - counted),
     longPrompt: isLongPrompt(modelId, input + cachedInput + writes.cacheWrite + writes.cacheWrite1h),
   };
 }
@@ -132,20 +182,24 @@ function bedrockError(response: Response, body: unknown): { name: string; messag
 
 const CONSOLE_MODEL_ACCESS: Link = { label: "Open Bedrock's model access", href: "https://console.aws.amazon.com/bedrock/home#/modelaccess" };
 
-export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date()): ProviderPlugin {
+// `offer` is Bedrock's own model list matched to the price table
+// (readBedrockOffer), absent until the app has read that list once.
+export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date(), offer?: BedrockOffer): ProviderPlugin {
   const region = regionOf(env);
+  const offerFor = (model: string): ModelOffer | undefined => offer?.byName[model] ?? builtInOffer(model, region);
+  const locationOf = (model: string, location: string): BedrockLocation | undefined => {
+    const o = offerFor(model);
+    return o?.kind === "callable" ? o.locations.find((l) => l.location === location) : undefined;
+  };
 
   const setupLink = (externalId: string): string | undefined =>
     env.BEDROCK_TEMPLATE_URL && env.AWS_APP_ROLE_ARN
       ? quickCreateLink({ region, templateUrl: env.BEDROCK_TEMPLATE_URL, appRoleArn: env.AWS_APP_ROLE_ARN, externalId })
       : undefined;
 
-  const modelId = (model: string, location: string): string => {
-    const id = BEDROCK_MODEL_IDS[model] ?? model;
-    if (location === "global") return `global.${id}`;
-    if (location === "cross-region") return `${geography(region)}.${id}`;
-    return id;
-  };
+  const modelId = (model: string, location: string): string | undefined => locationOf(model, location)?.callId;
+  const testOffer = builtInOffer(TEST_MODEL, region);
+  const testLocations = testOffer?.kind === "callable" ? testOffer.locations : [];
 
   const connect: ConnectMethod = {
     guide: {
@@ -159,7 +213,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one invoke-only role, chief-of-staff-model-caller.',
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
-        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude, OpenAI GPT and Palmyra models are sold through AWS Marketplace: accept each one's terms once in the Bedrock console (Model access). Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude, OpenAI GPT (not gpt-oss) and Writer Palmyra X models are sold through AWS Marketplace: accept each one's terms once in the Bedrock console (Model access). Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "Go back to the Chief of staff tab and finish the Connect step so the test call runs.",
       ],
@@ -185,20 +239,45 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     },
     setupLink: (connection) => setupLink(connection.externalId!),
     testModel: TEST_MODEL,
+    testModelIds: Object.fromEntries(testLocations.map((l) => [l.location, l.callId])),
     knownModels: Object.keys(BEDROCK_MODEL_IDS),
     // Converse speaks every model family, but the call needs Bedrock's own ID
-    // for the model, read from its model card. A model the app has no ID for
-    // is not offered yet (the shortfall above), until its ID is added.
-    canCall: (model) => model in BEDROCK_MODEL_IDS,
-    notCallableReason: "the app has no Bedrock ID for it",
+    // for the model: one Bedrock's list gives for its price-list name.
+    canCall: (model) => offerFor(model)?.kind === "callable",
+    notCallableReason(model) {
+      const o = offerFor(model);
+      if (o?.kind === "not_offered") return o.reason;
+      if (o?.kind === "dropped") return "Bedrock's own model list marks it legacy, or no longer as a chat model";
+      return offer ? "the app has no Bedrock ID for it" : "the app has not read Bedrock's own model list yet (Admin's one-time AWS step)";
+    },
+    listed: (model) => offerFor(model)?.kind !== "dropped",
+    noToolUse(model) {
+      const o = offerFor(model);
+      return o?.kind === "callable" ? o.noToolUse : undefined;
+    },
     // Converse's reply does not name the model.
     replyModel: () => undefined,
-    // The 5.5 models and Nova 2 Lite have no in-Region ID ("N/A" on their cards): Global, or
-    // the cross-Region profile of the app's own geography.
-    locations: () => ["global", "cross-region"],
-    locationLabel: (location) => (location === "global" ? "Global" : location === "cross-region" ? `${geography(region).toUpperCase()} cross-Region` : location),
+    // Global first where Bedrock offers it, then the app's region: in-Region
+    // or through the geography profile Bedrock names (bedrock-catalog.ts).
+    locations(model) {
+      const o = offerFor(model);
+      if (o?.kind === "callable") return o.locations.map((l) => l.location);
+      return o?.pricedAt.length ? o.pricedAt : ["global"];
+    },
+    locationLabel(location, model) {
+      if (location === "global") return "Global";
+      const l = model ? (locationOf(model, location) ?? (model === TEST_MODEL ? testLocations.find((t) => t.location === location) : undefined)) : undefined;
+      if (l?.kind === "in-region") return `${location} in-Region`;
+      if (l) return `${l.kind.toUpperCase()} cross-Region from ${location}`;
+      return location;
+    },
     modelId,
+    // At 5 tokens a reasoning model (gpt-oss, MiniMax, DeepSeek R1) can spend
+    // them all on reasoning and answer 200 with no text: the test call passes
+    // on that 200, and the reply shows no words (owner's family check,
+    // us-east-1, 2026-11-26: "max_tokens, reasoning only").
     testRequest: () => ({ messages: [{ role: "user", content: [{ text: TEST_PROMPT }] }], inferenceConfig: { maxTokens: TEST_MAX_TOKENS } }),
+    // The text blocks only; a `reasoningContent` block has no `text`.
     replyText(body) {
       const content = (body as { output?: { message?: { content?: Array<{ text?: string }> } } } | null)?.output?.message?.content;
       const text = Array.isArray(content) ? content.map((c) => c?.text ?? "").join("").trim() : "";
@@ -291,9 +370,10 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         now: at,
       });
     },
-    async call({ credential, model, location, request }) {
-      const id = modelId(model, location);
-      const callRegion = location === "global" || location === "cross-region" ? region : location;
+    async call({ credential, model, location, modelId: pinned, request }) {
+      const id = pinned ?? modelId(model, location);
+      if (!id) throw new Error(`no Bedrock ID for ${model} at ${location}`);
+      const callRegion = location === "global" ? region : location;
       const url = `https://bedrock-runtime.${callRegion}.amazonaws.com/model/${encodeURIComponent(id)}/converse`;
       const body = JSON.stringify(request);
       const headers = await signV4({

@@ -6,7 +6,7 @@ import { addAlert, currentSnapshot, readSnapshotRows, recentAlerts } from "./pri
 import { accessDenied, readAccessIdentity } from "./access";
 import { handleIssuerRequest, PUBLIC_ISSUER_PATHS, readAppOrigin } from "./issuer";
 import { runDueChecks } from "./providers/check";
-import { providerPlugins, type ProvidersEnv } from "./providers/index";
+import { readProviderPlugins, type ProvidersEnv } from "./providers/index";
 import { handleProviders, isProvidersPath } from "./providers/page";
 import { handleAddModel, isAddModelPath } from "./models/page";
 import { handleTaskModels, isTaskModelsPath } from "./models/picker-page";
@@ -74,7 +74,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleBudgets(request, env.DB, providerPlugins(env), user.id, now);
+      return handleBudgets(request, env.DB, await readProviderPlugins(env, env.DB), user.id, now);
     }
     // Models › Setup › Providers, for the signed-in user. Access lets only
     // the owner in until invitations bring friends (T45), so every viewer
@@ -83,7 +83,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleProviders(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", appOrigin: readAppOrigin(env), now });
+      return handleProviders(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", appOrigin: readAppOrigin(env), now });
     }
     // Models › Setup › Add a model, for the signed-in user (T17); every
     // viewer is the owner until invitations bring friends (T45).
@@ -91,7 +91,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleAddModel(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", now });
+      return handleAddModel(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", now });
     }
     // Models › Setup › Model for each task, for the signed-in user (T18);
     // every viewer is the owner until invitations bring friends (T45).
@@ -99,7 +99,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleTaskModels(request, { db: env.DB, plugins: providerPlugins(env), userId: user.id, viewer: "owner", now });
+      return handleTaskModels(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", now });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === PRICE_TABLE_PATH && request.method === "GET") {
@@ -120,7 +120,7 @@ export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === PROVIDER_CHECKS_CRON) {
-      await runDueChecks(env.DB, providerPlugins(env), now);
+      await runDueChecks(env.DB, await readProviderPlugins(env, env.DB), now);
       return;
     }
     if (controller.cron === WEEKLY_READING_CRON) {
@@ -139,6 +139,7 @@ export default {
       db: env.DB,
       fetcher: fetch,
       google: env,
+      aws: env,
       maintainerEntries: maintainerEntries(),
       now,
     });
