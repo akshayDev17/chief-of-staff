@@ -182,8 +182,8 @@ own principal. The app's own project needs `sts.googleapis.com` and
 user enables Vertex AI in their own project), and one grant: the price
 reader's principal,
 `principal://iam.googleapis.com/projects/<project number>/locations/global/workloadIdentityPools/chief-of-staff/subject/price-reader`,
-gets `roles/serviceusage.serviceUsageConsumer` on that project, so it can
-name the project as its quota project. Nothing is guessed during T10.
+gets a custom role on that project, `chiefOfStaffPriceReader`, holding only
+`serviceusage.services.use`, so it can name the project as its quota project. Nothing is guessed during T10.
 
 The Worker reads the values below. Each variable except `APP_ORIGIN` is set
 as an environment variable of the GitHub environment `production` (Settings →

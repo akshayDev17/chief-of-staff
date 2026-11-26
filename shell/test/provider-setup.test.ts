@@ -68,14 +68,19 @@ describe("the owner's setup values", () => {
     expect(v.google.priceReaderPrincipal).toBe(v.google.userPrincipal.replace("<user id>", PRICE_READER_SUBJECT));
   });
 
-  it("enable only STS and the Cloud Billing API on the app's project, and grant the price reader only the quota-project role there", () => {
+  it("enable only STS and the Cloud Billing API on the app's project, and grant the price reader only a one-permission custom role there", () => {
     const v = lib.setupValues(lib.readValueInputs(inputs));
     expect(v.google.commands[0]).toBe("gcloud services enable sts.googleapis.com cloudbilling.googleapis.com --project=cos-owner-project");
     for (const c of v.google.commands) expect(c).not.toContain("aiplatform");
+    const roles = v.google.commands.filter((c: string) => c.includes("iam roles create"));
+    expect(roles).toEqual([
+      'gcloud iam roles create chiefOfStaffPriceReader --project=cos-owner-project --title="Chief of staff price reader" --permissions=serviceusage.services.use',
+    ]);
     const grants = v.google.commands.filter((c: string) => c.includes("add-iam-policy-binding"));
     expect(grants).toEqual([
-      "gcloud projects add-iam-policy-binding cos-owner-project --member=principal://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/chief-of-staff/subject/price-reader --role=roles/serviceusage.serviceUsageConsumer",
+      "gcloud projects add-iam-policy-binding cos-owner-project --member=principal://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/chief-of-staff/subject/price-reader --role=projects/cos-owner-project/roles/chiefOfStaffPriceReader",
     ]);
+    expect(v.google.commands.indexOf(roles[0])).toBeLessThan(v.google.commands.indexOf(grants[0]));
     // No API key anywhere.
     const text = lib.renderChecklist(v);
     expect(text).not.toMatch(/api-keys|GOOGLE_BILLING_API_KEY/);

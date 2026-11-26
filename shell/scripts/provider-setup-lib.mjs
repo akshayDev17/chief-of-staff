@@ -30,9 +30,11 @@ export const GOOGLE_PROVIDER = "chief-of-staff-worker";
 export const GOOGLE_USER_SUBJECT_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 export const GOOGLE_PRICE_READER_SUBJECT = "price-reader";
 export const GOOGLE_SUBJECT_CONDITION = `assertion.sub.matches('${GOOGLE_USER_SUBJECT_PATTERN}') || assertion.sub == '${GOOGLE_PRICE_READER_SUBJECT}'`;
-// The one role the price reader holds, on the app's own project only: it lets
-// the reader name that project as its quota project ("serviceusage.services.use").
-export const GOOGLE_PRICE_READER_ROLE = "roles/serviceusage.serviceUsageConsumer";
+// The one role the price reader holds, a custom role on the app's own project
+// only, with the one permission that lets the reader name that project as its
+// quota project.
+export const GOOGLE_PRICE_READER_ROLE_ID = "chiefOfStaffPriceReader";
+export const GOOGLE_PRICE_READER_PERMISSION = "serviceusage.services.use";
 export const TEMPLATE_PREFIX = "chief-of-staff-bedrock-role/";
 
 const ORIGIN = /^https:\/\/[a-z0-9.-]+$/;
@@ -144,7 +146,8 @@ export function setupValues(i) {
         `gcloud services enable sts.googleapis.com cloudbilling.googleapis.com --project=${i.GOOGLE_PROJECT_ID}`,
         `gcloud iam workload-identity-pools create ${GOOGLE_POOL} --project=${i.GOOGLE_PROJECT_ID} --location=global --display-name="Chief of staff"`,
         `gcloud iam workload-identity-pools providers create-oidc ${GOOGLE_PROVIDER} --project=${i.GOOGLE_PROJECT_ID} --location=global --workload-identity-pool=${GOOGLE_POOL} --issuer-uri=${issuer} --allowed-audiences=https:${wifProvider} --attribute-mapping=google.subject=assertion.sub --attribute-condition="${GOOGLE_SUBJECT_CONDITION}"`,
-        `gcloud projects add-iam-policy-binding ${i.GOOGLE_PROJECT_ID} --member=${priceReaderPrincipal} --role=${GOOGLE_PRICE_READER_ROLE}`,
+        `gcloud iam roles create ${GOOGLE_PRICE_READER_ROLE_ID} --project=${i.GOOGLE_PROJECT_ID} --title="Chief of staff price reader" --permissions=${GOOGLE_PRICE_READER_PERMISSION}`,
+        `gcloud projects add-iam-policy-binding ${i.GOOGLE_PROJECT_ID} --member=${priceReaderPrincipal} --role=projects/${i.GOOGLE_PROJECT_ID}/roles/${GOOGLE_PRICE_READER_ROLE_ID}`,
       ],
       // What each user grants on their own project, shown on their Connect screen.
       userPrincipal: poolPrincipal("<user id>"),
