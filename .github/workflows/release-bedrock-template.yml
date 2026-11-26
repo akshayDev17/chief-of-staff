@@ -100,4 +100,4 @@ jobs:
           aws s3 cp template.json "s3://${BUCKET}/${KEY}" --content-type application/json --only-show-errors
           url="https://${BUCKET}.s3.amazonaws.com/${KEY}"
           echo "Published ${url}"
-          echo "Published \`${url}\`. Set the Worker variable BEDROCK_TEMPLATE_URL to it to make it the version the link opens." >> "$GITHUB_STEP_SUMMARY"
+          echo "Published \`${url}\`. Set it as the environment variable BEDROCK_TEMPLATE_URL of the GitHub environment \`production\`; the next shell release deploys it." >> "$GITHUB_STEP_SUMMARY"
