@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { customRoleCommand, rawPredictUrl, userPrincipal, vertexModelId, vertexPlugin, wifAudience } from "../src/providers/vertex";
+import { userPrincipal, wifAudience } from "../src/google-federation";
+import { customRoleCommand, rawPredictUrl, vertexModelId, vertexPlugin } from "../src/providers/vertex";
 import { vertexDefaultLocation } from "../src/providers/vertex-locations";
 import { ProviderRefusal, type Failure } from "../src/proxy/plugin";
 import { APP_ORIGIN, decodeJwt, issuerKey, issuerKeys, scriptedFetch, type Sent } from "./issuer-fixture";
@@ -115,6 +116,10 @@ describe("the Vertex AI credential", () => {
     await expect(vertexPlugin(envWith({ GOOGLE_WIF_PROVIDER: undefined })).mintCredential(connection, { userId: USER_A })).rejects.toMatchObject({ missing: ["GOOGLE_WIF_PROVIDER"] });
     const { fetcher, sent } = google();
     await expect(vertexPlugin(envWith(), fetcher, () => NOW).mintCredential(connection, { userId: "" })).rejects.toThrow(/user's own app ID/);
+    // Nor as the price reader, nor as anything but an app ID.
+    for (const userId of ["price-reader", "user-1", USER_A.toUpperCase()]) {
+      await expect(vertexPlugin(envWith(), fetcher, () => NOW).mintCredential(connection, { userId })).rejects.toThrow(/user's own app ID/);
+    }
     expect(sent).toEqual([]);
   });
 });

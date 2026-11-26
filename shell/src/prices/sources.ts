@@ -29,7 +29,7 @@ export const SOURCES: Record<SourceId, SourceInfo> = {
   "google-catalog": {
     id: "google-catalog",
     label: "Google Cloud Billing Catalog API, service Vertex AI",
-    // services.skus.list; an API key is required (403 without one).
+    // services.skus.list, with the price reader's federated token (src/prices/google.ts).
     docs: "https://docs.cloud.google.com/billing/docs/reference/rest/v1/services.skus/list",
     docsRead: "2026-11-24",
   },
@@ -46,6 +46,6 @@ export const AZURE_RETAIL_URL =
 export const AWS_PRICING_BASE = "https://pricing.us-east-1.amazonaws.com";
 export const AWS_OFFERS = ["AmazonBedrockFoundationModels", "AmazonBedrock"] as const;
 // Vertex AI's service id in the Cloud Billing catalog. Confirmed against the
-// Catalog API once the maintainers' key exists (T10).
+// Catalog API at M2's price-reader check (design-v3 1.6, item 9).
 export const GOOGLE_VERTEX_SERVICE = "C7E2-9256-1C43";
 export const GOOGLE_CATALOG_BASE = "https://cloudbilling.googleapis.com/v1";

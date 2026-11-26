@@ -16,6 +16,7 @@
 // signed only for that user's own calls -> Google's STS (the owner's pool
 // trusting the issuer) -> the federated access token, used directly on
 // Vertex AI (direct resource access; no service account is impersonated).
+// The exchange is the one the price reader also uses (src/google-federation.ts).
 // Whether Vertex AI's Claude endpoint accepts a federated principal is M2
 // step 11 (g), live; if it does not, the fallback is one service account per
 // user in the app's project, which only that user's principal may act as.
@@ -64,40 +65,15 @@
 //
 // Price source: Google's Cloud Billing Catalog API (src/prices/google.ts).
 
-import { AppNotConfigured, mintIdToken, readIssuer } from "../issuer";
+import { userGoogleToken, userPrincipal, type GoogleFederationEnv } from "../google-federation";
 import type { ConnectionFields, ConnectMethod, Failure, Link, ProviderPlugin } from "../proxy/plugin";
-import { ProviderRefusal } from "../proxy/plugin";
 import { esc } from "../prices/page";
 import { VERTEX_LOCATIONS } from "./vertex-locations";
 import type { Usage } from "../proxy/plugin";
 import { errorFromBody, messagesModel, messagesText, readBody, TEST_MAX_TOKENS, TEST_PROMPT, usageFromMessages } from "./anthropic";
 
-export interface VertexEnv {
-  APP_ORIGIN?: string;
-  ISSUER_KEYS?: string;
-  // `//iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>` (T10).
-  GOOGLE_WIF_PROVIDER?: string;
-}
-
 export const CUSTOM_ROLE_ID = "chiefOfStaffModelCaller";
-const CLOUD_PLATFORM = "https://www.googleapis.com/auth/cloud-platform";
 const ANTHROPIC_VERSION = "vertex-2023-10-16";
-
-// The ID token's audience: the provider's full canonical name, which Google
-// accepts "with or without the https:// prefix".
-export const wifAudience = (provider: string): string => `https:${provider}`;
-
-const WIF_PROVIDER = /^\/\/iam\.googleapis\.com\/(projects\/\d+\/locations\/global\/workloadIdentityPools\/[a-z0-9-]+)\/providers\/[a-z0-9-]+$/;
-// A user's app ID, as Google's subject takes it.
-const SUBJECT = /^[A-Za-z0-9_-]{1,127}$/;
-
-// The user's own Google identity, the one they grant the role to: the pool
-// of GOOGLE_WIF_PROVIDER, subject the user's app ID. Undefined until the
-// pool exists (T10).
-export function userPrincipal(wifProvider: string | undefined, userId: string): string | undefined {
-  const pool = WIF_PROVIDER.exec(wifProvider?.trim() ?? "")?.[1];
-  return pool && SUBJECT.test(userId) ? `principal://iam.googleapis.com/${pool}/subject/${userId}` : undefined;
-}
 
 // Vertex AI's model ID from the price table's name ("Claude Sonnet 5.5" ->
 // "claude-sonnet-5-5").
@@ -156,16 +132,7 @@ export const customRoleCommand = (projectId: string): string =>
 const consoleLink = (path: string, projectId: string | undefined): string =>
   `https://console.cloud.google.com/${path}${projectId ? `?project=${encodeURIComponent(projectId)}` : ""}`;
 
-async function googleJson(response: Response, step: string): Promise<Record<string, unknown>> {
-  const body = await readBody(response);
-  if (!response.ok) {
-    const { name, message } = errorFromBody(response.status, body);
-    throw new ProviderRefusal({ step, status: response.status, errorName: name, message });
-  }
-  return (body ?? {}) as Record<string, unknown>;
-}
-
-export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date()): ProviderPlugin {
+export function vertexPlugin(env: GoogleFederationEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date()): ProviderPlugin {
   const iamLink = (connection?: ConnectionFields): Link => ({ label: "Open IAM → Grant access", href: consoleLink("iam-admin/iam", connection?.projectId) });
 
   const connect: ConnectMethod = {
@@ -263,30 +230,9 @@ export function vertexPlugin(env: VertexEnv, fetcher: typeof fetch = fetch, now:
     priceSource: ["google-catalog"],
     connect,
     // The token is the user's own principal's: its subject is the user whose
-    // call this is, never another user's, whatever project the record names.
-    async mintCredential(_connection, { userId }) {
-      if (!env.GOOGLE_WIF_PROVIDER) throw new AppNotConfigured(["GOOGLE_WIF_PROVIDER"]);
-      if (!SUBJECT.test(userId)) throw new Error("a Vertex AI credential needs the user's own app ID");
-      const issuer = await readIssuer(env);
-      const subjectToken = await mintIdToken(issuer, { audience: wifAudience(env.GOOGLE_WIF_PROVIDER), subject: userId, now: now() });
-      const federated = await googleJson(
-        await fetcher("https://sts.googleapis.com/v1/token", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            grantType: "urn:ietf:params:oauth:grant-type:token-exchange",
-            audience: env.GOOGLE_WIF_PROVIDER,
-            scope: CLOUD_PLATFORM,
-            requestedTokenType: "urn:ietf:params:oauth:token-type:access_token",
-            subjectToken,
-            subjectTokenType: "urn:ietf:params:oauth:token-type:jwt",
-          }),
-        }),
-        "sts.googleapis.com token",
-      );
-      if (typeof federated.access_token !== "string") throw new Error("Google's STS answered without a token");
-      return { accessToken: federated.access_token, expiresIn: federated.expires_in };
-    },
+    // call this is, never another user's, whatever project the record names,
+    // and never the price reader's.
+    mintCredential: (_connection, { userId }) => userGoogleToken(env, fetcher, now(), userId),
     async call({ credential, connection, model, location, request }) {
       const authorization = `Bearer ${(credential as { accessToken: string }).accessToken}`;
       if (isGemini(model)) {

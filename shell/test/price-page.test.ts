@@ -8,7 +8,7 @@ import { refreshPrices } from "../src/prices/refresh";
 import { readSnapshotRows, writeSnapshot } from "../src/prices/store";
 import type { PriceRow } from "../src/prices/types";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
-import { fakeFetch } from "./fake-sources";
+import { fakeFetch, googleEnv } from "./fake-sources";
 import azure from "./fixtures/azure-retail-eastus2.json";
 
 let key: TestKey;
@@ -32,9 +32,10 @@ const page = async (query = "") => {
   expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
   return response.text();
 };
-const fill = async (googleApiKey: string | null = "test-key") =>
+// Google's source fails until the app's pool exists.
+const fill = async (googleConfigured = true) =>
   refreshPrices({
-    db: env.DB, fetcher: fakeFetch(), googleApiKey: googleApiKey ?? undefined,
+    db: env.DB, fetcher: fakeFetch(), google: googleConfigured ? await googleEnv() : {},
     maintainerEntries: maintainerFile.entries as MaintainerEntry[], now: new Date("2026-11-24T06:00:00Z"),
   });
 
@@ -66,7 +67,7 @@ describe("Admin · Price table", () => {
   });
 
   it("shows each row with its price, source, date read and strength, and the last refresh", async () => {
-    await fill(null);
+    await fill(false);
     const html = await page();
     expect(html).toContain("Last refresh 2026-11-24 06:00 UTC:");
     expect(html).toContain("Google Cloud Billing Catalog API, service Vertex AI: <strong>failed</strong>");
@@ -81,7 +82,7 @@ describe("Admin · Price table", () => {
     await fill();
     const withoutLuna = () => Response.json({ ...azure, Items: azure.Items.filter((i) => !i.meterName.startsWith("6-luna")) });
     const { results } = await refreshPrices({
-      db: env.DB, fetcher: fakeFetch({ azure: withoutLuna }), googleApiKey: "test-key",
+      db: env.DB, fetcher: fakeFetch({ azure: withoutLuna }), google: await googleEnv(),
       maintainerEntries: maintainerFile.entries as MaintainerEntry[], now: new Date("2026-11-25T06:00:00Z"),
     });
     const read = results.find((r) => r.source === "azure-retail")!;

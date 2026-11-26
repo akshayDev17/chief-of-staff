@@ -14,7 +14,8 @@ import { handleBudgets } from "./proxy/budgets-page";
 import { BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH } from "./paths";
 import { userFromAccess } from "./users";
 
-// Variables and secrets the provider plug-ins read (T10 sets them, except
+// Variables and secrets the provider plug-ins and the Google price reader
+// (APP_ORIGIN, ISSUER_KEYS, GOOGLE_WIF_PROVIDER) read (T10 sets them, except
 // APP_ORIGIN, which is in wrangler.jsonc "vars"; see
 // src/providers/README.md): APP_ORIGIN, ISSUER_KEYS (secret), AWS_APP_ROLE_ARN, AWS_REGION, BEDROCK_TEMPLATE_URL, ENTRA_CLIENT_ID,
 // ENTRA_CERT_KEY (secret), ENTRA_CERT_THUMBPRINT, FOUNDRY_CREDENTIAL,
@@ -26,8 +27,6 @@ export interface Env extends ProvidersEnv {
   // The Access application's AUD tag.
   ACCESS_AUD?: string;
   DB: D1Database;
-  // The maintainers' Cloud Billing API key, a Worker secret (arrives with T10).
-  GOOGLE_BILLING_API_KEY?: string;
 }
 
 // The Cron Triggers in wrangler.jsonc. Only handlers may be exported from this
@@ -139,7 +138,7 @@ export default {
     const { results } = await refreshPrices({
       db: env.DB,
       fetcher: fetch,
-      googleApiKey: env.GOOGLE_BILLING_API_KEY,
+      google: env,
       maintainerEntries: maintainerEntries(),
       now,
     });

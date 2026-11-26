@@ -11,6 +11,7 @@
 
 import { readAws } from "./aws";
 import { readAzure } from "./azure";
+import type { GoogleFederationEnv } from "../google-federation";
 import { readGoogle } from "./google";
 import { rowsFromMaintainerEntries, type MaintainerEntry } from "./maintainer";
 import { addAlert, currentSnapshot, readSnapshotRows, writeSnapshot } from "./store";
@@ -45,7 +46,8 @@ export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: 
 export interface RefreshInput {
   db: D1Database;
   fetcher: typeof fetch;
-  googleApiKey: string | undefined;
+  // The app's own Google identity, for the price reader's token (src/prices/google.ts).
+  google: GoogleFederationEnv;
   maintainerEntries: MaintainerEntry[];
   now: Date;
 }
@@ -56,7 +58,7 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
   const reads: SourceRead[] = await Promise.all([
     readAzure(fetcher, today),
     readAws(fetcher, today),
-    readGoogle(fetcher, input.googleApiKey, today),
+    readGoogle(fetcher, input.google, now, today),
   ]);
   reads.push({ source: "maintainer-read", ok: true, rows: rowsFromMaintainerEntries(input.maintainerEntries), unmapped: 0 });
 

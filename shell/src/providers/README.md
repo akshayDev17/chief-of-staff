@@ -40,7 +40,13 @@ every time is checked live in M2 step 11, check 8.
 Connect Google Vertex AI shows the user's own principal to grant,
 `principal://iam.googleapis.com/projects/<pool project number>/locations/global/workloadIdentityPools/<pool>/subject/<user id>`,
 derived from `GOOGLE_WIF_PROVIDER`; no user's project grants a service
-account shared by every user.
+account shared by every user. The user ID is always a UUID, and the pool
+admits only UUID subjects and one more, `price-reader`: the price table's
+reader of Google's Cloud Billing Catalog (`src/prices/google.ts`), which
+holds one role on the app's own project and nothing on any user's. A user's
+token can never carry `price-reader`, and the price reader's token carries
+no user's ID. Both tokens come from the one exchange in
+`src/google-federation.ts`.
 
 Each plug-in has three parts (`src/proxy/plugin.ts`): its **Connect method**
 (`connect`: fields, setup link, test request, the plain reasons for the
@@ -169,9 +175,15 @@ values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
 the environment) prints every other value: the AWS identity provider and the
 app role's trust and permission policies, the Google pool and provider, and
 the Entra registration with its two return addresses (the Microsoft
-sign-in's and admin consent's). Google's pool needs no service account and no
-service-account impersonation grant for Vertex AI: each user grants their own
-principal. Nothing is guessed during T10.
+sign-in's and admin consent's). Google's pool needs no service account, no
+service-account impersonation grant and no API key: each user grants their
+own principal. The app's own project needs `sts.googleapis.com` and
+`cloudbilling.googleapis.com` enabled, not `aiplatform.googleapis.com` (each
+user enables Vertex AI in their own project), and one grant: the price
+reader's principal,
+`principal://iam.googleapis.com/projects/<project number>/locations/global/workloadIdentityPools/chief-of-staff/subject/price-reader`,
+gets `roles/serviceusage.serviceUsageConsumer` on that project, so it can
+name the project as its quota project. Nothing is guessed during T10.
 
 The Worker reads the values below. Each variable except `APP_ORIGIN` is set
 as an environment variable of the GitHub environment `production` (Settings →
@@ -194,7 +206,7 @@ keeps.
 | `ENTRA_CERT_KEY` | secret | its certificate's private key, PKCS #8 PEM |
 | `ENTRA_CERT_THUMBPRINT` | variable | the certificate's `x5t#S256` |
 | `FOUNDRY_CREDENTIAL` | variable | `certificate` (default) or `federated` |
-| `GOOGLE_WIF_PROVIDER` | variable | the workload identity pool provider's full name; each user's own principal is derived from it |
+| `GOOGLE_WIF_PROVIDER` | variable | the workload identity pool provider's full name; each user's own principal, the price reader's and the price reader's quota project (the pool's own project) are derived from it |
 
 Until they are set, every page still renders, and a test call says plainly
 which of the app's own values is missing. A variable added to `production`
@@ -210,6 +222,9 @@ billing to the user's project, the time from revoking a grant to refusal,
 and (g): Vertex AI's Claude endpoint answering a per-user federated principal
 granted the role directly; if it does not, each user gets their own service
 account in the app's project, which only that user's principal may act as),
+the Cloud Billing Catalog answering the price reader's federated token with
+the app's project as quota project (design-v3 1.6, item 9; if Google refuses
+it, the owner is told and no API key is made),
 the template version read from a live stack, a live issuer-key rotation, and
 Foundry's key question (T13) all wait on the owner's accounts. Google's exact
 error strings are recorded from live failures then; real vendor error bodies

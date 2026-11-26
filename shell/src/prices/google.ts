@@ -1,13 +1,36 @@
 // Reads Vertex AI's chat-model prices from Google's Cloud Billing Catalog API
-// (services.skus.list on the Vertex AI service), with the maintainers' API key
-// from the Worker secret GOOGLE_BILLING_API_KEY. The key arrives with T10;
-// until then this source reports a failure and the table keeps what it has.
+// (services.skus.list on the Vertex AI service) with no key: a federated
+// access token, about an hour long, for the price reader's own subject in the
+// app's Workload Identity Federation pool (src/google-federation.ts), the
+// same keyless route the Vertex AI calls take. The app's own project, the one
+// holding the pool, is named as the quota project (`x-goog-user-project`),
+// never a user's project; the price reader holds only the role that lets it
+// name that project (README "What the owner sets up"). Until the pool exists
+// (T10) this source reports a failure and the table keeps what it has.
+//
+// Google's pages (read 2026-11-26) do not settle whether the Catalog takes a
+// federated token. Against: the how-to says "Calling the Cloud Billing
+// Catalog API requires an API Key" (docs.cloud.google.com/billing/v1/how-tos/catalog-api).
+// For: services.skus.list "Requires one of the following OAuth scopes"
+// (cloud-platform, cloud-billing, cloud-billing.readonly), and Identity
+// federation's products page lists Cloud Billing as GA, "Google Cloud API: No
+// known limitations" (docs.cloud.google.com/iam/docs/federated-identity-supported-services).
+// On quota: "Requests can fail if you make a request to a client-based API
+// and the quota project cannot be identified", and the page names no quota
+// project for a workload pool's own token, so the header is always sent; it
+// needs "serviceusage.services.use" on the project
+// (docs.cloud.google.com/docs/quotas/set-quota-project,
+// docs.cloud.google.com/apis/docs/system-parameters). Whether this route works
+// is checked live in M2 (design-v3 1.6, item 9). If Google refuses it, the
+// owner is told; there is no fallback to an API key.
 //
 // A Sku's description names the model and the token kind, for example
 // "Claude Sonnet 5.5 Input Tokens" or "Gemini 3.8 Flash Batch Text Output";
 // its pricingExpression gives the price per usage unit, and serviceRegions the
 // regions. The shape follows Google's reference page (see sources.ts).
 
+import { appProjectNumber, priceReaderGoogleToken, type GoogleFederationEnv } from "../google-federation";
+import { errorFromBody, readBody } from "../providers/anthropic";
 import { round } from "./azure";
 import { GOOGLE_CATALOG_BASE, GOOGLE_VERTEX_SERVICE } from "./sources";
 import type { Deployment, PriceRow, SourceRead, TokenKind } from "./types";
@@ -91,19 +114,23 @@ export function rowsFromGoogleSkus(skus: GoogleSku[], dateRead: string): { rows:
   return { rows, unmapped };
 }
 
-export async function readGoogle(fetcher: typeof fetch, apiKey: string | undefined, dateRead: string): Promise<SourceRead> {
+export async function readGoogle(fetcher: typeof fetch, google: GoogleFederationEnv, now: Date, dateRead: string): Promise<SourceRead> {
   try {
-    if (!apiKey) throw new Error("no Cloud Billing API key yet (GOOGLE_BILLING_API_KEY arrives with T10)");
+    const { accessToken } = await priceReaderGoogleToken(google, fetcher, now);
+    const headers = { authorization: `Bearer ${accessToken}`, "x-goog-user-project": appProjectNumber(google.GOOGLE_WIF_PROVIDER)! };
     const skus: GoogleSku[] = [];
     let pageToken = "";
     for (let page = 0; page < 200; page++) {
       const url = new URL(`${GOOGLE_CATALOG_BASE}/services/${GOOGLE_VERTEX_SERVICE}/skus`);
-      url.searchParams.set("key", apiKey);
       url.searchParams.set("currencyCode", "USD");
       url.searchParams.set("pageSize", "5000");
       if (pageToken) url.searchParams.set("pageToken", pageToken);
-      const response = await fetcher(url.toString());
-      if (!response.ok) throw new Error(`Cloud Billing Catalog API answered ${response.status}`);
+      const response = await fetcher(url.toString(), { headers });
+      if (!response.ok) {
+        // Google's own words, so a refusal at M2's check says why.
+        const { name, message } = errorFromBody(response.status, await readBody(response));
+        throw new Error(`Cloud Billing Catalog API answered ${response.status} ${name}${message ? `: ${message}` : ""}`);
+      }
       const body = (await response.json()) as { skus?: GoogleSku[]; nextPageToken?: string };
       skus.push(...(body.skus ?? []));
       pageToken = body.nextPageToken ?? "";
