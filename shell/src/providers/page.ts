@@ -29,6 +29,7 @@ import {
   finishConsent,
   readCheck,
   runCheck,
+  testLocations,
   verdictText,
   type Check,
   type CheckResult,
@@ -159,8 +160,7 @@ function regionLine(panel: ProviderPanel, changing: boolean): string {
       ? `${label}, chosen by you. The test call proves it.`
       : `chosen by the app from what your model supports: ${label}. The test call proves it.`;
   if (!changing) return `<p class="small" style="margin-top:8px"><strong>Region:</strong> ${how} <a href="${providerHref(plugin.provider, "&change=region")}">Change</a></p>`;
-  const options = c
-    .locations(model)
+  const options = testLocations(plugin, model)
     .map((l) => `<option value="${esc(l)}"${l === check.region ? " selected" : ""}>${esc(c.locationLabel(l, model))}</option>`)
     .join("");
   return `<form class="row" method="post" action="${action(plugin.provider, "region")}" style="margin-top:8px">

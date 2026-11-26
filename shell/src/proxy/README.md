@@ -32,9 +32,11 @@ records the connection as revoked, for T49's alert
 
 ## What the proxy does with a call
 
-1. Refuses a model the plug-in cannot call (`not_callable`, with the
-   plug-in's `notCallableReason`): one the user added that the provider's
-   list now drops or refuses. Nothing is sent to the provider.
+1. Refuses a model the plug-in cannot call, or not at its location
+   (`not_callable`, with the plug-in's `notCallableReason`): one the user
+   added that the provider's list now drops, refuses or no longer offers
+   there. Nothing is sent to the provider. The Connect test call on the
+   plug-in's test model alone skips this, at its own IDs (`testModelIds`).
 2. Prices it: the model needs an input and an output list price at its
    location in the current price table (`lookupPrice`, T11), else it is refused
    (`no_price`). Once the reply is in, every kind of token it used is costed

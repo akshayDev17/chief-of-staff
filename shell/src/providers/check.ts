@@ -166,20 +166,36 @@ export function verdictText(result: CheckResult, plugin: ProviderPlugin): string
   }
 }
 
+// The Connect test call's own IDs for `model`: the plug-in's test model's
+// (`testModelIds`), where it has them, whatever the provider's list says.
+const pinnedIds = (plugin: ProviderPlugin, model: string): Readonly<Record<string, string>> | undefined =>
+  model === plugin.connect.testModel ? plugin.connect.testModelIds : undefined;
+
+// Where the Connect test call can run on `model`, the app's default first.
+export const testLocations = (plugin: ProviderPlugin, model: string): string[] => {
+  const pinned = pinnedIds(plugin, model);
+  return pinned ? Object.keys(pinned) : plugin.connect.locations(model);
+};
+
 // The test call's model and location: the first model the user picked at
 // this provider, while the plug-in can still call it, else the plug-in's own
 // test model, at the region the user chose or else the app's default for that
 // model.
-async function testChoice(db: D1Database, userId: string, plugin: ProviderPlugin, check: Check | undefined): Promise<{ model: string; location: string; deployment?: string }> {
+async function testChoice(
+  db: D1Database,
+  userId: string,
+  plugin: ProviderPlugin,
+  check: Check | undefined,
+): Promise<{ model: string; location: string; locations: string[]; deployment?: string; pinnedId?: string }> {
   const picked = await db
     .prepare("SELECT model, location, deployment FROM user_models WHERE user_id = ? AND provider = ? ORDER BY added_at LIMIT 1")
     .bind(userId, plugin.provider)
     .first<{ model: string; location: string; deployment: string | null }>()
     .then((m) => (m && plugin.connect.canCall(m.model) ? m : null));
   const model = picked?.model ?? plugin.connect.testModel;
-  const locations = plugin.connect.locations(model);
+  const locations = testLocations(plugin, model);
   const location = check?.region && locations.includes(check.region) ? check.region : picked && locations.includes(picked.location) ? picked.location : locations[0]!;
-  return { model, location, deployment: picked?.deployment ?? undefined };
+  return { model, location, locations, deployment: picked?.deployment ?? undefined, pinnedId: pinnedIds(plugin, model)?.[location] };
 }
 
 // Makes the test call through the proxy, then records the result.
@@ -188,8 +204,8 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
   const connection = await readConnection(db, userId, provider);
   const before = await readCheck(db, userId, provider);
   if (!plugin || !connection) return before;
-  const { model, location, deployment } = await testChoice(db, userId, plugin, before);
-  const modelId = plugin.connect.modelId(model, location);
+  const { model, location, deployment, pinnedId } = await testChoice(db, userId, plugin, before);
+  const modelId = pinnedId ?? plugin.connect.modelId(model, location) ?? model;
   const base: Check = {
     ...(before ?? { provider, state: "checking" }),
     provider,
@@ -207,7 +223,7 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
     await saveCheck(db, userId, c);
     return c;
   };
-  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, deployment, request: plugin.connect.testRequest(model, location) }, () => now);
+  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, deployment, modelId: pinnedId, request: plugin.connect.testRequest(model, location) }, () => now);
   if (outcome.kind === "refused" && outcome.reason === "budget_spent") return wait("budget_spent", nextMonthStart(now).toISOString());
   if (outcome.kind === "refused" && outcome.reason === "no_price") return wait("no_price", minutesAfter(now, RETRY_MINUTES));
 
@@ -382,8 +398,8 @@ export async function chooseRegion(db: D1Database, plugins: PluginRegistry, user
   const plugin = plugins[provider];
   const check = await readCheck(db, userId, provider);
   if (!plugin || !check || !(await readConnection(db, userId, provider))) return "That provider is not connected.";
-  const { model } = await testChoice(db, userId, plugin, undefined);
-  if (!plugin.connect.locations(model).includes(region)) return `${model} is not offered at that region by ${plugin.connect.guide.name}.`;
+  const { model, locations } = await testChoice(db, userId, plugin, undefined);
+  if (!locations.includes(region)) return `${model} is not offered at that region by ${plugin.connect.guide.name}.`;
   await saveCheck(db, userId, { ...check, region, regionSetBy: "user" });
   await runCheck(db, plugins, userId, provider, now);
   return undefined;

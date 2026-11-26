@@ -55,11 +55,14 @@ const SESSION_NAME = "chief-of-staff";
 // every chat model Bedrock sells at a listed price, of every model family.
 //
 // The app's built-in IDs, from each model card's "Programmatic Access" table
-// (read 2026-11-25 and 2026-11-27; launch dates on the cards), are used only
-// until that list has been read once (the owner's AWS step adds the two List
-// actions to the app's role), and for a model added before it: the four
+// (read 2026-11-25 and 2026-11-27; launch dates on the cards): the four
 // Claude models T16 added and Amazon Nova 2 Lite, the Connect test call's
 // model (below), at Global or the geography profile of the app's region.
+// Once the list names a model, its verdict wins, for these models too; a
+// built-in ID serves only a name the list has no entry for (before the list
+// has been read once, the owner's AWS step adding the two List actions to
+// the app's role, or a name not priced at this region). The Connect test call
+// alone always uses the test model's built-in profile IDs (`testModelIds`).
 export const BEDROCK_MODEL_IDS: Readonly<Record<string, string>> = {
   "Claude Haiku 5.5": "anthropic.claude-haiku-5-5",
   "Claude Sonnet 5.5": "anthropic.claude-sonnet-5-5",
@@ -183,11 +186,7 @@ const CONSOLE_MODEL_ACCESS: Link = { label: "Open Bedrock's model access", href:
 // (readBedrockOffer), absent until the app has read that list once.
 export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, now: () => Date = () => new Date(), offer?: BedrockOffer): ProviderPlugin {
   const region = regionOf(env);
-  // The test model always keeps its built-in IDs and locations, whatever the
-  // list says of it; another built-in model keeps them only where the list
-  // does not name it (before the list is read, or not priced at this region).
-  const offerFor = (model: string): ModelOffer | undefined =>
-    model === TEST_MODEL ? builtInOffer(model, region) : (offer?.byName[model] ?? builtInOffer(model, region));
+  const offerFor = (model: string): ModelOffer | undefined => offer?.byName[model] ?? builtInOffer(model, region);
   const locationOf = (model: string, location: string): BedrockLocation | undefined => {
     const o = offerFor(model);
     return o?.kind === "callable" ? o.locations.find((l) => l.location === location) : undefined;
@@ -198,7 +197,8 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       ? quickCreateLink({ region, templateUrl: env.BEDROCK_TEMPLATE_URL, appRoleArn: env.AWS_APP_ROLE_ARN, externalId })
       : undefined;
 
-  const modelId = (model: string, location: string): string => locationOf(model, location)?.callId ?? model;
+  const modelId = (model: string, location: string): string | undefined => locationOf(model, location)?.callId;
+  const testOffer = builtInOffer(TEST_MODEL, region);
 
   const connect: ConnectMethod = {
     guide: {
@@ -238,6 +238,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     },
     setupLink: (connection) => setupLink(connection.externalId!),
     testModel: TEST_MODEL,
+    testModelIds: Object.fromEntries(testOffer?.kind === "callable" ? testOffer.locations.map((l) => [l.location, l.callId]) : []),
     knownModels: Object.keys(BEDROCK_MODEL_IDS),
     // Converse speaks every model family, but the call needs Bedrock's own ID
     // for the model: one Bedrock's list gives for its price-list name.
@@ -368,8 +369,9 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         now: at,
       });
     },
-    async call({ credential, model, location, request }) {
-      const id = modelId(model, location);
+    async call({ credential, model, location, modelId: pinned, request }) {
+      const id = pinned ?? modelId(model, location);
+      if (!id) throw new Error(`no Bedrock ID for ${model} at ${location}`);
       const callRegion = location === "global" ? region : location;
       const url = `https://bedrock-runtime.${callRegion}.amazonaws.com/model/${encodeURIComponent(id)}/converse`;
       const body = JSON.stringify(request);

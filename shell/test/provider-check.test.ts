@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { addModel } from "../src/models/add";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
 import { bedrockPlugin, TEST_MODEL } from "../src/providers/bedrock";
 import type { BedrockOffer, ModelOffer } from "../src/providers/bedrock-catalog";
@@ -405,20 +406,61 @@ describe("Bedrock's own list and the models it no longer offers", () => {
   const listSaying = (byName: Record<string, ModelOffer>): BedrockOffer => ({ region: "us-east-1", readAt: "2026-11-26T14:44:00.000Z", byName });
   const converseUrls = (sent: Sent[]) => sent.filter((s) => s.url.includes("bedrock-runtime")).map((s) => decodeURIComponent(s.url));
 
-  it("keeps the Connect test call on the test model's built-in profile IDs, whatever the list says of it", async () => {
-    const verdicts: ModelOffer[] = [{ kind: "dropped" }, { kind: "not_offered", reason: "priced by prompt length", pricedAt: ["us-east-1"] }];
+  const verdicts: ModelOffer[] = [{ kind: "dropped" }, { kind: "not_offered", reason: "priced by prompt length", pricedAt: ["us-east-1"] }];
+
+  it("runs the Connect test call at the test model's built-in profile IDs when the list drops or refuses it", async () => {
     for (const verdict of verdicts) {
       const { world, plugins, sent } = awsWorld(listSaying({ [TEST_MODEL]: verdict }));
       world.stack = true;
       await connectBedrock(plugins);
       expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "global", result: { model: TEST_MODEL, modelId: "global.amazon.nova-2-lite-v1:0" } });
-      expect(converseUrls(sent)).toEqual(["https://bedrock-runtime.us-east-1.amazonaws.com/model/global.amazon.nova-2-lite-v1:0/converse"]);
-      const c = plugins.bedrock.connect;
-      expect(c.locations(TEST_MODEL)).toEqual(["global", "us-east-1"]);
-      expect(c.modelId(TEST_MODEL, "us-east-1")).toBe("us.amazon.nova-2-lite-v1:0");
-      expect(c.canCall(TEST_MODEL)).toBe(true);
+      expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "us-east-1", at(1))).toBeUndefined();
+      expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "us-east-1", result: { modelId: "us.amazon.nova-2-lite-v1:0" } });
+      expect(converseUrls(sent)).toEqual([
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/global.amazon.nova-2-lite-v1:0/converse",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1:0/converse",
+      ]);
       await disconnectProvider(env.DB, userId, "bedrock");
     }
+  });
+
+  it("refuses the test model on Add a model and in a task call when the list drops or refuses it, with its reason", async () => {
+    const reasons = ["Bedrock's own model list marks it legacy, or no longer as a chat model", "priced by prompt length"];
+    for (const [i, verdict] of verdicts.entries()) {
+      const { world, plugins, sent } = awsWorld(listSaying({ [TEST_MODEL]: verdict }));
+      world.stack = true;
+      await connectBedrock(plugins);
+      await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+      const before = converseUrls(sent).length;
+      const added = await addModel(env.DB, plugins, { userId, provider: "bedrock", model: TEST_MODEL, now: T0 });
+      expect(added).toMatchObject({ kind: "refused", reason: verdict.kind === "dropped" ? "not_offered" : "cannot_call" });
+      expect(plugins.bedrock.connect.notCallableReason(TEST_MODEL)).toBe(reasons[i]);
+      const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: TEST_MODEL, location: "global", request: {} } }, () => T0);
+      expect(outcome).toMatchObject({ kind: "refused", reason: "not_callable", detail: `${TEST_MODEL} is not offered at Amazon Bedrock yet: ${reasons[i]}` });
+      expect(converseUrls(sent)).toHaveLength(before);
+      await disconnectProvider(env.DB, userId, "bedrock");
+    }
+  });
+
+  it("refuses a model still offered, but no longer at its stored location, sending nothing to Bedrock", async () => {
+    const inRegionOnly: ModelOffer = { kind: "callable", modelId: "anthropic.claude-haiku-5-5", locations: [{ location: "us-east-1", callId: "us.anthropic.claude-haiku-5-5", kind: "us" }] };
+    const { world, plugins, sent } = awsWorld(listSaying({ "Claude Haiku 5.5": inRegionOnly }));
+    world.stack = true;
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "Claude Haiku 5.5", "input", 1), price("bedrock", "Claude Haiku 5.5", "output", 5),
+      ],
+    });
+    await connectBedrock(plugins);
+    await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
+    const before = converseUrls(sent).length;
+    const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => T0);
+    expect(outcome).toMatchObject({ kind: "refused", reason: "not_callable", detail: "Amazon Bedrock does not offer Claude Haiku 5.5 at global any more" });
+    expect(converseUrls(sent)).toHaveLength(before);
   });
 
   it("refuses an added built-in model the list marks dropped with its reason, sending nothing to Bedrock", async () => {

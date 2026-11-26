@@ -6,9 +6,9 @@
 //
 // Before sending a call to a provider the core refuses it when:
 // - no plug-in serves the provider (`no_plugin`);
-// - the plug-in cannot call the model (`not_callable`, with the plug-in's
-//   reason): a model the user added that the provider's list now drops or
-//   refuses;
+// - the plug-in cannot call the model, or not at its location
+//   (`not_callable`, with the plug-in's reason): a model the user added that
+//   the provider's list now drops, refuses or no longer offers there;
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
 // - the user has set no monthly budget for the provider (`no_budget`), except
@@ -58,6 +58,10 @@ export interface ModelChoice {
   // Foundry only: the user's deployment name for the model (Add a model,
   // T17); the plug-in's own default, the model ID, when absent.
   deployment?: string;
+  // The Connect test call only: the plug-in's own ID for its test model at
+  // `location` (connect.testModelIds), called whatever the provider's list
+  // says of the model.
+  modelId?: string;
   // The request in this provider's own format.
   request: ModelRequest;
 }
@@ -167,7 +171,10 @@ async function attempt(
 
   const plugin = plugins[provider];
   if (!plugin) return refuse("no_plugin", `${PROVIDER_NAMES[provider]} is not available yet`);
-  if (!plugin.connect.canCall(model)) return refuse("not_callable", `${model} is not offered at ${PROVIDER_NAMES[provider]} yet: ${plugin.connect.notCallableReason(model)}`);
+  if (!choice.modelId) {
+    if (!plugin.connect.canCall(model)) return refuse("not_callable", `${model} is not offered at ${PROVIDER_NAMES[provider]} yet: ${plugin.connect.notCallableReason(model)}`);
+    if (!plugin.connect.locations(model).includes(location)) return refuse("not_callable", `${PROVIDER_NAMES[provider]} does not offer ${model} at ${location} any more`);
+  }
 
   const prices = await listPrices(db, choice, false);
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);
@@ -208,7 +215,7 @@ async function attempt(
   let failure: Failure | undefined;
   let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
   try {
-    const reply = await plugin.call({ credential, connection, model, location, deployment: choice.deployment, request: choice.request });
+    const reply = await plugin.call({ credential, connection, model, location, deployment: choice.deployment, modelId: choice.modelId, request: choice.request });
     status = reply.status;
     body = reply.body;
     if (reply.usage) usage = reply.usage;

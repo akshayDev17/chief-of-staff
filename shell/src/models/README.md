@@ -70,9 +70,13 @@ else in the app's region, at its own ID where it runs on demand or at the
 geography profile Bedrock names. Gemma 3, Nemotron and DeepSeek R1 are
 marked "no tool use" (the owner's live check, 2026-11-26). A model priced by
 prompt length whose threshold the app does not know is not offered, rather
-than costed too low. Until the list has been read once, Bedrock offers only
-its built-in models (`BEDROCK_MODEL_IDS`: four Claude models and Nova 2.0
-Lite, the Connect test call's model) and says why for the rest.
+than costed too low. Once the list names a model, its verdict wins for every
+model. The built-in IDs (`BEDROCK_MODEL_IDS`: four Claude models and Nova 2.0
+Lite, the Connect test call's model) serve only names the list has no entry
+for: before the list has been read once, when Bedrock offers only those and
+says why for the rest, or a name not priced at this region. The Connect test
+call alone always uses the test model's built-in profile IDs, whatever the
+list says of it.
 
 **Known shortfall.** The `canCall` refusal above is still narrower than this
 screen's rule on two providers: Vertex AI calls no publisher but Anthropic

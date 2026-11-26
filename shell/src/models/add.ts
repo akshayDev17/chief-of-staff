@@ -251,7 +251,8 @@ export async function addModel(
   const offer = offers.find((r) => r.model === model);
   if (!offer) return refuse("not_offered");
   if (!offer.price) return refuse("no_price", { location: offer.location });
-  if (!offer.callable) return refuse("cannot_call", { location: offer.location });
+  const modelId = plugin.connect.modelId(model, offer.location);
+  if (!offer.callable || !modelId) return refuse("cannot_call", { location: offer.location });
 
   let deployment: string | undefined;
   if (plugin.connect.deploymentName) {
@@ -259,7 +260,6 @@ export async function addModel(
     if (!DEPLOYMENT.test(deployment)) return refuse("bad_deployment", { location: offer.location });
   }
   const { location } = offer;
-  const modelId = plugin.connect.modelId(model, location);
   const outcome = await sendTestCall(
     db,
     plugins,
@@ -271,7 +271,7 @@ export async function addModel(
 
   if (outcome.kind === "answered") {
     const repliedModel = plugin.connect.replyModel(outcome.body);
-    const otherIds = offers.filter((r) => r.model !== model).map((r) => plugin.connect.modelId(r.model, r.location));
+    const otherIds = offers.filter((r) => r.model !== model).flatMap((r) => plugin.connect.modelId(r.model, r.location) ?? []);
     if (repliedModel && !namesPickedModel(repliedModel, modelId, deployment, otherIds)) {
       return refuse("wrong_model", { ...at, reply: { status: outcome.status, repliedModel } });
     }
