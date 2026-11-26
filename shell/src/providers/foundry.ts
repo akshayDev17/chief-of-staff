@@ -201,8 +201,8 @@ export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim
 // only where the page names exactly one ID plainly for the same model. A
 // model the table prices but this map leaves out is not offered yet: a
 // known shortfall against Add a model's list of every chat model Foundry
-// sells at a listed price (T17, design-v3 1.5), not a rule, closed by the
-// T17 fix once each ID is confirmed. Left out today: a
+// sells at a listed price (T17, design-v3 1.5), not a rule, closed by a
+// follow-up fix once each ID is confirmed. Left out today: a
 // Fireworks or Baseten row, a retired or dated version, and a meter whose
 // catalog ID would be a guess ("DeepSeek V3.2 SP", "Mistral MM3.5",
 // "Mistral Codestral", "Grok 4.1", "Grok 4.2", "Grok4 Fast",
