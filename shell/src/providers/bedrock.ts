@@ -160,10 +160,9 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one invoke-only role, chief-of-staff-model-caller.',
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
-        "Go back to the COS tab and finish the Connect step so the test call runs.",
         "Nothing to switch on in the Bedrock console. The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Each other model you pick accepts its AWS Marketplace terms on its first call, which can take up to 15 minutes. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
-        "The app checks the connection and runs the test call by itself.",
+        "Go back to the Chief of staff tab and finish the Connect step so the test call runs.",
       ],
       checkedOn: "2026-11-27",
       pages: [
