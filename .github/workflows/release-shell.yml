@@ -18,6 +18,11 @@ name: Release shell
 # puts there; variables ACCESS_AUD and ACCESS_TEAM_DOMAIN, which the tool
 # also writes there (ACCESS_TEAM_DOMAIN as the bare host
 # `<team>.cloudflareaccess.com`; the Worker also accepts it with https://).
+# The owner adds the provider plug-ins' variables there too
+# (shell/src/providers/README.md, "What the owner sets up"); each one set is
+# deployed as a Worker variable, each one unset is left out and never blocks
+# the release. A deploy replaces the Worker's variables, so a value set only
+# in the Cloudflare dashboard does not survive the next release.
 
 on:
   push:
@@ -109,9 +114,15 @@ jobs:
           TAG: ${{ steps.gate.outputs.tag }}
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ vars.ACCESS_AUD }}
-        run: |
-          npx wrangler deploy --tag "$TAG" --message "$TAG from ${GITHUB_SHA}" \
-            --var "ACCESS_TEAM_DOMAIN:${ACCESS_TEAM_DOMAIN}" --var "ACCESS_AUD:${ACCESS_AUD}"
+          # The provider plug-ins' variables; each one unset here is left out.
+          AWS_APP_ROLE_ARN: ${{ vars.AWS_APP_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          BEDROCK_TEMPLATE_URL: ${{ vars.BEDROCK_TEMPLATE_URL }}
+          ENTRA_CLIENT_ID: ${{ vars.ENTRA_CLIENT_ID }}
+          ENTRA_CERT_THUMBPRINT: ${{ vars.ENTRA_CERT_THUMBPRINT }}
+          FOUNDRY_CREDENTIAL: ${{ vars.FOUNDRY_CREDENTIAL }}
+          GOOGLE_WIF_PROVIDER: ${{ vars.GOOGLE_WIF_PROVIDER }}
+        run: scripts/release-deploy.sh
 
       - name: Record the release
         if: steps.gate.outputs.go == 'true'

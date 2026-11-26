@@ -31,6 +31,7 @@ as they are, and the app must not need a permission an older role lacks.
 push to `main` that changes this directory, to
 `s3://<bucket>/chief-of-staff-bedrock-role/v<version>.json` and never
 overwrites a published version. The Worker variable `BEDROCK_TEMPLATE_URL`
+(set in the GitHub environment `production`; `shell/src/providers/README.md`)
 names the version the link opens. **Rollback**: point `BEDROCK_TEMPLATE_URL`
 back at the previous version's address. The workflow stops with a plain
 message until T10's AWS values exist (`BEDROCK_TEMPLATE_BUCKET` and

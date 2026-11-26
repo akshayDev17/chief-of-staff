@@ -6,7 +6,7 @@
 NPM := npx --yes npm@11.21.3
 INSTALLED := node_modules/.package-lock.json
 
-.PHONY: test check migrations rollback-check roll-back-prices provider-setup-check
+.PHONY: test check migrations rollback-check roll-back-prices provider-setup-check release-deploy-check
 
 $(INSTALLED): package.json package-lock.json
 	$(NPM) ci
@@ -15,7 +15,7 @@ $(INSTALLED): package.json package-lock.json
 check: $(INSTALLED)
 	$(NPM) run typecheck
 
-test: $(INSTALLED) migrations rollback-check provider-setup-check
+test: $(INSTALLED) migrations rollback-check provider-setup-check release-deploy-check
 	$(NPM) test
 
 # Apply every migration, in order, to a fresh local D1 database holding only
@@ -39,6 +39,12 @@ rollback-check: $(INSTALLED)
 # (scripts/check-provider-setup.mjs). Touches no account.
 provider-setup-check:
 	node scripts/check-provider-setup.mjs
+
+# Run the release's deploy step with a stand-in for npx and check which
+# variables it passes to `wrangler deploy` (scripts/check-release-deploy.mjs).
+# Touches no account.
+release-deploy-check:
+	node scripts/check-release-deploy.mjs
 
 # A maintainer's rollback of the deployed price table to the snapshot before
 # the newest one (prices/README.md). Needs CLOUDFLARE_API_TOKEN (T10).
