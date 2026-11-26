@@ -41,6 +41,8 @@ jobs:
     env:
       BUCKET: ${{ vars.BEDROCK_TEMPLATE_BUCKET }}
       PUBLISH_ROLE_ARN: ${{ vars.BEDROCK_PUBLISH_ROLE_ARN }}
+      AWS_REGION: us-east-1 # the template bucket's region
+      AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

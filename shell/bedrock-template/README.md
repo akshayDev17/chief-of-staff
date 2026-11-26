@@ -35,4 +35,11 @@ overwrites a published version. The Worker variable `BEDROCK_TEMPLATE_URL`
 names the version the link opens. **Rollback**: point `BEDROCK_TEMPLATE_URL`
 back at the previous version's address. The workflow stops with a plain
 message until T10's AWS values exist (`BEDROCK_TEMPLATE_BUCKET` and
-`BEDROCK_PUBLISH_ROLE_ARN`).
+`BEDROCK_PUBLISH_ROLE_ARN`). The bucket is in `us-east-1`, the region the
+workflow uses. The publish role trusts only this repository's `main`
+branch, with audience `sts.amazonaws.com` and the subject in the immutable
+form GitHub issues for this repository,
+`repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/main`; the
+sub_claim_prefix printed by
+`gh api repos/<owner>/<repo>/actions/oidc/customization/sub` gives the two
+IDs, and `provider-setup.mjs values` prints the whole policy.

@@ -16,7 +16,10 @@
 //   node scripts/provider-setup.mjs values
 //     Prints every value the T10 checklist needs, from APP_ORIGIN,
 //     AWS_ACCOUNT_ID, GOOGLE_PROJECT_ID, GOOGLE_PROJECT_NUMBER,
-//     GITHUB_REPOSITORY and BEDROCK_TEMPLATE_BUCKET in the environment.
+//     GITHUB_REPOSITORY, GITHUB_OWNER_ID, GITHUB_REPOSITORY_ID and
+//     BEDROCK_TEMPLATE_BUCKET in the environment. The two GitHub IDs are the
+//     numbers in the sub_claim_prefix that
+//     `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` prints.
 
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, X509Certificate } from "node:crypto";

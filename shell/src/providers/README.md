@@ -176,8 +176,9 @@ proves it.
 Entra certificate outside the repository and prints only what to upload and
 the Wrangler commands for the private halves. `node scripts/provider-setup.mjs
 values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
-`GOOGLE_PROJECT_NUMBER`, `GITHUB_REPOSITORY` and `BEDROCK_TEMPLATE_BUCKET` in
-the environment) prints every other value: the AWS identity provider and the
+`GOOGLE_PROJECT_NUMBER`, `GITHUB_REPOSITORY`, `GITHUB_OWNER_ID`,
+`GITHUB_REPOSITORY_ID` and `BEDROCK_TEMPLATE_BUCKET` in the environment)
+prints every other value: the AWS identity provider and the
 app role's trust and permission policies, the Google pool and provider, and
 the Entra registration with its two return addresses (the Microsoft
 sign-in's and admin consent's). Google's pool needs no service account, no

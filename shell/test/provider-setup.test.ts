@@ -12,7 +12,9 @@ const inputs = {
   AWS_ACCOUNT_ID: "111122223333",
   GOOGLE_PROJECT_ID: "cos-owner-project",
   GOOGLE_PROJECT_NUMBER: "123456789",
-  GITHUB_REPOSITORY: "example/chief-of-staff",
+  GITHUB_REPOSITORY: "akshayDev17/chief-of-staff",
+  GITHUB_OWNER_ID: "32875270",
+  GITHUB_REPOSITORY_ID: "1466229199",
   BEDROCK_TEMPLATE_BUCKET: "cos-templates",
 };
 
@@ -37,7 +39,7 @@ describe("the owner's setup values", () => {
     expect(v.aws.workerVariables.AWS_APP_ROLE_ARN).toBe("arn:aws:iam::111122223333:role/chief-of-staff-app");
     // The template bucket is public for the templates only.
     expect(v.aws.templateBucketPolicy.Statement[0].Resource).toBe("arn:aws:s3:::cos-templates/chief-of-staff-bedrock-role/*");
-    expect(v.aws.publishRoleTrustPolicy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]).toBe("repo:example/chief-of-staff:ref:refs/heads/main");
+    expect(v.aws.publishRoleTrustPolicy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]).toBe("repo:akshayDev17@32875270/chief-of-staff@1466229199:ref:refs/heads/main");
   });
 
   it("give Google's provider the issuer and the audience the Worker sends, map each user's own app ID, and make no service account", () => {
