@@ -198,6 +198,28 @@ describe("Bedrock's plain reasons", () => {
     expect(plain.links[0]!.label).toBe("Connect Amazon Bedrock");
     expect(new URL(plain.links[0]!.href).hash).toContain(`param_ExternalId=${connection.externalId}`);
   });
+
+  it("tells an account with no Marketplace agreement to accept the model's terms in the Bedrock console, not to touch the stack", () => {
+    // The live 403 of 2026-11-27.
+    const plain = classify({
+      status: 403,
+      errorName: "AccessDeniedException",
+      message: "anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock. For additional access options, contact AWS Sales",
+    });
+    expect(plain.reason).toBe("not_allowed_yet");
+    expect(plain.fix).toBe("This model is sold through AWS Marketplace: the AWS account's owner accepts its terms once in the Bedrock console, then try again.");
+    expect(plain.fix).not.toMatch(/stack/i);
+    expect(plain.links).toEqual([{ label: "Open Bedrock's model access", href: "https://console.aws.amazon.com/bedrock/home#/modelaccess" }]);
+  });
+});
+
+describe("the Bedrock Connect test call", () => {
+  it("runs on Amazon Nova 2 Lite, a model AWS sells itself, at its Global profile", () => {
+    const { connect } = bedrockPlugin(envWith());
+    expect(connect.testModel).toBe("Nova 2.0 Lite");
+    expect(connect.canCall("Nova 2.0 Lite")).toBe(true);
+    expect(connect.modelId("Nova 2.0 Lite", connect.locations("Nova 2.0 Lite")[0]!)).toBe("global.amazon.nova-2-lite-v1:0");
+  });
 });
 
 describe("the template version in the user's own stack", () => {
