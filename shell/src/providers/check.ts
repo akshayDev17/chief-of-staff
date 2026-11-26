@@ -24,7 +24,7 @@ import type { Provider } from "../prices/types";
 import { AppNotConfigured } from "../issuer";
 import { connectedAt, deleteConnection, readConnection, writeConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
-import { ConnectProblem, type ConnectStart, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
+import { ConnectProblem, type ConnectionFields, type ConnectStart, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
 import { PROVIDER_NAMES, sendTestCall } from "../proxy/proxy";
 
 export const RETRY_MINUTES = 15;
@@ -232,7 +232,7 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
     result = { ...head, verdict: "passed", reply: { status: outcome.status, text: plugin.connect.replyText(outcome.body) }, usage: outcome.usage, costUsd: outcome.costUsd };
   } else if (outcome.failure) {
     const { failure } = outcome;
-    const plain = plugin.connect.classify(failure, connection);
+    const plain = plugin.connect.classify(failure, connection, before?.templateVersion);
     result = {
       ...head,
       verdict: plain.reason === "switching_on" ? "switching_on" : "failed",
@@ -252,19 +252,33 @@ export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: 
     return before;
   }
   const recorded = await record(db, userId, plugin, base, before, result, now);
-  if (result.verdict === "passed" && plugin.connect.readSetupVersion) {
-    // Bedrock: the template version in the user's own stack, read with a
-    // credential of its own; best effort.
-    const version = await plugin
-      .mintCredential(connection, { userId })
-      .then((credential) => plugin.connect.readSetupVersion?.(credential, connection))
-      .catch(() => undefined);
-    if (version && version !== recorded.templateVersion) {
-      recorded.templateVersion = version;
-      await saveCheck(db, userId, recorded);
-    }
-  }
+  if (result.verdict === "passed") await refreshSetupVersion(db, plugin, userId, connection, recorded);
   return recorded;
+}
+
+// Bedrock: the template version in the user's own stack, read now with a
+// credential of its own and kept on the check; best effort, so the version
+// last read where this read fails.
+export async function refreshSetupVersion(
+  db: D1Database,
+  plugin: ProviderPlugin,
+  userId: string,
+  connection: ConnectionFields,
+  check: Check | undefined,
+): Promise<string | undefined> {
+  if (!plugin.connect.readSetupVersion || !check) return check?.templateVersion;
+  const version = await plugin
+    .mintCredential(connection, { userId })
+    .then((credential) => plugin.connect.readSetupVersion?.(credential, connection))
+    .catch(() => undefined);
+  if (version && version !== check.templateVersion) {
+    check.templateVersion = version;
+    await db
+      .prepare("UPDATE provider_checks SET template_version = ? WHERE user_id = ? AND provider = ?")
+      .bind(version, userId, check.provider)
+      .run();
+  }
+  return version ?? check.templateVersion;
 }
 
 // The state a result leaves the check in, and when it is tried again.

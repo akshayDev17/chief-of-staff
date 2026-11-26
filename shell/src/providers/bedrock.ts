@@ -2,8 +2,9 @@
 //
 // Connect: the user types their 12-digit AWS account ID and taps Connect
 // Amazon Bedrock; a CloudFormation quick-create link opens the stack
-// `bedrock-template/template.json` makes: one invoke-only role,
-// `chief-of-staff-model-caller`, that trusts the app's own role in the
+// `bedrock-template/template.json` makes: one role,
+// `chief-of-staff-model-caller`, that can call models and, from template
+// 1.1.0, accept Bedrock models' Marketplace terms on first use, and trusts the app's own role in the
 // owner's account only with the user's external ID. The record holds that
 // role's ARN and the external ID, neither secret ("AWS does not treat the
 // external ID as a secret", data/cos-provider-connect/report.md).
@@ -74,14 +75,27 @@ export const BEDROCK_MODEL_IDS: Readonly<Record<string, string>> = {
 };
 
 // The Connect test call's model: one AWS sells itself, not through AWS
-// Marketplace, so it answers with no Marketplace agreement and through the
-// invoke-only role that cannot accept one (Bedrock's model-access page lists Amazon
+// Marketplace, so it answers with no Marketplace agreement and through a
+// 1.0.0 role that cannot accept one (Bedrock's model-access page lists Amazon
 // among the providers whose models "aren't sold through AWS Marketplace";
 // read 2026-11-27). Nova 2 Lite over Nova Micro: it has a Global profile, as
 // the app's locations expect, and US, EU and JP profiles; Nova Micro has no
 // Global profile, only US and EU, and its card says "EOL no sooner than: Dec
 // 05, 2025" (Nova 2 Lite's: Dec 02, 2026).
 export const TEST_MODEL = "Nova 2.0 Lite";
+
+// The first template whose role can accept a Bedrock model's AWS Marketplace
+// terms on its first call (bedrock-template/README.md).
+export const MARKETPLACE_TERMS_SINCE = "1.1.0";
+
+// Whether a stack's template version is older than `than`; a version never
+// read counts as older.
+export function olderTemplate(version: string | undefined, than: string): boolean {
+  if (!version || !/^\d+\.\d+\.\d+$/.test(version)) return true;
+  const [a, b] = [version, than].map((v) => v.split(".").map(Number));
+  const i = a!.findIndex((n, k) => n !== b![k]);
+  return i !== -1 && a![i]! < b![i]!;
+}
 
 // The geography prefix of a cross-Region inference profile, from the region
 // the app calls from.
@@ -210,12 +224,13 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       steps: [
         "An AWS account with a payment method for Marketplace purchases.",
         "Type your 12-digit AWS account ID (not secret) and tap <strong>Connect Amazon Bedrock</strong>: AWS opens a ready-filled stack.",
-        'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one invoke-only role, chief-of-staff-model-caller.',
+        'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one role, chief-of-staff-model-caller, which can call models and accept Bedrock models\' Marketplace terms on first use.',
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
-        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude, OpenAI GPT (not gpt-oss) and Writer Palmyra X models are sold through AWS Marketplace: accept each one's terms once in the Bedrock console (Model access). Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on its first call, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "Go back to the Chief of staff tab and finish the Connect step so the test call runs.",
+        `Connected before, and Providers shows “Stack template version 1.0.0”? Update the stack once so its role can accept those terms: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose <strong>Update</strong>, then <strong>Replace existing template</strong>${env.BEDROCK_TEMPLATE_URL ? ` with this Amazon S3 URL: ${env.BEDROCK_TEMPLATE_URL}` : ""}. Keep the parameters, tick the same acknowledgement and submit.`,
       ],
       checkedOn: "2026-11-27",
       pages: [
@@ -283,7 +298,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       const text = Array.isArray(content) ? content.map((c) => c?.text ?? "").join("").trim() : "";
       return text || undefined;
     },
-    classify(f: Failure, connection: ConnectionFields | undefined) {
+    classify(f: Failure, connection: ConnectionFields | undefined, setupVersion?: string) {
       const said = `${f.errorName} ${f.message}`;
       const stack: Link[] = connection?.externalId && setupLink(connection.externalId) ? [{ label: "Connect Amazon Bedrock", href: setupLink(connection.externalId)! }] : [];
       if (f.step === "credential") {
@@ -307,11 +322,21 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       if (f.status === 404 || /ResourceNotFound/i.test(f.errorName)) {
         return { reason: "no_such_model", fix: "Change the region, or pick a model this account offers.", links: [] };
       }
-      // No Marketplace agreement, and the invoke-only role cannot make one
-      // (live, 2026-11-27: "anthropic.claude-haiku-5-5 is not available for
-      // this account. You can explore other available models on Amazon
-      // Bedrock. For additional access options, contact AWS Sales").
+      // No Marketplace agreement (live, 2026-11-27: "anthropic.claude-haiku-5-5
+      // is not available for this account. You can explore other available
+      // models on Amazon Bedrock. For additional access options, contact AWS
+      // Sales"). A stack older than 1.1.0 has a role that cannot make one: it
+      // is updated to the new template, never created again. A newer role
+      // can, for the products its template lists, so the terms are accepted
+      // once in the Bedrock console instead.
       if (/is not available for this account/i.test(f.message)) {
+        if (olderTemplate(setupVersion, MARKETPLACE_TERMS_SINCE)) {
+          return {
+            reason: "no_permission",
+            fix: `Update the “${STACK_NAME}” stack to the new template, so its role can accept this model's AWS Marketplace terms on its first call: in AWS CloudFormation, select the stack, choose Update, then Replace existing template${env.BEDROCK_TEMPLATE_URL ? ` with this Amazon S3 URL: ${env.BEDROCK_TEMPLATE_URL}` : ""}. Keep the parameters, tick the same acknowledgement and submit, then try again.`,
+            links: [{ label: "Open AWS CloudFormation", href: `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks` }],
+          };
+        }
         return { reason: "not_allowed_yet", fix: "This model is sold through AWS Marketplace: the AWS account's owner accepts its terms once in the Bedrock console, then try again.", links: [CONSOLE_MODEL_ACCESS] };
       }
       if (/AccessDenied/i.test(f.errorName) && /access to the model|model access|not authorized to access|subscri/i.test(f.message)) {

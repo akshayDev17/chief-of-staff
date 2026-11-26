@@ -11,7 +11,7 @@
 // ListFoundationModels and ListInferenceProfiles, for the region the app
 // calls from, once a day beside the price table (src/prices/refresh.ts). The
 // owner's catalog stands in for every user's: whether a model answers for a
-// given user is proven by that user's test call. The users' own invoke-only
+// given user is proven by that user's test call. The users' own model-caller
 // role (bedrock-template/) cannot list, and needs nothing new.
 //   GET /foundation-models      "Lists Amazon Bedrock foundation models that you can use"
 //   GET /inference-profiles     "Returns a list of inference profiles that you can use"

@@ -214,6 +214,7 @@ form.pick label { color: var(--muted); }
 .tc-bad { border-color: var(--danger); background: var(--danger-soft); }
 .tc p { margin: 0 0 4px; }
 .tc-reply { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.tc-fix { overflow-wrap: anywhere; }
 .tc .row { margin-top: 6px; }
 `;
 

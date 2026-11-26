@@ -16,6 +16,41 @@ account:
   ConverseStream) on foundation models and inference profiles, and
   `cloudformation:DescribeStacks` on its own stack only, so the app can read
   which template version the user's stack was made with.
+- **Marketplace terms** (since 1.1.0). A Bedrock model sold through AWS
+  Marketplace (Claude and OpenAI GPT, not gpt-oss) answers an account only
+  once its terms are accepted. Bedrock's model-access page: "When you first
+  invoke an Amazon Bedrock serverless model served from AWS Marketplace in
+  an account, Bedrock attempts to automatically enable the model for your
+  account. For this auto-enablement to work, AWS Marketplace permissions are
+  required", namely `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe`
+  and `aws-marketplace:ViewSubscriptions`. A 1.0.0 role's first call to such
+  a model is refused with "... is not available for this account".
+  - `Subscribe` and `Unsubscribe` are allowed only with a
+    `ForAnyValue:StringEquals` condition on `aws-marketplace:ProductId`
+    listing the product IDs in `Metadata.MarketplaceProductIds`, one per
+    Bedrock model the app offers that is sold through AWS Marketplace, so the
+    role cannot subscribe the account to any other Marketplace product, paid
+    or not. Each ID is the "Marketplace product ID" on the model's card
+    (models at a glance,
+    https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html,
+    read 2026-11-27).
+  - `ViewSubscriptions` is allowed on `*` with no condition: it only lists
+    the account's subscriptions, and no page says it takes a product
+    condition.
+  - What is not yet proven: Bedrock's model-access page says "For the
+    `aws-marketplace:Subscribe` action only, you can use the
+    `aws-marketplace:ProductId` condition key to restrict subscription to
+    specific models", but the service authorization reference
+    (https://docs.aws.amazon.com/service-authorization/latest/reference/list_awsmarketplace.html)
+    lists no condition key for `Subscribe`, `Unsubscribe` or
+    `ViewSubscriptions`, and no page says the condition holds for Bedrock's
+    automatic first-call subscription. A key absent from a request makes the
+    condition false, so at worst the role is refused the subscription, as a
+    1.0.0 role is, and never allowed more. The first live GPT-5.5 call
+    through a 1.1.0 role settles it. Pages read 2026-11-27.
+  - Models AWS sells itself (Amazon Nova, and the other providers
+    `notMarketplace` in `src/providers/bedrock-models.json` names) need none
+    of this, so a 1.0.0 role still connects and runs the Connect test call.
 - **Sessions** of one hour at most (role chaining caps them there anyway).
 
 Deleting the stack deletes the role: that is how a user revokes the app.
@@ -26,6 +61,22 @@ Users' stacks keep the version they were made with, and are never updated by
 the app. So every new version must keep working with older stacks: the role
 name, the two parameters and the `RoleArn` and `TemplateVersion` outputs stay
 as they are, and the app must not need a permission an older role lacks.
+A user whose older stack lacks a later permission is told to update the
+stack to the new template (in AWS CloudFormation: Update, then Replace
+existing template), never to create it again: the app reads the version
+from the stack (`TemplateVersion` output), and a model refused for want of
+Marketplace terms on a stack older than 1.1.0 (`MARKETPLACE_TERMS_SINCE` in
+`src/providers/bedrock.ts`) shows that update.
+
+**A new Marketplace-sold model needs a new version.** The product list is
+fixed in each published version, so a model sold through AWS Marketplace
+that Bedrock starts offering is refused its first call until its product ID
+is added to `Metadata.MarketplaceProductIds` and to the condition, and
+`TemplateVersion` is raised (the release workflow refuses to publish changed
+content under a published version). `test/bedrock-catalog.test.ts` fails
+when a model the app offers from the saved model list is sold through AWS
+Marketplace and its product ID is not in the template. Users then update
+their stacks to the new version, the same way.
 
 `.github/workflows/release-bedrock-template.yml` publishes each version, on a
 push to `main` that changes this directory, to

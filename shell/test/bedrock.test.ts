@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import template from "../bedrock-template/template.json";
-import { AWS_AUDIENCE, AWS_SUBJECT, bedrockPlugin, BEDROCK_MODEL_IDS, quickCreateLink, ROLE_NAME, STACK_NAME, usageFromConverse } from "../src/providers/bedrock";
+import { AWS_AUDIENCE, AWS_SUBJECT, bedrockPlugin, BEDROCK_MODEL_IDS, MARKETPLACE_TERMS_SINCE, olderTemplate, quickCreateLink, ROLE_NAME, STACK_NAME, usageFromConverse } from "../src/providers/bedrock";
 import { ProviderRefusal, type Failure } from "../src/proxy/plugin";
 import { APP_ORIGIN, decodeJwt, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
 
@@ -41,7 +41,7 @@ function aws(converse: (s: Sent) => Response = converseOk, sts: { web?: Response
 const connection = { roleArn: USER_ROLE, externalId: "0123456789abcdef0123456789abcdef" };
 
 describe("Connect Amazon Bedrock", () => {
-  it("makes the record from the account ID: the invoke-only role's ARN and a fresh external ID, and opens the stack", () => {
+  it("makes the record from the account ID: the model-caller role's ARN and a fresh external ID, and opens the stack", () => {
     const plugin = bedrockPlugin(envWith());
     const start = plugin.connect.start({ accountId: "123456789012" }, { userId: "u", appOrigin: APP_ORIGIN, consentState: "s" });
     expect(start.kind).toBe("connection");
@@ -94,11 +94,51 @@ describe("the Bedrock role template", () => {
     ]);
   });
 
-  it("allows model invocation and reading its own stack, nothing else", () => {
-    const statements = role.Policies.flatMap((p) => p.PolicyDocument.Statement);
-    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual(["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "cloudformation:DescribeStacks"]);
-    expect(statements.find((s) => s.Action === "cloudformation:DescribeStacks")!.Resource).toEqual({ Ref: "AWS::StackId" });
-    expect(statements.every((s) => s.Effect === "Allow")).toBe(true);
+  type Statement = { Sid?: string; Effect: string; Action: string | string[]; Resource: unknown; Condition?: Record<string, Record<string, string[]>> };
+  const statements = (): Statement[] => role.Policies.flatMap((p) => p.PolicyDocument.Statement as Statement[]);
+
+  it("allows model invocation, accepting Bedrock models' Marketplace terms and reading its own stack, nothing else", () => {
+    expect(statements().flatMap((s) => [s.Action].flat()).sort()).toEqual([
+      "aws-marketplace:Subscribe", "aws-marketplace:Unsubscribe", "aws-marketplace:ViewSubscriptions",
+      "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "cloudformation:DescribeStacks",
+    ]);
+    expect(statements().find((s) => s.Action === "cloudformation:DescribeStacks")!.Resource).toEqual({ Ref: "AWS::StackId" });
+    expect(statements().every((s) => s.Effect === "Allow")).toBe(true);
+  });
+
+  it("lets the role subscribe only to the Bedrock model products its metadata lists, and only list subscriptions otherwise", () => {
+    const terms = statements().filter((s) => [s.Action].flat().some((a) => a.startsWith("aws-marketplace:")));
+    const subscribe = terms.find((s) => [s.Action].flat().includes("aws-marketplace:Subscribe"))!;
+    expect([subscribe.Action].flat().sort()).toEqual(["aws-marketplace:Subscribe", "aws-marketplace:Unsubscribe"]);
+    expect(Object.keys(subscribe.Condition!)).toEqual(["ForAnyValue:StringEquals"]);
+    expect(Object.keys(subscribe.Condition!["ForAnyValue:StringEquals"]!)).toEqual(["aws-marketplace:ProductId"]);
+    const products = subscribe.Condition!["ForAnyValue:StringEquals"]!["aws-marketplace:ProductId"]!;
+    expect(products).toEqual([...new Set(Object.values(template.Metadata.MarketplaceProductIds))].sort());
+    for (const id of products) expect(id).toMatch(/^prod-[a-z0-9]{13}$/);
+    // ViewSubscriptions takes no product condition; it only reads.
+    const view = terms.find((s) => s !== subscribe)!;
+    expect(view).toEqual({ Sid: "ViewMarketplaceSubscriptions", Effect: "Allow", Action: "aws-marketplace:ViewSubscriptions", Resource: "*" });
+    expect(terms).toHaveLength(2);
+  });
+
+  it("is at least the version whose role accepts the terms", () => {
+    expect(olderTemplate(template.Metadata.TemplateVersion, MARKETPLACE_TERMS_SINCE)).toBe(false);
+  });
+});
+
+describe("comparing template versions", () => {
+  it.each([
+    ["1.0.0", "1.1.0", true],
+    ["1.0.9", "1.1.0", true],
+    ["0.9.0", "1.1.0", true],
+    ["1.1.0", "1.1.0", false],
+    ["1.2.0", "1.1.0", false],
+    ["1.10.0", "1.2.0", false],
+    ["2.0.0", "1.1.0", false],
+    [undefined, "1.1.0", true],
+    ["unknown", "1.1.0", true],
+  ] as Array<[string | undefined, string, boolean]>)("%s older than %s: %s", (version, than, older) => {
+    expect(olderTemplate(version, than)).toBe(older);
   });
 });
 
@@ -178,7 +218,8 @@ describe("the Bedrock caller", () => {
 });
 
 describe("Bedrock's plain reasons", () => {
-  const classify = (f: Partial<Failure>) => bedrockPlugin(envWith()).connect.classify({ step: "call", status: 400, errorName: "", message: "", ...f }, connection);
+  const classify = (f: Partial<Failure>, setupVersion?: string) =>
+    bedrockPlugin(envWith()).connect.classify({ step: "call", status: 400, errorName: "", message: "", ...f }, connection, setupVersion);
   it.each([
     [{ step: "credential", exchange: "AssumeRole", status: 403, errorName: "AccessDenied" }, "not_set_up"],
     [{ step: "credential", exchange: "AssumeRoleWithWebIdentity", status: 400, errorName: "InvalidIdentityToken" }, "app_not_configured"],
@@ -201,13 +242,23 @@ describe("Bedrock's plain reasons", () => {
     expect(new URL(plain.links[0]!.href).hash).toContain(`param_ExternalId=${connection.externalId}`);
   });
 
-  it("tells an account with no Marketplace agreement to accept the model's terms in the Bedrock console, not to touch the stack", () => {
-    // The live 403 of 2026-11-27.
-    const plain = classify({
-      status: 403,
-      errorName: "AccessDeniedException",
-      message: "anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock. For additional access options, contact AWS Sales",
-    });
+  // The live 403 of 2026-11-27, on a stack made from template 1.0.0.
+  const noAgreement = {
+    status: 403,
+    errorName: "AccessDeniedException",
+    message: "anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock. For additional access options, contact AWS Sales",
+  };
+
+  it.each([["1.0.0"], [undefined]])("tells a stack on template %s with no Marketplace agreement to update to the new template, not to create it again", (version) => {
+    const plain = classify(noAgreement, version);
+    expect(plain.reason).toBe("no_permission");
+    expect(plain.fix).toBe(`Update the “${STACK_NAME}” stack to the new template, so its role can accept this model's AWS Marketplace terms on its first call: in AWS CloudFormation, select the stack, choose Update, then Replace existing template with this Amazon S3 URL: ${TEMPLATE_URL}. Keep the parameters, tick the same acknowledgement and submit, then try again.`);
+    expect(plain.fix).not.toMatch(/create the stack again/i);
+    expect(plain.links).toEqual([{ label: "Open AWS CloudFormation", href: "https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks" }]);
+  });
+
+  it.each([["1.1.0"], ["1.2.0"]])("tells a stack on template %s with no Marketplace agreement to accept the model's terms in the Bedrock console, not to touch the stack", (version) => {
+    const plain = classify(noAgreement, version);
     expect(plain.reason).toBe("not_allowed_yet");
     expect(plain.fix).toBe("This model is sold through AWS Marketplace: the AWS account's owner accepts its terms once in the Bedrock console, then try again.");
     expect(plain.fix).not.toMatch(/stack/i);
@@ -221,6 +272,19 @@ describe("the Bedrock Connect test call", () => {
     expect(connect.testModel).toBe("Nova 2.0 Lite");
     expect(connect.canCall("Nova 2.0 Lite")).toBe(true);
     expect(connect.modelId("Nova 2.0 Lite", connect.locations("Nova 2.0 Lite")[0]!)).toBe("global.amazon.nova-2-lite-v1:0");
+  });
+});
+
+describe("the Bedrock guide", () => {
+  it("says the role accepts Marketplace terms by itself, and names the update for a stack on template 1.0.0", () => {
+    const { steps } = bedrockPlugin(envWith()).connect.guide;
+    expect(steps.join(" ")).not.toMatch(/invoke-only|accept each one's terms once in the Bedrock console/);
+    expect(steps).toContain(
+      "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on its first call, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+    );
+    expect(steps.at(-1)).toBe(
+      `Connected before, and Providers shows “Stack template version 1.0.0”? Update the stack once so its role can accept those terms: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose <strong>Update</strong>, then <strong>Replace existing template</strong> with this Amazon S3 URL: ${TEMPLATE_URL}. Keep the parameters, tick the same acknowledgement and submit.`,
+    );
   });
 });
 
