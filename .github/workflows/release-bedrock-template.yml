@@ -69,7 +69,7 @@ jobs:
           fi
           echo "go=true" >> "$GITHUB_OUTPUT"
 
-      # GitHub's OIDC token, traded for the publish role's one-hour credentials.
+      # GitHub's OIDC token, traded for the publish role's 15-minute credentials.
       - name: Take the publish role
         if: steps.gate.outputs.go == 'true'
         run: |
