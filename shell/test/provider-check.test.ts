@@ -32,10 +32,10 @@ beforeEach(async () => {
     status: "good",
     results: [],
     rows: [
-      price("bedrock", "Claude Haiku 5.5", "input", 0.1),
-      price("bedrock", "Claude Haiku 5.5", "output", 0.5),
-      price("bedrock", "Claude Haiku 5.5", "input", 0.11, "cross-region"),
-      price("bedrock", "Claude Haiku 5.5", "output", 0.55, "cross-region"),
+      price("bedrock", "Nova 2.0 Lite", "input", 0.1),
+      price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+      price("bedrock", "Nova 2.0 Lite", "input", 0.11, "cross-region"),
+      price("bedrock", "Nova 2.0 Lite", "output", 0.55, "cross-region"),
       { ...price("foundry", "Claude Haiku 5.5", "input", 0.1), region: "global", source: "maintainer-read" },
       { ...price("foundry", "Claude Haiku 5.5", "output", 0.5), region: "global", source: "maintainer-read" },
     ],
@@ -73,7 +73,7 @@ describe("the automatic test call", () => {
     let check = await readCheck(env.DB, userId, "bedrock");
     expect(check).toMatchObject({ state: "checking", region: "global", regionSetBy: "app", nextTryAt: at(1).toISOString() });
     expect(check!.result).toMatchObject({
-      verdict: "failed", reason: "not_set_up", model: "Claude Haiku 5.5", modelId: "global.anthropic.claude-haiku-5-5",
+      verdict: "failed", reason: "not_set_up", model: "Nova 2.0 Lite", modelId: "global.amazon.nova-2-lite-v1:0",
       reply: { status: 403, errorName: "AccessDenied", message: expect.stringContaining("not authorized to perform: sts:AssumeRole") },
       fix: "Create the stack again with Connect Amazon Bedrock, then try again.",
     });
@@ -90,7 +90,7 @@ describe("the automatic test call", () => {
     // The test call is a real call: one ledger row, costed at the list price.
     const rows = await ledger();
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ task: "test_call", provider: "bedrock", model: "Claude Haiku 5.5", region: "global", status: 200, plugin_version: "bedrock-1.0.0", input_tokens: 38, output_tokens: 3, fallback: 0 });
+    expect(rows[0]).toMatchObject({ task: "test_call", provider: "bedrock", model: "Nova 2.0 Lite", region: "global", status: 200, plugin_version: "bedrock-1.0.0", input_tokens: 38, output_tokens: 3, fallback: 0 });
     // Nothing more is due.
     expect(await runDueChecks(env.DB, plugins, at(30))).toBe(0);
   });
@@ -161,7 +161,7 @@ describe("the automatic test call", () => {
     world.stack = true;
     await connectBedrock(plugins);
     expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "cross-region", at(2))).toBeUndefined();
-    expect(sent.filter((s) => s.url.includes("bedrock-runtime")).at(-1)!.url).toContain("/model/us.anthropic.claude-haiku-5-5/converse");
+    expect(sent.filter((s) => s.url.includes("bedrock-runtime")).at(-1)!.url).toContain("/model/us.amazon.nova-2-lite-v1%3A0/converse");
     expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ region: "cross-region", regionSetBy: "user", state: "passed" });
     expect(await chooseRegion(env.DB, plugins, userId, "bedrock", "mars-1", at(3))).toMatch(/not offered at that region/);
   });
@@ -176,7 +176,7 @@ describe("the automatic test call", () => {
     expect(row).toMatchObject({ task: "test_call", status: 200 });
     expect(JSON.parse(row!.costed_conservatively as string)).toEqual({ cache_write_1h: 0.5 });
     const { results } = await env.DB.prepare("SELECT kind, detail FROM price_alerts").all<{ kind: string; detail: string }>();
-    expect(results).toEqual([{ kind: "price_missing", detail: expect.stringContaining("Claude Haiku 5.5 at Amazon Bedrock (global) has no list price for cache_write_1h") }]);
+    expect(results).toEqual([{ kind: "price_missing", detail: expect.stringContaining("Nova 2.0 Lite at Amazon Bedrock (global) has no list price for cache_write_1h") }]);
   });
 
   it("keeps a revoked connection revoked while the test call waits for a spent budget", async () => {
@@ -228,7 +228,7 @@ describe("Disconnect and Ask Admin for help", () => {
     await disconnectProvider(env.DB, userId, "bedrock");
     expect(await readConnection(env.DB, userId, "bedrock")).toBeUndefined();
     expect(await readCheck(env.DB, userId, "bedrock")).toBeUndefined();
-    const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(1));
+    const outcome = await callModel(env.DB, plugins, { userId, task: "fill", main: { provider: "bedrock", model: "Nova 2.0 Lite", location: "global", request: {} } }, () => at(1));
     expect(outcome).toMatchObject({ kind: "refused", reason: "not_connected" });
   });
 
@@ -248,7 +248,7 @@ describe("a real call that finds the grant gone", () => {
     await writeConnection(env.DB, userId, plugin, { account: "123456789012", region: "global" }, T0);
     await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at) VALUES (?, 'bedrock', 'passed', ?)").bind(userId, T0.toISOString()).run();
     await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
-    const outcome = await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
+    const outcome = await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Nova 2.0 Lite", location: "global", request: {} } }, () => at(5));
     expect(outcome).toMatchObject({ kind: "refused", reason: "credential_failed" });
     expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "revoked", revokedAt: at(5).toISOString() });
   });
@@ -259,7 +259,7 @@ describe("a real call that finds the grant gone", () => {
     await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at) VALUES (?, 'bedrock', 'passed', ?)").bind(userId, T0.toISOString()).run();
     await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
     plugin.replies.push({ status: 403, body: {}, error: { name: "PERMISSION_DENIED", message: "Permission denied on resource project example-project-123." } });
-    const outcome = await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
+    const outcome = await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Nova 2.0 Lite", location: "global", request: {} } }, () => at(5));
     expect(outcome).toMatchObject({ kind: "provider_error", status: 403 });
     expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "revoked", revokedAt: at(5).toISOString() });
   });
@@ -270,7 +270,7 @@ describe("a real call that finds the grant gone", () => {
     await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at) VALUES (?, 'bedrock', 'passed', ?)").bind(userId, T0.toISOString()).run();
     await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
     plugin.replies.push({ status: 400, body: {}, error: { name: "ValidationException", message: "bad request" } });
-    await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
+    await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Nova 2.0 Lite", location: "global", request: {} } }, () => at(5));
     expect((await readCheck(env.DB, userId, "bedrock"))!.state).toBe("passed");
   });
 
@@ -279,7 +279,7 @@ describe("a real call that finds the grant gone", () => {
     await writeConnection(env.DB, userId, plugin, { account: "123456789012", region: "global" }, T0);
     await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at) VALUES (?, 'bedrock', 'passed', ?)").bind(userId, T0.toISOString()).run();
     await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
-    await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Claude Haiku 5.5", location: "global", request: {} } }, () => at(5));
+    await callModel(env.DB, { bedrock: plugin }, { userId, task: "fill", main: { provider: "bedrock", model: "Nova 2.0 Lite", location: "global", request: {} } }, () => at(5));
     expect((await readCheck(env.DB, userId, "bedrock"))!.state).toBe("passed");
   });
 });

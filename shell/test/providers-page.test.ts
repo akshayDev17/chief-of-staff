@@ -29,7 +29,7 @@ afterEach(() => vi.restoreAllMocks());
 beforeEach(async () => {
   userId = (await userFor("test-sub")).id;
   const row = (tokenKind: "input" | "output", usdPerMTok: number) => ({
-    provider: "bedrock" as const, model: "Claude Haiku 5.5", deployment: "global" as const, region: "us-east-1", tokenKind, longPrompt: false, batch: false,
+    provider: "bedrock" as const, model: "Nova 2.0 Lite", deployment: "global" as const, region: "us-east-1", tokenKind, longPrompt: false, batch: false,
     usdPerMTok, source: "aws-price-list" as const, dateRead: "2026-11-24", stale: false, disagreement: false,
   });
   await writeSnapshot(env.DB, { takenAt: "2026-11-24T06:00:00Z", status: "good", results: [], rows: [row("input", 0.1), row("output", 0.5)] });
@@ -59,7 +59,7 @@ describe("Models › Setup › Providers", () => {
   it("offers one Connect button per plug-in, with each guide's checked-on date and vendor pages, and no table", async () => {
     const page = await text(await open(world()));
     for (const name of ["Connect Amazon Bedrock", "Connect Microsoft Foundry", "Connect Google Vertex AI"]) expect(page).toContain(name);
-    expect(page).toContain("Guide checked on 2026&#8209;11&#8209;26 against the vendor's own pages");
+    expect(page).toContain("Guide checked on 2026&#8209;11&#8209;27 against the vendor's own pages");
     expect(page).toContain('href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html"');
     expect(page).toContain('name="accountId"');
     expect(page).toContain('pattern="\\d{12}"');
@@ -87,7 +87,7 @@ describe("Models › Setup › Providers", () => {
     expect(page).toContain('<strong>Connected</strong> <span class="pill ok">no key held</span>');
     expect(page).toContain("To revoke it on the provider’s side: delete the “chief-of-staff” stack in AWS CloudFormation.");
     expect(page).toContain('<p class="tc-verdict"><strong>Test call passed</strong> (ran by itself)</p>');
-    expect(page).toContain('<p class="tc-reply">Bedrock replied: 200 OK · global.anthropic.claude-haiku-5-5 (Global) · “OK”</p>');
+    expect(page).toContain('<p class="tc-reply">Bedrock replied: 200 OK · global.amazon.nova-2-lite-v1:0 (Global) · “OK”</p>');
     expect(page).toContain("38 input and 3 output tokens · under $0.0001 · connected; a connection has no end date");
     expect(page).toContain("<strong>Region:</strong> chosen by the app from what your model supports: Global. The test call proves it.");
     expect(page).toContain("<strong>Monthly budget:</strong> not set yet");

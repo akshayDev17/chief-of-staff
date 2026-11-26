@@ -2,7 +2,8 @@
 //
 // Connect: the user types their 12-digit AWS account ID and taps Connect
 // Amazon Bedrock; a CloudFormation quick-create link opens the stack
-// `bedrock-template/template.json` makes: one invoke-only role,
+// `bedrock-template/template.json` makes: one role that can only call models
+// and accept a model's Marketplace terms on its first call,
 // `chief-of-staff-model-caller`, that trusts the app's own role in the
 // owner's account only with the user's external ID. The record holds that
 // role's ARN and the external ID, neither secret ("AWS does not treat the
@@ -51,8 +52,8 @@ const SESSION_NAME = "chief-of-staff";
 // Bedrock's own IDs for the models the app knows, from each model card's
 // "Programmatic Access" table (read 2026-11-25; launch dates on the cards).
 // Global and cross-Region calls prefix the ID with `global.` or the geography.
-// The map holds only the four Claude models T16 added for the Connect test
-// call. That is a known shortfall, not a rule: Add a model is meant to offer
+// The map holds the four Claude models T16 added, and Amazon Nova 2 Lite, the
+// Connect test call's model (below). That is a known shortfall, not a rule: Add a model is meant to offer
 // every chat model Bedrock sells at a listed price, of every model family
 // (T17, design-v3 1.5), and every other model shows "not offered yet" until
 // the T17 fix adds its ID here.
@@ -61,7 +62,20 @@ export const BEDROCK_MODEL_IDS: Readonly<Record<string, string>> = {
   "Claude Sonnet 5.5": "anthropic.claude-sonnet-5-5",
   "Claude Opus 5.5": "anthropic.claude-opus-5-5",
   "Claude Haiku 4.5": "anthropic.claude-haiku-4-5-20251001-v1:0",
+  // Named as AWS's price list names it, so its price rows match. Card read
+  // 2026-11-27: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html
+  "Nova 2.0 Lite": "amazon.nova-2-lite-v1:0",
 };
+
+// The Connect test call's model: one AWS sells itself, not through AWS
+// Marketplace, so it answers with no Marketplace agreement and through a
+// 1.0.0 role that cannot accept one (Bedrock's model-access page lists Amazon
+// among the providers whose models "aren't sold through AWS Marketplace";
+// read 2026-11-27). Nova 2 Lite over Nova Micro: it has a Global profile, as
+// the app's locations expect, and US, EU and JP profiles; Nova Micro has no
+// Global profile, only US and EU, and its card says "EOL no sooner than: Dec
+// 05, 2025" (Nova 2 Lite's: Dec 02, 2026).
+export const TEST_MODEL = "Nova 2.0 Lite";
 
 // The geography prefix of a cross-Region inference profile, from the region
 // the app calls from.
@@ -147,11 +161,11 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
         "Go back to the COS tab and finish the Connect step so the test call runs.",
-        "Enable each model you pick once in the Bedrock console (Model access). Enable Claude Haiku 5.5 too, even if you want other model families: the Connect test call runs on it today. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        "Nothing to switch on in the Bedrock console. The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Each other model you pick accepts its AWS Marketplace terms on its first call, which can take up to 15 minutes. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "The app checks the connection and runs the test call by itself.",
       ],
-      checkedOn: "2026-11-26",
+      checkedOn: "2026-11-27",
       pages: [
         { label: "Quick-create links", href: "https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html" },
         { label: "Access Amazon Bedrock foundation models", href: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html" },
@@ -172,7 +186,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       return { kind: "connection", fields: { roleArn, externalId }, open: setupLink(externalId) };
     },
     setupLink: (connection) => setupLink(connection.externalId!),
-    testModel: "Claude Haiku 5.5",
+    testModel: TEST_MODEL,
     knownModels: Object.keys(BEDROCK_MODEL_IDS),
     // Converse speaks every model family, but the call needs Bedrock's own ID
     // for the model, read from its model card. A model the app has no ID for
@@ -181,7 +195,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
     notCallableReason: "the app has no Bedrock ID for it",
     // Converse's reply does not name the model.
     replyModel: () => undefined,
-    // The 5.5 models have no in-Region ID ("N/A" on their cards): Global, or
+    // The 5.5 models and Nova 2 Lite have no in-Region ID ("N/A" on their cards): Global, or
     // the cross-Region profile of the app's own geography.
     locations: () => ["global", "cross-region"],
     locationLabel: (location) => (location === "global" ? "Global" : location === "cross-region" ? `${geography(region).toUpperCase()} cross-Region` : location),
@@ -215,6 +229,18 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
       }
       if (f.status === 404 || /ResourceNotFound/i.test(f.errorName)) {
         return { reason: "no_such_model", fix: "Change the region, or pick a model this account offers.", links: [] };
+      }
+      // No Marketplace agreement, and the role cannot make one: a stack from
+      // template 1.0.0, made before the role could accept a model's terms
+      // (live, 2026-11-27: "anthropic.claude-haiku-5-5 is not available for
+      // this account. You can explore other available models on Amazon
+      // Bedrock. For additional access options, contact AWS Sales").
+      if (/is not available for this account/i.test(f.message)) {
+        return {
+          reason: "no_permission",
+          fix: `Update the “${STACK_NAME}” stack to the new template, so its role can accept this model's AWS Marketplace terms on its first call: in AWS CloudFormation, select the stack, choose Update, then Replace existing template${env.BEDROCK_TEMPLATE_URL ? ` with this Amazon S3 URL: ${env.BEDROCK_TEMPLATE_URL}` : ""}. Then try again. If the stack is already updated, check that the AWS account has a payment method for Marketplace purchases.`,
+          links: [{ label: "Open AWS CloudFormation", href: `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks` }],
+        };
       }
       if (/AccessDenied/i.test(f.errorName) && /access to the model|model access|not authorized to access|subscri/i.test(f.message)) {
         return { reason: "not_allowed_yet", fix: "Enable the model once in the Bedrock console (Model access), then try again.", links: [CONSOLE_MODEL_ACCESS] };

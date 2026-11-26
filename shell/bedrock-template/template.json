@@ -1,8 +1,8 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Chief of staff: one invoke-only role the app can assume, only with this account's external ID. Delete this stack to remove the app's access.",
+  "Description": "Chief of staff: one role the app can assume, only with this account's external ID, that can call Amazon Bedrock models and accept a model's AWS Marketplace terms on its first call. Delete this stack to remove the app's access.",
   "Metadata": {
-    "TemplateVersion": "1.0.0"
+    "TemplateVersion": "1.1.0"
   },
   "Parameters": {
     "ExternalId": {
@@ -23,7 +23,7 @@
       "Type": "AWS::IAM::Role",
       "Properties": {
         "RoleName": "chief-of-staff-model-caller",
-        "Description": "Lets the Chief of staff app call Amazon Bedrock models, and nothing else.",
+        "Description": "Lets the Chief of staff app call Amazon Bedrock models and accept a model's AWS Marketplace terms on its first call, and nothing else.",
         "MaxSessionDuration": 3600,
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
@@ -53,6 +53,12 @@
                   ]
                 },
                 {
+                  "Sid": "AcceptModelTermsOnFirstCall",
+                  "Effect": "Allow",
+                  "Action": ["aws-marketplace:Subscribe", "aws-marketplace:Unsubscribe", "aws-marketplace:ViewSubscriptions"],
+                  "Resource": "*"
+                },
+                {
                   "Sid": "ReadOwnStackVersion",
                   "Effect": "Allow",
                   "Action": "cloudformation:DescribeStacks",
@@ -72,7 +78,7 @@
     },
     "TemplateVersion": {
       "Description": "The version of this template, read by the app.",
-      "Value": "1.0.0"
+      "Value": "1.1.0"
     }
   }
 }
