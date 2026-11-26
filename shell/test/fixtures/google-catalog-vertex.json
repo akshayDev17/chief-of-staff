@@ -1,5 +1,5 @@
 {
-  "_about": "Shaped from Google's documented services.skus.list response format (https://docs.cloud.google.com/billing/docs/reference/rest/v1/services.skus/list, read 2026-11-24) until the maintainers' API key exists (T10). Prices follow the price report of 2026-11-24; the SKU ids and descriptions are illustrative, not read from the API.",
+  "_about": "Shaped from Google's documented services.skus.list response format (https://docs.cloud.google.com/billing/docs/reference/rest/v1/services.skus/list, read 2026-11-24) until M2's live check reads the real Catalog with the price reader's federated token (design-v3 1.6, item 9). Prices follow the price report of 2026-11-24; the SKU ids and descriptions are illustrative, not read from the API.",
   "skus": [
     {
       "name": "services/C7E2-9256-1C43/skus/0000-0000-0001",

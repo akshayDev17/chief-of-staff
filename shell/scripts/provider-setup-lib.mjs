@@ -7,8 +7,8 @@
 // so the Worker's tests import it too.
 //
 // The audiences, subjects and names are the ones the Worker uses (a test
-// checks each against src/): src/issuer.ts, src/providers/bedrock.ts,
-// foundry.ts and vertex.ts.
+// checks each against src/): src/issuer.ts, src/google-federation.ts and
+// src/providers/bedrock.ts, foundry.ts and vertex.ts.
 
 // The app's path on its host (src/paths.ts BASE_PATH): the issuer and the
 // consent return live under it.
@@ -24,9 +24,17 @@ export const CONSENT_RETURN_PATH = `${BASE_PATH}/models/setup/providers/foundry/
 export const SIGN_IN_RETURN_PATH = `${BASE_PATH}/models/setup/providers/foundry/signed-in`;
 export const GOOGLE_POOL = "chief-of-staff";
 export const GOOGLE_PROVIDER = "chief-of-staff-worker";
-// Each user's Google subject is their own app ID (a UUID, src/users.ts): the
-// pool takes no other subject from the issuer.
-export const GOOGLE_SUBJECT_CONDITION = "assertion.sub.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')";
+// The pool takes exactly two kinds of subject from the issuer: each user's own
+// app ID (a UUID, src/users.ts), and the price reader's one fixed subject,
+// which is not a UUID, so neither can pass for the other.
+export const GOOGLE_USER_SUBJECT_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+export const GOOGLE_PRICE_READER_SUBJECT = "price-reader";
+export const GOOGLE_SUBJECT_CONDITION = `assertion.sub.matches('${GOOGLE_USER_SUBJECT_PATTERN}') || assertion.sub == '${GOOGLE_PRICE_READER_SUBJECT}'`;
+// The one role the price reader holds, a custom role on the app's own project
+// only, with the one permission that lets the reader name that project as its
+// quota project.
+export const GOOGLE_PRICE_READER_ROLE_ID = "chiefOfStaffPriceReader";
+export const GOOGLE_PRICE_READER_PERMISSION = "serviceusage.services.use";
 export const TEMPLATE_PREFIX = "chief-of-staff-bedrock-role/";
 
 const ORIGIN = /^https:\/\/[a-z0-9.-]+$/;
@@ -65,6 +73,8 @@ export function setupValues(i) {
   const appRoleArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:role/${APP_ROLE_NAME}`;
   const oidcProviderArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:oidc-provider/${issuerHostPath}`;
   const wifProvider = `//iam.googleapis.com/projects/${i.GOOGLE_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_POOL}/providers/${GOOGLE_PROVIDER}`;
+  const poolPrincipal = (subject) => `principal://iam.googleapis.com/projects/${i.GOOGLE_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_POOL}/subject/${subject}`;
+  const priceReaderPrincipal = poolPrincipal(GOOGLE_PRICE_READER_SUBJECT);
   const publishRoleArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:role/chief-of-staff-template-publisher`;
   return {
     issuer: {
@@ -129,13 +139,20 @@ export function setupValues(i) {
       githubVariables: { BEDROCK_TEMPLATE_BUCKET: i.BEDROCK_TEMPLATE_BUCKET, BEDROCK_PUBLISH_ROLE_ARN: publishRoleArn },
     },
     google: {
+      // The app's project needs only STS (the token exchange) and the Cloud
+      // Billing API (the price reader's quota project). Vertex AI is enabled
+      // in each user's own project, never here.
       commands: [
-        `gcloud services enable aiplatform.googleapis.com sts.googleapis.com --project=${i.GOOGLE_PROJECT_ID}`,
+        `gcloud services enable sts.googleapis.com cloudbilling.googleapis.com --project=${i.GOOGLE_PROJECT_ID}`,
         `gcloud iam workload-identity-pools create ${GOOGLE_POOL} --project=${i.GOOGLE_PROJECT_ID} --location=global --display-name="Chief of staff"`,
         `gcloud iam workload-identity-pools providers create-oidc ${GOOGLE_PROVIDER} --project=${i.GOOGLE_PROJECT_ID} --location=global --workload-identity-pool=${GOOGLE_POOL} --issuer-uri=${issuer} --allowed-audiences=https:${wifProvider} --attribute-mapping=google.subject=assertion.sub --attribute-condition="${GOOGLE_SUBJECT_CONDITION}"`,
+        `gcloud iam roles create ${GOOGLE_PRICE_READER_ROLE_ID} --project=${i.GOOGLE_PROJECT_ID} --title="Chief of staff price reader" --permissions=${GOOGLE_PRICE_READER_PERMISSION}`,
+        `gcloud projects add-iam-policy-binding ${i.GOOGLE_PROJECT_ID} --member=${priceReaderPrincipal} --role=projects/${i.GOOGLE_PROJECT_ID}/roles/${GOOGLE_PRICE_READER_ROLE_ID}`,
       ],
       // What each user grants on their own project, shown on their Connect screen.
-      userPrincipal: `principal://iam.googleapis.com/projects/${i.GOOGLE_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_POOL}/subject/<user id>`,
+      userPrincipal: poolPrincipal("<user id>"),
+      // The price table's reader of the Cloud Billing Catalog (src/prices/google.ts).
+      priceReaderPrincipal,
       workerVariables: { GOOGLE_WIF_PROVIDER: wifProvider },
     },
     entra: {
@@ -189,12 +206,18 @@ ${json(v.aws.publishRolePermissionPolicy)}
   GitHub repository variables:
 ${vars(v.aws.githubVariables)}
 
-3. Google Vertex AI, in the owner's Google Cloud project
+3. Google: Vertex AI and the price table, in the app's own Google Cloud project
 ${v.google.commands.map((c) => `  ${c}`).join("\n")}
-  No service account and no service-account impersonation grant is needed for
-  Vertex AI: each user grants the role on their own project to their own
+  No service account, no service-account impersonation grant and no API key is
+  needed. Each user grants the role on their own project to their own
   principal in the pool, shown on their Connect screen:
     ${v.google.userPrincipal}
+  The price table reads Google's Cloud Billing Catalog as the pool's price
+  reader, which holds only the role above, on this project only, so it can
+  name this project as its quota project:
+    ${v.google.priceReaderPrincipal}
+  Whether the Catalog takes that token is checked live in M2; if Google
+  refuses it, stop and tell the owner (no API key is made instead).
   Worker variables (GitHub environment \`production\`, as environment variables):
 ${vars(v.google.workerVariables)}
 

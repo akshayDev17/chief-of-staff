@@ -56,7 +56,7 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
 | Foundry | Azure Retail Prices API, service "Foundry Models", every region ([docs](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)) | None ("an unauthenticated experience") |
 | Foundry, Claude | `maintainer-read.json`, read from each model's Microsoft Marketplace listing (pay-as-you-go plan meters) | None |
 | Bedrock | AWS price-list files, offers `AmazonBedrockFoundationModels` and `AmazonBedrock`, every region ([docs](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/using-the-aws-price-list-bulk-api-fetching-price-list-files-manually.html)) | None |
-| Vertex AI | Cloud Billing Catalog API, `services/C7E2-9256-1C43/skus` ([docs](https://docs.cloud.google.com/billing/docs/reference/rest/v1/services.skus/list)) | The maintainers' API key, Worker secret `GOOGLE_BILLING_API_KEY` (arrives with T10) |
+| Vertex AI | Cloud Billing Catalog API, `services/C7E2-9256-1C43/skus` ([docs](https://docs.cloud.google.com/billing/docs/reference/rest/v1/services.skus/list)) | No key: a federated token, about an hour long, for the price reader's own subject in the app's Workload Identity Federation pool, with the app's own project as quota project (`src/prices/google.ts`, `src/providers/README.md` "What the owner sets up"). Unproven until M2's live check (design-v3 1.6, item 9); if Google refuses it, the owner is told and no API key is made |
 
 Rows read on demand at the standard rate are kept. Flex, priority, ultrafast,
 provisioned, reserved, fine-tuning, image, audio, realtime and embedding meters

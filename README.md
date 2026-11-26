@@ -165,7 +165,7 @@ to the Worker:
 | `AWS_APP_ROLE_ARN` | `node scripts/provider-setup.mjs values`, step 2 (the app role you create) | required for Bedrock |
 | `AWS_REGION` | the same step 2 (`us-east-1`) | optional; the Worker uses `us-east-1` without it |
 | `BEDROCK_TEMPLATE_URL` | the run summary of the template's first publish (`.github/workflows/release-bedrock-template.yml`) | required for Bedrock: no Connect link without it |
-| `GOOGLE_WIF_PROVIDER` | `node scripts/provider-setup.mjs values`, step 3 (the pool provider's full name) | required for Vertex AI |
+| `GOOGLE_WIF_PROVIDER` | `node scripts/provider-setup.mjs values`, step 3 (the pool provider's full name) | required for Vertex AI and for the price table's Vertex AI prices (no Google API key is used) |
 | `ENTRA_CLIENT_ID` | the Entra registration of step 4: its Application (client) ID | required for Foundry |
 | `ENTRA_CERT_THUMBPRINT` | `node scripts/provider-setup.mjs keys <dir>` | required for Foundry with `certificate`; not read with `federated` |
 | `FOUNDRY_CREDENTIAL` | step 4: `certificate`, or `federated` only once M2 step 11.1 passes | optional; `certificate` without it |

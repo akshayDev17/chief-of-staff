@@ -6,12 +6,13 @@ import type { MaintainerEntry } from "../src/prices/maintainer";
 import { refreshPrices } from "../src/prices/refresh";
 import { SNAPSHOTS_KEPT, currentSnapshot, listSnapshots, readSnapshotRows, recentAlerts, rollBackLatestSnapshot } from "../src/prices/store";
 import worker from "../src/index";
-import { fakeFetch, type Overrides } from "./fake-sources";
+import type { GoogleFederationEnv } from "../src/google-federation";
+import { fakeFetch, googleEnv, type Overrides } from "./fake-sources";
 import azure from "./fixtures/azure-retail-eastus2.json";
 
 const entries = maintainerFile.entries as MaintainerEntry[];
-const refresh = (day: string, overrides: Overrides = {}, googleApiKey: string | null = "test-key") =>
-  refreshPrices({ db: env.DB, fetcher: fakeFetch(overrides), googleApiKey: googleApiKey ?? undefined, maintainerEntries: entries, now: new Date(`${day}T06:00:00Z`) });
+const refresh = async (day: string, overrides: Overrides = {}, google?: GoogleFederationEnv) =>
+  refreshPrices({ db: env.DB, fetcher: fakeFetch(overrides), google: google ?? (await googleEnv()), maintainerEntries: entries, now: new Date(`${day}T06:00:00Z`) });
 const failing = () => new Response("upstream down", { status: 503 });
 
 describe("the daily refresh", () => {
@@ -58,10 +59,30 @@ describe("the daily refresh", () => {
       .toMatchObject({ dateRead: "2026-11-25", stale: false });
   });
 
-  it("treats Google without its API key as a failed source, guessing nothing", async () => {
-    const { results } = await refresh("2026-11-24", {}, null);
-    expect(results.find((r) => r.source === "google-catalog")).toMatchObject({ ok: false, rows: 0 });
+  it("treats Google before the app's pool exists as a failed source, guessing nothing", async () => {
+    const { results } = await refresh("2026-11-24", {}, { ...(await googleEnv()), GOOGLE_WIF_PROVIDER: undefined });
+    expect(results.find((r) => r.source === "google-catalog")).toMatchObject({ ok: false, rows: 0, error: "not configured yet: GOOGLE_WIF_PROVIDER" });
     expect(await lookupPrice(env.DB, { provider: "vertex", model: "Claude Sonnet 5.5", location: "global", tokenKind: "input" })).toBeUndefined();
+  });
+
+  it("reports Google's own words when the Catalog refuses the price reader, keeps the last prices marked stale, and tries no key", async () => {
+    await refresh("2026-11-23");
+    const refused = () =>
+      Response.json({ error: { code: 401, message: "made-up refusal for this test", status: "UNAUTHENTICATED" } }, { status: 401 });
+    const { results } = await refresh("2026-11-24", { google: refused });
+    expect(results.find((r) => r.source === "google-catalog")).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Cloud Billing Catalog API answered 401 UNAUTHENTICATED: /),
+    });
+    expect(await lookupPrice(env.DB, { provider: "vertex", model: "Claude Sonnet 5.5", location: "global", tokenKind: "input" }))
+      .toMatchObject({ source: "google-catalog", dateRead: "2026-11-23", stale: true });
+    expect((await recentAlerts(env.DB))[0]).toMatchObject({ kind: "refresh_failed" });
+  });
+
+  it("reports STS's refusal of the price reader as a failed source", async () => {
+    const sts = () => Response.json({ error: "invalid_grant", error_description: "The given credential is rejected by the attribute condition." }, { status: 400 });
+    const { results } = await refresh("2026-11-24", { sts });
+    expect(results.find((r) => r.source === "google-catalog")).toMatchObject({ ok: false, error: "sts.googleapis.com token: 400 invalid_grant: The given credential is rejected by the attribute condition." });
   });
 
   it("stores a smaller read as the vendor lists it: a model no longer listed has no price yet", async () => {
@@ -90,7 +111,7 @@ describe("the daily refresh", () => {
     const [good] = entries;
     const broken = [{ ...good!, model: "Claude Broken", meters: [{ token_kind: "input" as const, long_prompt: false, usd_per_mtok: -1 }] }];
     await expect(refreshPrices({
-      db: env.DB, fetcher: fakeFetch(), googleApiKey: "test-key", maintainerEntries: [...entries, ...broken], now: new Date("2026-11-24T06:00:00Z"),
+      db: env.DB, fetcher: fakeFetch(), google: await googleEnv(), maintainerEntries: [...entries, ...broken], now: new Date("2026-11-24T06:00:00Z"),
     })).rejects.toThrow();
     expect((await currentSnapshot(env.DB))?.id).toBe(first.snapshotId);
     expect(await listSnapshots(env.DB)).toHaveLength(1);

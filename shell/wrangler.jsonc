@@ -42,9 +42,9 @@
   "triggers": { "crons": ["0 6 * * *", "0 7 * * 1", "* * * * *"] },
   // A refresh reads every region's AWS price-list files; give it room.
   "limits": { "cpu_ms": 300000 }
-  // GOOGLE_BILLING_API_KEY arrives as a Worker secret with T10; it is never
-  // written here. Nor are the provider plug-ins' values
-  // (src/providers/README.md, "What the owner sets up"): the secrets
+  // The provider plug-ins' values are never written here
+  // (src/providers/README.md, "What the owner sets up"; the Google price
+  // reader uses the same issuer and pool, and no key): the secrets
   // ISSUER_KEYS and ENTRA_CERT_KEY, and the variables AWS_APP_ROLE_ARN,
   // AWS_REGION, BEDROCK_TEMPLATE_URL, ENTRA_CLIENT_ID, ENTRA_CERT_THUMBPRINT,
   // FOUNDRY_CREDENTIAL, GOOGLE_WIF_PROVIDER, none of them secret, which the
