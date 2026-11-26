@@ -82,7 +82,7 @@ describe("the daily refresh", () => {
   it("reports STS's refusal of the price reader as a failed source", async () => {
     const sts = () => Response.json({ error: "invalid_grant", error_description: "The given credential is rejected by the attribute condition." }, { status: 400 });
     const { results } = await refresh("2026-11-24", { sts });
-    expect(results.find((r) => r.source === "google-catalog")).toMatchObject({ ok: false, error: "sts.googleapis.com token: 400 invalid_grant" });
+    expect(results.find((r) => r.source === "google-catalog")).toMatchObject({ ok: false, error: "sts.googleapis.com token: 400 invalid_grant: The given credential is rejected by the attribute condition." });
   });
 
   it("stores a smaller read as the vendor lists it: a model no longer listed has no price yet", async () => {

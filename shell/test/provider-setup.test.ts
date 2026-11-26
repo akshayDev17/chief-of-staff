@@ -5,7 +5,7 @@ import { ISSUER_PATH } from "../src/issuer";
 import { BASE_PATH } from "../src/paths";
 import { AWS_AUDIENCE, AWS_SUBJECT, ROLE_NAME } from "../src/providers/bedrock";
 import { CONSENT_RETURN_PATH, ENTRA_FEDERATED_AUDIENCE, ENTRA_SUBJECT, SIGN_IN_RETURN_PATH } from "../src/providers/foundry";
-import { priceReaderPrincipal, PRICE_READER_SUBJECT, USER_SUBJECT, userPrincipal, wifAudience } from "../src/google-federation";
+import { PRICE_READER_SUBJECT, USER_SUBJECT, userPrincipal, wifAudience } from "../src/google-federation";
 
 const inputs = {
   APP_ORIGIN: "https://cos.example.com",
@@ -65,7 +65,7 @@ describe("the owner's setup values", () => {
     expect(v.google.userPrincipal).toBe("principal://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/chief-of-staff/subject/<user id>");
     const user = crypto.randomUUID();
     expect(userPrincipal(provider, user)).toBe(v.google.userPrincipal.replace("<user id>", user));
-    expect(v.google.priceReaderPrincipal).toBe(priceReaderPrincipal(provider));
+    expect(v.google.priceReaderPrincipal).toBe(v.google.userPrincipal.replace("<user id>", PRICE_READER_SUBJECT));
   });
 
   it("enable only STS and the Cloud Billing API on the app's project, and grant the price reader only the quota-project role there", () => {

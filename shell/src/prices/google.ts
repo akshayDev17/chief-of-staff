@@ -31,6 +31,7 @@
 
 import { appProjectNumber, priceReaderGoogleToken, type GoogleFederationEnv } from "../google-federation";
 import { errorFromBody, readBody } from "../providers/anthropic";
+import { ProviderRefusal } from "../proxy/plugin";
 import { round } from "./azure";
 import { GOOGLE_CATALOG_BASE, GOOGLE_VERTEX_SERVICE } from "./sources";
 import type { Deployment, PriceRow, SourceRead, TokenKind } from "./types";
@@ -140,6 +141,7 @@ export async function readGoogle(fetcher: typeof fetch, google: GoogleFederation
     if (rows.length === 0) throw new Error("Cloud Billing Catalog API returned no chat-model prices");
     return { source: "google-catalog", ok: true, rows, unmapped };
   } catch (error) {
-    return { source: "google-catalog", ok: false, error: String(error instanceof Error ? error.message : error) };
+    const words = error instanceof ProviderRefusal && error.refusal.message ? `: ${error.refusal.message}` : "";
+    return { source: "google-catalog", ok: false, error: `${error instanceof Error ? error.message : String(error)}${words}` };
   }
 }

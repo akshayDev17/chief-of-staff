@@ -70,13 +70,6 @@ export function userPrincipal(wifProvider: string | undefined, userId: string): 
   return pool && USER_SUBJECT.test(userId) ? `principal://iam.googleapis.com/${pool}/subject/${userId}` : undefined;
 }
 
-// The price reader's identity, granted only the quota-project role on the
-// app's own project (README "What the owner sets up").
-export function priceReaderPrincipal(wifProvider: string | undefined): string | undefined {
-  const pool = poolOf(wifProvider)?.[1];
-  return pool ? `principal://iam.googleapis.com/${pool}/subject/${PRICE_READER_SUBJECT}` : undefined;
-}
-
 async function exchange(env: GoogleFederationEnv, fetcher: typeof fetch, now: Date, subject: string, scope: string): Promise<GoogleToken> {
   if (!env.GOOGLE_WIF_PROVIDER || !poolOf(env.GOOGLE_WIF_PROVIDER)) throw new AppNotConfigured(["GOOGLE_WIF_PROVIDER"]);
   const issuer = await readIssuer(env);

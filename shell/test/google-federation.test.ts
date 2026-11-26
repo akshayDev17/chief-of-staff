@@ -3,7 +3,6 @@ import {
   appProjectNumber,
   CLOUD_BILLING_READONLY_SCOPE,
   priceReaderGoogleToken,
-  priceReaderPrincipal,
   userGoogleToken,
   userPrincipal,
   wifAudience,
@@ -20,12 +19,10 @@ const POOL = "principal://iam.googleapis.com/projects/123456789/locations/global
 const stsAnswer = () => Response.json({ access_token: "federated-token", token_type: "Bearer", expires_in: 3599 });
 
 describe("the price reader and the users are different identities in the one pool", () => {
-  it("names the price reader by its own fixed subject, which is no user's", () => {
-    expect(priceReaderPrincipal(PRICE_WIF)).toBe(`${POOL}/price-reader`);
+  it("names a user by their own app ID, never by the price reader's subject", () => {
     expect(userPrincipal(PRICE_WIF, USER)).toBe(`${POOL}/${USER}`);
     // "price-reader" is not an app ID, so no user's identity can be it.
     expect(userPrincipal(PRICE_WIF, "price-reader")).toBeUndefined();
-    expect(priceReaderPrincipal(undefined)).toBeUndefined();
   });
 
   it("mints the price reader's token with its own subject and the narrowest Catalog scope", async () => {
