@@ -143,11 +143,12 @@ export function vertexPlugin(env: GoogleFederationEnv, fetcher: typeof fetch = f
       recommendedForFriends: false,
       steps: [
         "A Google Cloud project with billing, and the Vertex AI API enabled (Google's pages now also call it “Gemini Enterprise Agent Platform”). For Claude: its Model Garden card → Enable.",
+        "Enabling Claude asks Anthropic's use-case form (business name, business domain, use case). This is expected and is filled once per billing account. An individual may enter their own name, their own site or none, and a plain personal use case.",
         "Type your project ID and tap <strong>Connect Google Vertex AI</strong>.",
         "Run the one-line Cloud Shell command shown, which makes a role that can only call models. If you cannot create custom roles, use Google's <strong>Vertex AI User</strong> role (<code>roles/aiplatform.user</code>) instead.",
         "In IAM → Grant access, paste your own identity shown below (copy button), pick that role and Save. It is yours alone, so no other user of this app can use your project. No key file is made.",
       ],
-      checkedOn: "2026-11-25",
+      checkedOn: "2026-11-26",
       pages: [
         { label: "Use Claude on Vertex AI", href: "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/use-claude" },
         { label: "Vertex AI access control", href: "https://docs.cloud.google.com/vertex-ai/docs/general/access-control" },

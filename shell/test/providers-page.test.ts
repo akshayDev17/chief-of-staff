@@ -59,7 +59,7 @@ describe("Models › Setup › Providers", () => {
   it("offers one Connect button per plug-in, with each guide's checked-on date and vendor pages, and no table", async () => {
     const page = await text(await open(world()));
     for (const name of ["Connect Amazon Bedrock", "Connect Microsoft Foundry", "Connect Google Vertex AI"]) expect(page).toContain(name);
-    expect(page).toContain("Guide checked on 2026&#8209;11&#8209;25 against the vendor's own pages");
+    expect(page).toContain("Guide checked on 2026&#8209;11&#8209;26 against the vendor's own pages");
     expect(page).toContain('href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html"');
     expect(page).toContain('name="accountId"');
     expect(page).toContain('pattern="\\d{12}"');
