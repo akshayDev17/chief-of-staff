@@ -78,10 +78,18 @@ jobs:
           creds="$(aws sts assume-role-with-web-identity --role-arn "$PUBLISH_ROLE_ARN" \
             --role-session-name "bedrock-template-${GITHUB_RUN_ID}" --web-identity-token "$token" \
             --duration-seconds 900 --query Credentials --output json)"
+          # Mask every value before it reaches GITHUB_ENV, so the env listing
+          # of later steps shows *** and the credentials never print in the log.
+          key_id="$(node -p 'JSON.parse(process.argv[1]).AccessKeyId' "$creds")"
+          secret="$(node -p 'JSON.parse(process.argv[1]).SecretAccessKey' "$creds")"
+          session="$(node -p 'JSON.parse(process.argv[1]).SessionToken' "$creds")"
+          echo "::add-mask::${key_id}"
+          echo "::add-mask::${secret}"
+          echo "::add-mask::${session}"
           {
-            echo "AWS_ACCESS_KEY_ID=$(node -p 'JSON.parse(process.argv[1]).AccessKeyId' "$creds")"
-            echo "AWS_SECRET_ACCESS_KEY=$(node -p 'JSON.parse(process.argv[1]).SecretAccessKey' "$creds")"
-            echo "AWS_SESSION_TOKEN=$(node -p 'JSON.parse(process.argv[1]).SessionToken' "$creds")"
+            echo "AWS_ACCESS_KEY_ID=${key_id}"
+            echo "AWS_SECRET_ACCESS_KEY=${secret}"
+            echo "AWS_SESSION_TOKEN=${session}"
           } >> "$GITHUB_ENV"
 
       - name: Publish the version, never over a published one
