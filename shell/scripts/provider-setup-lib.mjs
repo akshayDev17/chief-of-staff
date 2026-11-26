@@ -45,7 +45,11 @@ const REPO = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 const BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 
 // Inputs (none secret): APP_ORIGIN, AWS_ACCOUNT_ID, GOOGLE_PROJECT_ID,
-// GOOGLE_PROJECT_NUMBER, GITHUB_REPOSITORY, BEDROCK_TEMPLATE_BUCKET.
+// GOOGLE_PROJECT_NUMBER, GITHUB_REPOSITORY, GITHUB_OWNER_ID,
+// GITHUB_REPOSITORY_ID, BEDROCK_TEMPLATE_BUCKET. The two IDs are the numbers
+// in `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`'s
+// sub_claim_prefix, repo:<owner>@<owner_id>/<repo>@<repo_id>: the repository
+// uses GitHub's immutable OIDC subject, so its tokens carry them.
 export function readValueInputs(env) {
   const checks = [
     ["APP_ORIGIN", ORIGIN, "https://<host>, no path"],
@@ -53,6 +57,8 @@ export function readValueInputs(env) {
     ["GOOGLE_PROJECT_ID", PROJECT, "the owner's project ID"],
     ["GOOGLE_PROJECT_NUMBER", NUMBER, "the project's number"],
     ["GITHUB_REPOSITORY", REPO, "<owner>/<repo>"],
+    ["GITHUB_OWNER_ID", NUMBER, "the owner's numeric GitHub ID"],
+    ["GITHUB_REPOSITORY_ID", NUMBER, "the repository's numeric GitHub ID"],
     ["BEDROCK_TEMPLATE_BUCKET", BUCKET, "an S3 bucket name"],
   ];
   const problems = [];
@@ -69,6 +75,8 @@ export function readValueInputs(env) {
 
 export function setupValues(i) {
   const issuer = `${i.APP_ORIGIN}${ISSUER_PATH}`;
+  const [repoOwner, repoName] = i.GITHUB_REPOSITORY.split("/");
+  const githubSubjectPrefix = `repo:${repoOwner}@${i.GITHUB_OWNER_ID}/${repoName}@${i.GITHUB_REPOSITORY_ID}`;
   const issuerHostPath = issuer.replace(/^https:\/\//, "");
   const appRoleArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:role/${APP_ROLE_NAME}`;
   const oidcProviderArn = `arn:aws:iam::${i.AWS_ACCOUNT_ID}:oidc-provider/${issuerHostPath}`;
@@ -122,7 +130,7 @@ export function setupValues(i) {
             Condition: {
               StringEquals: {
                 "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                "token.actions.githubusercontent.com:sub": `repo:${i.GITHUB_REPOSITORY}:ref:refs/heads/main`,
+                "token.actions.githubusercontent.com:sub": `${githubSubjectPrefix}:ref:refs/heads/main`,
               },
             },
           },
