@@ -210,6 +210,24 @@ describe("Add a model: picking", () => {
     expect(page).toContain("bedrock replied: 403 · AccessDeniedException · “not authorized to invoke”");
     expect(await readUserModels(env.DB, userId)).toEqual([]);
   });
+
+  it("reads the stack's template version again before saying why a test call failed, so a stack just updated counts as updated", async () => {
+    await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at, template_version) VALUES (?, 'bedrock', 'passed', ?, '1.0.0')").bind(userId, NOW.toISOString()).run();
+    plugin.connect.classify = (_f, _c, setupVersion) => ({ reason: "not_allowed_yet", fix: `classified on template ${setupVersion}`, links: [] });
+    const stack = { version: "1.1.0" as string | Error };
+    plugin.connect.readSetupVersion = async () => {
+      if (stack.version instanceof Error) throw stack.version;
+      return stack.version;
+    };
+    const failed = { status: 403, body: {}, error: { name: "AccessDeniedException", message: "is not available for this account" } };
+    plugin.replies.push(failed);
+    expect(await (await pick(plugins, "bedrock", { model: "test-sonnet" })).text()).toContain("classified on template 1.1.0");
+    expect(await env.DB.prepare("SELECT template_version FROM provider_checks WHERE user_id = ?").bind(userId).first("template_version")).toBe("1.1.0");
+    // A read that fails keeps the version last read.
+    stack.version = new Error("DescribeStacks refused");
+    plugin.replies.push(failed);
+    expect(await (await pick(plugins, "bedrock", { model: "test-sonnet" })).text()).toContain("classified on template 1.1.0");
+  });
 });
 
 describe("Add a model: each user's own", () => {

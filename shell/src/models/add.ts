@@ -24,7 +24,7 @@ import { lookupTier } from "../prices/lookup";
 import type { Tier } from "../prices/tiers";
 import { currentSnapshot } from "../prices/store";
 import type { Provider, SourceId } from "../prices/types";
-import { readCheck } from "../providers/check";
+import { readCheck, refreshSetupVersion } from "../providers/check";
 import { readConnection } from "../proxy/connections";
 import type { Link, PlainReason, PluginRegistry, ProviderPlugin, Usage } from "../proxy/plugin";
 import { listPrices, sendTestCall } from "../proxy/proxy";
@@ -297,7 +297,11 @@ export async function addModel(
   }
   if (outcome.kind === "provider_error" && outcome.failure) {
     const { failure } = outcome;
-    const plain = plugin.connect.classify(failure, await readConnection(db, userId, provider));
+    // The stack's template version read now, so a stack just updated is
+    // known as updated (Bedrock).
+    const connection = await readConnection(db, userId, provider);
+    const setupVersion = connection ? await refreshSetupVersion(db, plugin, userId, connection, await readCheck(db, userId, provider)) : undefined;
+    const plain = plugin.connect.classify(failure, connection, setupVersion);
     return refuse(plain.reason, {
       ...at,
       reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
@@ -316,7 +320,7 @@ export async function addModel(
     case "credential_failed":
       if (outcome.missing) return refuse("app_not_configured", { ...at, note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` });
       if (outcome.failure) {
-        const plain = plugin.connect.classify(outcome.failure, await readConnection(db, userId, provider));
+        const plain = plugin.connect.classify(outcome.failure, await readConnection(db, userId, provider), (await readCheck(db, userId, provider))?.templateVersion);
         return refuse(plain.reason, {
           ...at,
           reply: { status: outcome.failure.status, errorName: outcome.failure.errorName, message: outcome.failure.message },

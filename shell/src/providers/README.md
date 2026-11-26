@@ -15,7 +15,7 @@ tenant in Foundry's consent callback, reaches nothing of theirs.
 
 | Provider | Plug-in | The user types | The record holds | The credential |
 | --- | --- | --- | --- | --- |
-| Amazon Bedrock | `bedrock.ts` | the 12-digit AWS account ID | the invoke-only role's ARN, the user's external ID | the issuer's token → `AssumeRoleWithWebIdentity` (the app's role) → `AssumeRole` (the user's role, with the external ID): 1 hour |
+| Amazon Bedrock | `bedrock.ts` | the 12-digit AWS account ID | the model-caller role's ARN, the user's external ID | the issuer's token → `AssumeRoleWithWebIdentity` (the app's role) → `AssumeRole` (the user's role, with the external ID): 1 hour |
 | Microsoft Foundry | `foundry.ts` | the Foundry resource address, the Azure directory's ID (only where to sign in) | the tenant ID (the `tid` of the user's own Microsoft sign-in, its ID token verified against Microsoft's keys and its `idp` showing a personal Microsoft account; admin consent's callback is only checked against it), the endpoint | client credentials in that tenant only, proven by the app's certificate (or, with `FOUNDRY_CREDENTIAL=federated`, the issuer's token): 60 to 90 minutes |
 | Google Vertex AI | `vertex.ts` | the project ID | the project ID | the issuer's token with the user's own app ID as its subject → Google's STS (Workload Identity Federation) → that user's own federated principal's token, used directly: 1 hour |
 
@@ -183,7 +183,7 @@ values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
 `GITHUB_REPOSITORY_ID` and `BEDROCK_TEMPLATE_BUCKET` in the environment)
 prints every other value: the AWS identity provider and the
 app role's trust and permission policies (the permission policy lets it
-assume each user's invoke-only role and read Bedrock's own model list,
+assume each user's model-caller role and read Bedrock's own model list,
 `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`; a role
 made before 2026-11-27 needs that second statement added, else the daily
 refresh raises a refresh-failed alert and Bedrock offers only its built-in
@@ -231,7 +231,7 @@ reaches the Worker with the next release.
 Nothing here has run against a cloud account. M2 steps 1, 2, 10 and the
 Connect checks of step 11 (federated credentials across Entra tenants, admin
 consent from a personal Microsoft account, a Foundry role without `listkeys`,
-a console-enabled Bedrock model through the invoke-only role, Vertex AI
+a console-enabled Bedrock model through the model-caller role, Vertex AI
 billing to the user's project, the time from revoking a grant to refusal,
 and (g): Vertex AI's Claude endpoint answering a per-user federated principal
 granted the role directly; if it does not, each user gets their own service

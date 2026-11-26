@@ -48,5 +48,27 @@
       "tested": "tested live on DeepSeek R1 (us.deepseek.r1-v1:0): refused tools",
       "evidence": "Owner's account, us-east-1, 2026-11-26: us.deepseek.r1-v1:0 refused the one-tool call, ValidationException \"This model doesn't support tool use.\""
     }
-  ]
+  ],
+  "notMarketplace": {
+    "about": "Which Bedrock models are not sold through AWS Marketplace, so need no Marketplace product ID in the role template (bedrock-template/template.json, Metadata.MarketplaceProductIds). Every offered chat model of any other provider is Marketplace-sold, and test/bedrock-catalog.test.ts fails until its product ID is in the template. `providers`: ListFoundationModels' providerName, the providers Bedrock's model-access page says \"aren't sold through AWS Marketplace and don't have product keys\". `models`: model-ID prefixes of models that page says \"don't have product keys even though other models from the same provider do\".",
+    "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html",
+    "checkedOn": "2026-11-27",
+    "providers": [
+      "Amazon",
+      "DeepSeek",
+      "Google",
+      "Meta",
+      "MiniMax",
+      "Mistral AI",
+      "Moonshot AI",
+      "NVIDIA",
+      "Qwen",
+      "xAI",
+      "Z.AI"
+    ],
+    "models": [
+      "openai.gpt-oss-",
+      "writer.palmyra-vision-7b"
+    ]
+  }
 }

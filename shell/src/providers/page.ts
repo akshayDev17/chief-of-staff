@@ -284,7 +284,8 @@ label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
 .dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
 .dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; max-width: 420px; width: 100%; }
 .dialog h2 { margin-top: 0; }
-ol.small { padding-left: 20px; }
+ol.small { padding-left: 20px; overflow-wrap: anywhere; }
+.tc-fix { overflow-wrap: anywhere; }
 `;
 
 const PROVIDER_ORDER: readonly Provider[] = ["bedrock", "foundry", "vertex"];

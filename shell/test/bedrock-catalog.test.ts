@@ -18,6 +18,8 @@ import {
   type ModelOffer,
   type PricedName,
 } from "../src/providers/bedrock-catalog";
+import reviewedFile from "../src/providers/bedrock-models.json";
+import template from "../bedrock-template/template.json";
 import { refreshPrices } from "../src/prices/refresh";
 import { currentSnapshot, readStoredBedrockCatalog, recentAlerts, writeSnapshot } from "../src/prices/store";
 import type { PriceRow } from "../src/prices/types";
@@ -71,6 +73,36 @@ describe("the reviewed file against the saved listing and price list", () => {
       expect(hasThirtyMinuteCache(o.modelId), `${n.name} 30-minute cache`).toBe(n.cache30m);
       if (n.longPrompt) expect(hasLongPromptRule(o.modelId), `${n.name} long prompts`).toBe(true);
     }
+  });
+});
+
+describe("the role template's Marketplace products against the models offered", () => {
+  // A model sold through AWS Marketplace answers a role only once its terms
+  // are accepted, which the role does on the first call only for a product
+  // its template lists: a model offered later needs its product ID added and
+  // TemplateVersion raised (bedrock-template/README.md).
+  const products: Record<string, string> = template.Metadata.MarketplaceProductIds;
+  const { providers, models: exceptions } = reviewedFile.notMarketplace;
+  const providerOf = (id: string) => models.modelSummaries.find((m) => m.modelId === id)!.providerName;
+  const marketplaceSold = (id: string) => !providers.includes(providerOf(id)) && !exceptions.some((prefix) => id.startsWith(prefix));
+  const offered = Object.values(offer.byName).flatMap((o) => (o.kind === "callable" ? [o.modelId] : []));
+
+  it("lists the product ID of every offered model sold through AWS Marketplace", () => {
+    const missing = offered.filter((id) => marketplaceSold(id) && !products[id]);
+    expect(missing, "add each one's Marketplace product ID (its model card) to the template and raise TemplateVersion").toEqual([]);
+    expect(products["openai.gpt-5.5"]).toBe("prod-indw4nwkcsyua");
+  });
+
+  it("lists products only for Marketplace-sold models Bedrock lists", () => {
+    for (const id of Object.keys(products)) {
+      expect(catalog.models.map((m) => m.modelId), id).toContain(id);
+      expect(marketplaceSold(id), id).toBe(true);
+    }
+  });
+
+  it("names, as not sold through AWS Marketplace, only providers and models Bedrock lists", () => {
+    for (const p of providers) expect(models.modelSummaries.some((m) => m.providerName === p), p).toBe(true);
+    for (const prefix of exceptions) expect(catalog.models.some((m) => m.modelId.startsWith(prefix)), prefix).toBe(true);
   });
 });
 

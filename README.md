@@ -172,7 +172,7 @@ to the Worker:
 
 **The app role reads Bedrock's model list.** The permission policy step 2
 prints for the app's own AWS role has two statements: assume each user's
-invoke-only role, and `bedrock:ListFoundationModels` and
+model-caller role, and `bedrock:ListFoundationModels` and
 `bedrock:ListInferenceProfiles`, with which the daily price refresh reads
 which models Bedrock offers (Add a model lists them). A role made before
 2026-11-27 has only the first: in the AWS console open **IAM → Roles →**

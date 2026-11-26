@@ -212,7 +212,9 @@ export interface ConnectMethod {
   // The text of a passed test call's reply ("OK").
   replyText(body: unknown): string | undefined;
   // The plain reason for a failure, and its fix with the pages to open.
-  classify(failure: Failure, connection: ConnectionFields | undefined): { reason: PlainReason; fix: string; links: Link[] };
+  // `setupVersion` is the provider-side assets' version last read from the
+  // user's grant (`readSetupVersion`), where one was read.
+  classify(failure: Failure, connection: ConnectionFields | undefined, setupVersion?: string): { reason: PlainReason; fix: string; links: Link[] };
   // The version of the provider-side assets the user's grant was made with
   // (Bedrock: the template version in the user's own stack), when it can be read.
   readSetupVersion?(credential: unknown, connection: ConnectionFields): Promise<string | undefined>;

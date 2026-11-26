@@ -168,7 +168,7 @@ export async function assumeRoleWithWebIdentity(
   return readCredentials(response, "AssumeRoleWithWebIdentity");
 }
 
-// The user's invoke-only role, chained from the app's role with the user's
+// The user's model-caller role, chained from the app's role with the user's
 // external ID: at most one hour.
 export async function assumeRole(
   fetcher: typeof fetch,
