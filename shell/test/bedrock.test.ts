@@ -94,12 +94,9 @@ describe("the Bedrock role template", () => {
     ]);
   });
 
-  it("allows model invocation, accepting a model's Marketplace terms and reading its own stack, nothing else", () => {
+  it("allows model invocation and reading its own stack, nothing else", () => {
     const statements = role.Policies.flatMap((p) => p.PolicyDocument.Statement);
-    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual([
-      "aws-marketplace:Subscribe", "aws-marketplace:Unsubscribe", "aws-marketplace:ViewSubscriptions",
-      "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "cloudformation:DescribeStacks",
-    ]);
+    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual(["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "cloudformation:DescribeStacks"]);
     expect(statements.find((s) => s.Action === "cloudformation:DescribeStacks")!.Resource).toEqual({ Ref: "AWS::StackId" });
     expect(statements.every((s) => s.Effect === "Allow")).toBe(true);
   });
@@ -202,17 +199,17 @@ describe("Bedrock's plain reasons", () => {
     expect(new URL(plain.links[0]!.href).hash).toContain(`param_ExternalId=${connection.externalId}`);
   });
 
-  it("tells a 1.0.0 stack missing a Marketplace agreement to update to the new template, not to create it again", () => {
-    // The live 403 of 2026-11-27, on a stack made from template 1.0.0.
+  it("tells an account with no Marketplace agreement to accept the model's terms in the Bedrock console, not to touch the stack", () => {
+    // The live 403 of 2026-11-27.
     const plain = classify({
       status: 403,
       errorName: "AccessDeniedException",
       message: "anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock. For additional access options, contact AWS Sales",
     });
-    expect(plain.reason).toBe("no_permission");
-    expect(plain.fix).toBe(`Update the “${STACK_NAME}” stack to the new template, so its role can accept this model's AWS Marketplace terms on its first call: in AWS CloudFormation, select the stack, choose Update, then Replace existing template with this Amazon S3 URL: ${TEMPLATE_URL}. Then try again. If the stack is already updated, check that the AWS account has a payment method for Marketplace purchases.`);
-    expect(plain.fix).not.toMatch(/create the stack again/i);
-    expect(plain.links).toEqual([{ label: "Open AWS CloudFormation", href: "https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks" }]);
+    expect(plain.reason).toBe("not_allowed_yet");
+    expect(plain.fix).toBe("This model is sold through AWS Marketplace: the AWS account's owner accepts its terms once in the Bedrock console, then try again.");
+    expect(plain.fix).not.toMatch(/stack/i);
+    expect(plain.links).toEqual([{ label: "Open Bedrock's model access", href: "https://console.aws.amazon.com/bedrock/home#/modelaccess" }]);
   });
 });
 
