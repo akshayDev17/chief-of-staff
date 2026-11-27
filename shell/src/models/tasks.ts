@@ -7,11 +7,14 @@
 //   changeTask(db, userId, task, main, fallback?, now)
 //   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
 //
-// Only the user's own passed models (user_models, T17) are ever offered.
-// With one passed model every task uses it. Otherwise each task gets a
-// proposal: a main model at the task's strength and a fallback at that
-// strength on another provider, each model's strength (tier) worked out from
-// its price (lookupTier, T11). No task is proposed the Strongest tier; where
+// Only the user's own passed models (user_models, T17: chosen one by one, or
+// passed in Test all models) are ever offered, each named by its provider and
+// model, so a second provider plugs in without a change here. With one passed
+// model every task uses it. Otherwise each task gets a proposal: a main model
+// at the task's strength and a fallback at that strength, another of the
+// user's models (on OpenRouter today, the one provider, a fallback is another
+// OpenRouter model), each model's strength (tier) worked out from its price
+// (tiers.ts, T11). No task is proposed the Strongest tier; where
 // the user has no model of the task's own strength, the other non-Strongest
 // tier is proposed instead. The proposal is used once the user accepts it;
 // an accepted task whose proposal has since changed (say a model at another
@@ -22,12 +25,12 @@
 //
 // `callTask` is how the app makes a task's model call: it sends it to the
 // task's main model through the proxy (`callModel`, T12), whose one fallback
-// rule hands a refusal (429, 408, 5xx, no reply), a failed credential or a
-// spent budget at the main model's provider to the task's fallback, named in
-// its ledger row.
+// rule hands a refusal (429, 408, 5xx, no reply) to the task's fallback,
+// named in its ledger row (and, for a fallback on another provider, a failed
+// credential or a spent budget at the main model's provider too).
 
-import { lookupPrice, lookupTier } from "../prices/lookup";
-import type { Tier } from "../prices/tiers";
+import { currentSnapshot, readSnapshotRows } from "../prices/store";
+import { modelTier, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import type { ModelRequest, PluginRegistry } from "../proxy/plugin";
 import { callModel, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
@@ -77,15 +80,17 @@ export interface TaskRoute {
 
 export const modelKey = (m: { provider: Provider; model: string }): string => `${m.provider}|${m.model}`;
 
+// The user's passed models with each one's tier and input price, from one
+// read of the current price snapshot.
 export async function readOffered(db: D1Database, userId: string): Promise<Offered[]> {
   const models = await readUserModels(db, userId);
-  return Promise.all(
-    models.map(async (m) => ({
-      ...m,
-      tier: await lookupTier(db, m),
-      inputUsd: (await lookupPrice(db, { provider: m.provider, model: m.model, location: m.location, tokenKind: "input" }))?.usdPerMTok,
-    })),
-  );
+  const snapshot = models.length ? await currentSnapshot(db) : undefined;
+  const rows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
+  return models.map((m) => {
+    const own = rows.filter((r) => r.provider === m.provider && r.model === m.model);
+    const inputs = own.filter((r) => r.tokenKind === "input" && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location)).map((r) => r.usdPerMTok);
+    return { ...m, tier: modelTier(m.provider, own), inputUsd: inputs.length ? Math.max(...inputs) : undefined };
+  });
 }
 
 const PREFERRED: Record<Task["tier"], readonly Tier[]> = { Smallest: ["Smallest", "Middle"], Middle: ["Middle", "Smallest"] };
@@ -102,7 +107,7 @@ function bestFor(task: Task, models: Offered[]): Offered | undefined {
 export function proposeRoute(task: Task, models: Offered[]): Route | undefined {
   const main = bestFor(task, models);
   if (!main) return undefined;
-  return { main, fallback: bestFor(task, models.filter((m) => m.provider !== main.provider)) };
+  return { main, fallback: bestFor(task, models.filter((m) => modelKey(m) !== modelKey(main))) };
 }
 
 const sameRoute = (a: Route, b: Route): boolean =>
@@ -132,7 +137,7 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
   const offered = await readOffered(db, userId);
   const byKey = new Map(offered.map((m) => [modelKey(m), m]));
   const { results } = await db
-    .prepare(`SELECT ${CHOICE_COLUMNS} FROM task_models WHERE user_id = ?`)
+    .prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ?`)
     .bind(userId)
     .all<ChoiceRecord>();
   const saved = new Map(results.map((r) => [r.task, r]));
@@ -154,14 +159,14 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
 export async function routeTask(db: D1Database, userId: string, task: string): Promise<Route | undefined> {
   const models = await readUserModels(db, userId);
   if (models.length === 1) return { main: models[0]! };
-  const r = await db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_models WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
+  const r = await db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
   return r ? savedRoute(r, new Map(models.map((m) => [modelKey(m), m]))) : undefined;
 }
 
 function prepareChoiceWrite(db: D1Database, userId: string, task: string, route: Route, setHow: "accepted" | "changed", now: Date): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO task_models (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at)
+      `INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
        ON CONFLICT (user_id, task) DO UPDATE SET main_provider = excluded.main_provider, main_model = excluded.main_model,
          fallback_provider = excluded.fallback_provider, fallback_model = excluded.fallback_model, set_how = excluded.set_how, set_at = excluded.set_at`,
@@ -178,10 +183,10 @@ export async function acceptProposals(db: D1Database, userId: string, now: Date)
   return pending.length;
 }
 
-export type ChangeProblem = "no_such_task" | "not_your_model" | "same_provider";
+export type ChangeProblem = "no_such_task" | "not_your_model" | "same_model";
 
-// Sets one task to models the user chose, each one of their passed models;
-// the fallback, if any, on another provider.
+// Sets one task to models the user chose, each one of their passed models
+// named by provider and model; the fallback, if any, another model.
 export async function changeTask(
   db: D1Database,
   userId: string,
@@ -196,7 +201,7 @@ export async function changeTask(
   const mainModel = byKey.get(main);
   const fallbackModel = fallback ? byKey.get(fallback) : undefined;
   if (!mainModel || (fallback && !fallbackModel)) return "not_your_model";
-  if (fallbackModel && fallbackModel.provider === mainModel.provider) return "same_provider";
+  if (fallbackModel && modelKey(fallbackModel) === modelKey(mainModel)) return "same_model";
   await prepareChoiceWrite(db, userId, task, { main: mainModel, fallback: fallbackModel }, "changed", now).run();
   return undefined;
 }
@@ -222,7 +227,6 @@ const choiceOf = (m: Offered, call: TaskCall): ModelChoice => ({
   provider: m.provider,
   model: m.model,
   location: m.location,
-  deployment: m.deployment,
   request: call.request(m),
 });
 

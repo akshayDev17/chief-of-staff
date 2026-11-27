@@ -15,6 +15,12 @@ await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 // Each test starts from empty tables, rows that point at users first.
 beforeEach(async () => {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM model_tests"),
+    env.DB.prepare("DELETE FROM model_test_runs"),
+    env.DB.prepare("DELETE FROM provider_model_lists"),
+    env.DB.prepare("DELETE FROM task_routes"),
+    env.DB.prepare("DELETE FROM model_price_rows"),
+    env.DB.prepare("DELETE FROM openrouter_catalogs"),
     env.DB.prepare("DELETE FROM price_rows"),
     env.DB.prepare("DELETE FROM price_snapshots"),
     env.DB.prepare("DELETE FROM price_alerts"),

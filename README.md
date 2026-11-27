@@ -16,16 +16,16 @@ file and version, so a component's CI job sees only its own changes:
 - `shell/`: the TypeScript Cloudflare Worker at `/chief-of-staff` (see
   "Cloudflare Access" below), with `GET /chief-of-staff/health`, the
   price table (see `shell/prices/README.md`), the model proxy with its
-  usage ledger, per-provider budgets and per-user vault (see
-  `shell/src/proxy/README.md`), and "Connect <Provider>" for Bedrock, Foundry
-  and Vertex AI with the app's own OpenID Connect issuer (see
-  `shell/src/providers/README.md`), with each provider's model list on its
-  Connect screen, and the model for each task (see `shell/src/models/README.md`). D1 migrations are in `shell/migrations/`. Managed with
+  usage ledger, the monthly budget and the per-user vault (see
+  `shell/src/proxy/README.md`), and "Connect OpenRouter", the one provider:
+  OpenRouter's own OAuth PKCE consent page issues the app a key tied to the
+  user's own OpenRouter account, which goes straight into that user's vault
+  (see `shell/src/providers/README.md`), with OpenRouter's model list on its
+  Connect screen, and the model for each task (see `shell/src/models/README.md`).
+  The app's own OpenID Connect issuer stays, used by no model provider today
+  and kept for the planned Connect Anthropic. D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
-- `shell/bedrock-template/`: the CloudFormation template a user's "Connect
-  Amazon Bedrock" link opens, its own release unit with its own version and
-  publish workflow (see `shell/bedrock-template/README.md`).
 - `testdata/persona/`: Morgan Sample, a made-up test persona with invented
   facts and a fake resume. The repository holds nothing about any real user.
 
@@ -89,8 +89,11 @@ design-v3 section 10.3). Two parts:
   Anything else, including a Worker without its configuration, gets a bare
   403. The one exception is the app's OpenID Connect issuer: `GET` on
   exactly `/chief-of-staff/oidc/.well-known/openid-configuration` and
-  `/chief-of-staff/oidc/jwks.json` is served without a token, because AWS,
-  Google and Microsoft fetch them (`shell/src/providers/README.md`).
+  `/chief-of-staff/oidc/jwks.json` is served without a token, because the
+  parties that trust the issuer fetch them. No model provider reads them
+  today (Bedrock, Vertex AI and Foundry did, until they were removed on
+  2026-11-27); the issuer is kept for the planned Connect Anthropic, which
+  authenticates with it through workload identity federation.
   Configuration is two Worker variables set at deploy from the `production`
   environment: `ACCESS_TEAM_DOMAIN` (`<team>.cloudflareaccess.com`, the bare host the
   tool writes, or the same with `https://`)
@@ -115,11 +118,7 @@ push to `main` that touches `shell/`, it runs in the GitHub environment
 `production`, where the `portfolio-app` tool (above) puts the secrets
 `CLOUDFLARE_API_TOKEN` (the narrow deploy token, no Access permission) and
 `CLOUDFLARE_ACCOUNT_ID` and the variables `ACCESS_AUD` and
-`ACCESS_TEAM_DOMAIN`, and where the owner adds the provider plug-ins'
-variables `AWS_APP_ROLE_ARN`, `AWS_REGION`, `BEDROCK_TEMPLATE_URL`,
-`ENTRA_CLIENT_ID`, `ENTRA_CERT_THUMBPRINT`, `FOUNDRY_CREDENTIAL` and
-`GOOGLE_WIF_PROVIDER` as environment variables (`shell/src/providers/README.md`,
-"What the owner sets up"), and:
+`ACCESS_TEAM_DOMAIN`, and:
 
 1. runs `make check test` in `shell/`, which applies every migration, in
    order, to a fresh local D1 holding only the made-up persona
@@ -137,53 +136,41 @@ variables `AWS_APP_ROLE_ARN`, `AWS_REGION`, `BEDROCK_TEMPLATE_URL`,
    is rolled back by D1 and stops the release, so the Worker is not deployed;
 5. deploys the Worker, with its route, as
    `wrangler deploy --tag shell-v<version>-<run>` (`shell/scripts/release-deploy.sh`),
-   passing `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and each provider variable set
-   in that environment as variables alongside the `APP_ORIGIN` in
-   `shell/wrangler.jsonc`; a provider variable not set there is left out and
-   never stops the release. A deploy keeps the Worker's secrets but replaces
+   passing `ACCESS_AUD` and `ACCESS_TEAM_DOMAIN` as variables alongside the
+   `APP_ORIGIN` in `shell/wrangler.jsonc`. A deploy keeps the Worker's secrets but replaces
    its variables, so a variable set only in the Cloudflare dashboard is gone
    after the next release: set them in the `production` environment;
 6. creates a GitHub release with that tag naming the migrations applied and
    the restore bookmark.
 
-**Setting the provider variables.** The seven values the provider plug-ins
-read are not entered anywhere in the app: no setup page has an input for
-them. Each goes in the same place as `ACCESS_AUD`, and the release carries it
-to the Worker:
+**No provider variables.** OpenRouter needs no GitHub variable or secret:
+PKCE needs no client secret, the callback is built from `APP_ORIGIN`, and the
+app's name is fixed in code. The seven variables the removed Bedrock, Foundry
+and Vertex AI plug-ins read are no longer read.
 
-1. On GitHub, open the repository's **Settings → Environments → production**.
-2. Under **Environment variables**, choose **Add environment variable** (not
-   a secret: none of these is secret).
-3. Enter the name exactly as below and the value the named step printed, and
-   save. Repeat for each value you have; leave out the ones you do not.
-4. Push or merge a change under `shell/` to `main`: the next release deploys
-   every variable set there. One set only in the Cloudflare dashboard is
-   wiped by that release.
+**The Worker's secrets** are stored with `npx wrangler secret put` in
+`shell/`, never in the repository or the `production` environment, and a
+release keeps them:
 
-| Name | Where its value comes from (`shell/src/providers/README.md`, "What the owner sets up") | Needed |
-| --- | --- | --- |
-| `AWS_APP_ROLE_ARN` | `node scripts/provider-setup.mjs values`, step 2 (the app role you create) | required for Bedrock |
-| `AWS_REGION` | the same step 2 (`us-east-1`) | optional; the Worker uses `us-east-1` without it |
-| `BEDROCK_TEMPLATE_URL` | the run summary of the template's first publish (`.github/workflows/release-bedrock-template.yml`) | required for Bedrock: no Connect link without it |
-| `GOOGLE_WIF_PROVIDER` | `node scripts/provider-setup.mjs values`, step 3 (the pool provider's full name) | required for Vertex AI and for the price table's Vertex AI prices (no Google API key is used) |
-| `ENTRA_CLIENT_ID` | the Entra registration of step 4: its Application (client) ID | required for Foundry |
-| `ENTRA_CERT_THUMBPRINT` | `node scripts/provider-setup.mjs keys <dir>` | required for Foundry with `certificate`; not read with `federated` |
-| `FOUNDRY_CREDENTIAL` | step 4: `certificate`, or `federated` only once M2 step 11.1 passes | optional; `certificate` without it |
+- `VAULT_KEY`, the vault key (32 random bytes, base64), which wraps every
+  user's own vault key. Set it once, before anyone uses Connect OpenRouter:
 
-**The app role reads Bedrock's model list.** The permission policy step 2
-prints for the app's own AWS role has two statements: assume each user's
-model-caller role, and `bedrock:ListFoundationModels` and
-`bedrock:ListInferenceProfiles`, with which the daily price refresh reads
-which models Bedrock offers (the Bedrock Connect screen's model list shows
-them, and its Refresh model list reads them again on demand). A role made before
-2026-11-27 has only the first: in the AWS console open **IAM → Roles →**
-`chief-of-staff-app` **→ Permissions**, edit its policy and replace it with the one
-step 2 prints now. Until then the refresh raises a refresh-failed alert on
-Admin · Price table and Bedrock offers only its built-in models. The
-friends' CloudFormation template does not change.
+  ```sh
+  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" | npx wrangler secret put VAULT_KEY
+  ```
 
-The secrets `ISSUER_KEYS` and `ENTRA_CERT_KEY` are stored with
-`npx wrangler secret put` instead (the same section), which a release keeps.
+  Without it, Connect OpenRouter says the app's own side is not set up
+  (missing VAULT_KEY). Never rotate it casually: it unwraps every user's
+  vault key.
+- `ISSUER_KEYS`, the app's OpenID Connect issuer's signing key, kept for the
+  planned Connect Anthropic. It is made and rotated with
+  `node scripts/issuer-keys.mjs keys|rotate` in `shell/`
+  (`shell/src/providers/README.md`).
+
+`ENTRA_CERT_KEY` is no longer read.
+
+After the release deploys, Admin · Price table fills at the next 06:00 UTC
+refresh, or at once with Refresh model list on the Connect OpenRouter screen.
 
 **D1 migrations** are numbered `.sql` files in `shell/migrations/`, forward
 only, applied by that pipeline and never by hand. **Every schema change takes

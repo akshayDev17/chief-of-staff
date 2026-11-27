@@ -1,79 +1,56 @@
-// A fetch that answers the vendors' price-source URLs from the saved
-// responses in fixtures/, so a refresh runs without the network. Google's
-// STS answers each subject token with that subject's own federated token, and
-// the Cloud Billing Catalog answers only the price reader's token with the
-// app's own project as quota project, as the owner's T10 grant allows. AWS's
-// STS answers the app's own role's web-identity exchange, and Bedrock's List
-// calls answer from the owner's saved us-east-1 listing (T17).
-import type { GoogleFederationEnv } from "../src/google-federation";
-import type { BedrockEnv } from "../src/providers/bedrock";
-import azure from "./fixtures/azure-retail-eastus2.json";
-import awsBedrock from "./fixtures/aws-AmazonBedrock-us-east-1.json";
-import awsFoundation from "./fixtures/aws-AmazonBedrockFoundationModels-us-east-1.json";
-import bedrockModels from "./fixtures/bedrock-foundation-models-us-east-1.json";
-import bedrockProfiles from "./fixtures/bedrock-inference-profiles-us-east-1.json";
-import google from "./fixtures/google-catalog-vertex.json";
-import { APP_ORIGIN, decodeJwt, issuerKey, issuerKeys } from "./issuer-fixture";
+// A fetch that answers OpenRouter's addresses with no network: its public
+// model list from the saved 2026-11-27 entries in fixtures/, the per-account
+// list, the PKCE code exchange and Chat Completions, each overridable. Every
+// request it saw is kept, so a test can check what was sent.
+import models from "./fixtures/openrouter-models.json";
 
-export type Overrides = Partial<Record<"azure" | "aws" | "google" | "sts" | "bedrockList", () => Response>>;
-
-// The app's own project number, which holds the pool.
-export const APP_PROJECT_NUMBER = "123456789";
-export const PRICE_WIF = `//iam.googleapis.com/projects/${APP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/chief-of-staff/providers/chief-of-staff-worker`;
-
-let keys: Promise<string> | undefined;
-// The app's Google identity as T10 sets it, with a test-only issuer key.
-export async function googleEnv(): Promise<GoogleFederationEnv> {
-  keys ??= issuerKey("price-k1").then((k) => issuerKeys("price-k1", [k]));
-  return { APP_ORIGIN, ISSUER_KEYS: await keys, GOOGLE_WIF_PROVIDER: PRICE_WIF };
+export interface Sent {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: unknown;
 }
 
-// The app's own AWS role as T10 sets it, with the same test-only issuer key.
-export async function awsEnv(): Promise<BedrockEnv> {
-  const { APP_ORIGIN: origin, ISSUER_KEYS } = await googleEnv();
-  return { APP_ORIGIN: origin, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", AWS_REGION: "us-east-1" };
-}
+export type Overrides = Partial<Record<"models" | "userModels" | "keys" | "chat", (sent: Sent) => Response | Promise<Response>>>;
 
-const awsCredentials = `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
-<AccessKeyId>ASIAAPP</AccessKeyId><SecretAccessKey>app-secret</SecretAccessKey><SessionToken>app-session</SessionToken><Expiration>2026-11-24T07:00:00Z</Expiration>
-</Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`;
+export const MODELS = models;
+export const ISSUED_KEY = "test-issued-openrouter-key-not-real";
 
-const ok = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-const denied = () =>
-  Response.json({ error: { code: 403, message: "The caller does not have permission", status: "PERMISSION_DENIED" } }, { status: 403 });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-export function fakeFetch(overrides: Overrides = {}): typeof fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+export const chatReply = (extra: Record<string, unknown> = {}, usage: Record<string, unknown> = {}) =>
+  json({
+    id: "gen-test-0001",
+    model: "openai/gpt-6-luna",
+    choices: [{ message: { role: "assistant", content: "OK" } }],
+    usage: { prompt_tokens: 12, completion_tokens: 2, total_tokens: 14, prompt_tokens_details: { cached_tokens: 0 }, cost: 0.0000022, ...usage },
+    ...extra,
+  });
+
+export function fakeFetch(overrides: Overrides = {}): typeof fetch & { sent: Sent[] } {
+  const sent: Sent[] = [];
+  const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    const url = request.url;
-    if (url.startsWith("https://prices.azure.com/")) return overrides.azure?.() ?? ok(azure);
-    if (url === "https://sts.googleapis.com/v1/token") {
-      if (overrides.sts) return overrides.sts();
-      const { subjectToken } = (await request.json()) as { subjectToken: string };
-      return ok({ access_token: `federated-token-for-${decodeJwt(subjectToken).claims.sub}`, token_type: "Bearer", expires_in: 3599 });
+    const text = await request.text();
+    let body: unknown = text;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      // not JSON
     }
-    if (url.startsWith("https://cloudbilling.googleapis.com/")) {
-      if (overrides.google) return overrides.google();
-      const authorized =
-        request.headers.get("authorization") === "Bearer federated-token-for-price-reader" &&
-        request.headers.get("x-goog-user-project") === APP_PROJECT_NUMBER &&
-        !new URL(url).searchParams.has("key");
-      return authorized ? ok(google) : denied();
+    const s: Sent = { url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body };
+    sent.push(s);
+    const url = new URL(request.url);
+    if (url.href === "https://openrouter.ai/api/v1/models") return overrides.models ? overrides.models(s) : json(models);
+    if (url.pathname === "/api/v1/models/user") {
+      if (overrides.userModels) return overrides.userModels(s);
+      if (s.headers.authorization !== `Bearer ${ISSUED_KEY}`) return json({ error: { code: 401, message: "User not found." } }, 401);
+      return json({ data: models.data.filter((m) => m.id !== "anthropic/claude-sonnet-5.5") });
     }
-    if (url === "https://sts.us-east-1.amazonaws.com/") return new Response(awsCredentials, { headers: { "content-type": "text/xml" } });
-    if (url.startsWith("https://bedrock.us-east-1.amazonaws.com/")) {
-      if (overrides.bedrockList) return overrides.bedrockList();
-      // Signed by the app's own role.
-      if (!request.headers.get("authorization")?.includes("Credential=ASIAAPP/")) return new Response("{}", { status: 403 });
-      return ok(new URL(url).pathname === "/foundation-models" ? bedrockModels : bedrockProfiles);
-    }
-    if (url.startsWith("https://pricing.us-east-1.amazonaws.com/")) {
-      if (overrides.aws) return overrides.aws();
-      const offer = url.includes("AmazonBedrockFoundationModels") ? "AmazonBedrockFoundationModels" : "AmazonBedrock";
-      if (url.endsWith("region_index.json"))
-        return ok({ regions: { "us-east-1": { regionCode: "us-east-1", currentVersionUrl: `/offers/v1.0/aws/${offer}/20261123/us-east-1/index.json` } } });
-      return ok(offer === "AmazonBedrock" ? awsBedrock : awsFoundation);
-    }
+    if (url.href === "https://openrouter.ai/api/v1/auth/keys") return overrides.keys ? overrides.keys(s) : json({ key: ISSUED_KEY, user_id: "user_test" });
+    if (url.href === "https://openrouter.ai/api/v1/chat/completions") return overrides.chat ? overrides.chat(s) : chatReply({ model: (body as { model?: string }).model });
     return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+  }) as typeof fetch & { sent: Sent[] };
+  f.sent = sent;
+  return f;
 }

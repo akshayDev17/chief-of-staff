@@ -72,15 +72,15 @@ describe("under /chief-of-staff", () => {
   it("leads the old Add a model page to the providers' Connect screens, and nothing else under it", async () => {
     for (const [path, to] of [
       ["/chief-of-staff/models/setup/add", "/chief-of-staff/models/setup/providers"],
-      ["/chief-of-staff/models/setup/add?provider=foundry", "/chief-of-staff/models/setup/providers?provider=foundry"],
+      ["/chief-of-staff/models/setup/add?provider=openrouter", "/chief-of-staff/models/setup/providers?provider=openrouter"],
     ]) {
       const response = await signedIn(path!);
       expect(response.status, path).toBe(303);
       expect(new URL(response.headers.get("location")!).pathname + new URL(response.headers.get("location")!).search, path).toBe(to);
     }
-    const form = { method: "POST", body: new URLSearchParams({ model: "Nova 2.0 Lite" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } };
-    expect((await signedIn("/chief-of-staff/models/setup/add/vertex/pick")).status).toBe(404);
-    expect((await signedIn("/chief-of-staff/models/setup/add/bedrock/pick", form)).status).toBe(404);
+    const form = { method: "POST", body: new URLSearchParams({ model: "openai/gpt-6-luna" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } };
+    expect((await signedIn("/chief-of-staff/models/setup/add/openrouter/pick")).status).toBe(404);
+    expect((await signedIn("/chief-of-staff/models/setup/add/openrouter/choose", form)).status).toBe(404);
     expect((await signedIn("/chief-of-staff/models/setup/add", form)).status).toBe(404);
   });
 

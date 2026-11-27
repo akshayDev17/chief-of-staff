@@ -1,26 +1,21 @@
-// The daily refresh: read every source, merge, and store a dated snapshot
-// beside the previous ones. Rules (design-v3 1.3):
+// The daily refresh, and Refresh model list: read the price source, merge,
+// and store a dated snapshot beside the previous ones. Rules (design-v3 1.3):
 // - A source that fails keeps its rows from the last snapshot, with their own
 //   date read, marked stale; nothing is guessed in their place, and a
-//   refresh-failed alert is raised.
-// - A source that answers stores what the vendor lists, however many rows: a
-//   model no longer listed has no price yet. Each source's result counts the
-//   rows added and dropped against the previous snapshot.
-// - Two sources (or two listings in one source) giving one row different
-//   prices keep the higher price, flagged, with a sources-disagree alert.
-// - Bedrock's own model list (T17, src/providers/bedrock-catalog.ts) is read
-//   with the prices and stored with the snapshot. A read that fails keeps the
-//   previous list, with its own read time, and raises a refresh-failed alert.
+//   refresh-failed alert is raised. OpenRouter's model list read with them
+//   is kept from the last snapshot too.
+// - A source that answers stores what it lists, however many rows: a model no
+//   longer listed has no price yet. Each source's result counts the rows
+//   added and dropped against the previous snapshot.
+// - Two listings giving one row different prices keep the higher price,
+//   flagged, with a sources-disagree alert.
+//
+// The one source is OpenRouter's models API (src/prices/openrouter.ts), which
+// also gives the model list each user chooses from.
 
-import { regionOf, type BedrockEnv } from "../providers/bedrock";
-import { readBedrockCatalog } from "../providers/bedrock-catalog";
-import { readAws } from "./aws";
-import { readAzure } from "./azure";
-import type { GoogleFederationEnv } from "../google-federation";
-import { readGoogle } from "./google";
-import { rowsFromMaintainerEntries, type MaintainerEntry } from "./maintainer";
-import { addAlert, currentSnapshot, readSnapshotRows, readStoredBedrockCatalog, writeSnapshot } from "./store";
-import { rowKey, type PriceRow, type SourceId, type SourceRead, type SourceResult } from "./types";
+import { readOpenRouter } from "./openrouter";
+import { addAlert, currentSnapshot, readSnapshotRows, readStoredCatalog, writeSnapshot } from "./store";
+import { rowKey, type PriceRow, type SourceId, type SourceResult } from "./types";
 
 export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: string[] } {
   const byKey = new Map<string, PriceRow>();
@@ -51,24 +46,13 @@ export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: 
 export interface RefreshInput {
   db: D1Database;
   fetcher: typeof fetch;
-  // The app's own Google identity, for the price reader's token (src/prices/google.ts).
-  google: GoogleFederationEnv;
-  // The app's own AWS role, for Bedrock's model list.
-  aws: BedrockEnv;
-  maintainerEntries: MaintainerEntry[];
   now: Date;
 }
 
 export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: number; results: SourceResult[] }> {
   const { db, fetcher, now } = input;
-  const today = now.toISOString().slice(0, 10);
-  const [catalogRead, ...reads]: [Awaited<ReturnType<typeof readBedrockCatalog>>, ...SourceRead[]] = await Promise.all([
-    readBedrockCatalog(fetcher, input.aws, regionOf(input.aws), now),
-    readAzure(fetcher, today),
-    readAws(fetcher, today),
-    readGoogle(fetcher, input.google, now, today),
-  ]);
-  reads.push({ source: "maintainer-read", ok: true, rows: rowsFromMaintainerEntries(input.maintainerEntries), unmapped: 0 });
+  const { read, catalog: catalogRead } = await readOpenRouter(fetcher, now);
+  const reads = [read];
 
   const last = await currentSnapshot(db);
   const lastRows = last ? await readSnapshotRows(db, last.id) : [];
@@ -76,14 +60,14 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
 
   const rows: PriceRow[] = [];
   const outcomes: Array<Omit<SourceResult, "added" | "dropped">> = [];
-  for (const read of reads) {
-    if (read.ok) {
-      rows.push(...read.rows);
-      outcomes.push({ source: read.source, ok: true, rows: read.rows.length, unmapped: read.unmapped });
+  for (const r of reads) {
+    if (r.ok) {
+      rows.push(...r.rows);
+      outcomes.push({ source: r.source, ok: true, rows: r.rows.length, unmapped: r.unmapped });
     } else {
-      const previous = lastBySource(read.source);
-      rows.push(...previous.map((r) => ({ ...r, stale: true })));
-      outcomes.push({ source: read.source, ok: false, rows: previous.length, unmapped: 0, error: read.error });
+      const previous = lastBySource(r.source);
+      rows.push(...previous.map((p) => ({ ...p, stale: true })));
+      outcomes.push({ source: r.source, ok: false, rows: previous.length, unmapped: 0, error: r.error });
     }
   }
 
@@ -99,7 +83,7 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
     };
   });
   const failed = results.filter((r) => !r.ok);
-  const bedrockCatalog = catalogRead.ok ? catalogRead.catalog : last ? await readStoredBedrockCatalog(db, last.id) : undefined;
+  const catalog = catalogRead ?? (last ? await readStoredCatalog(db, last.id) : undefined);
   let snapshotId: number;
   try {
     snapshotId = await writeSnapshot(db, {
@@ -107,7 +91,7 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
       status: failed.length ? "partial" : "good",
       results,
       rows: merged.rows,
-      bedrockCatalog,
+      catalog,
     });
   } catch (error) {
     const detail = `could not store the snapshot, the previous one stays current: ${error instanceof Error ? error.message : String(error)}`;
@@ -115,16 +99,10 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
     await addAlert(db, now, "refresh_failed", detail);
     throw error;
   }
-  if (!catalogRead.ok) {
-    const detail =
-      `bedrock-model-list: ${catalogRead.error}. ` +
-      (bedrockCatalog ? `The list read ${bedrockCatalog.readAt} stays in use. ` : "Until the first read, Bedrock offers only the app's built-in models. ") +
-      "The app's own AWS role needs bedrock:ListFoundationModels and bedrock:ListInferenceProfiles (the owner's AWS step, shell/src/providers/README.md).";
-    console.warn(`price refresh failed: ${detail}`);
-    await addAlert(db, now, "refresh_failed", detail);
-  }
   for (const f of failed) {
-    const detail = `${f.source}: ${f.error}`;
+    const detail =
+      `${f.source}: ${f.error}. ` +
+      (catalog ? `OpenRouter's model list read ${catalog.readAt} stays in use, its prices marked stale.` : "Until the first good read, no model can be chosen.");
     console.warn(`price refresh failed: ${detail}`);
     await addAlert(db, now, "refresh_failed", detail);
   }

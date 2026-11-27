@@ -5,7 +5,7 @@
 // no default, no daily budget and no per-model budget. The user sets it by
 // accepting the suggestion or typing their own value.
 
-import { lookupPrice } from "../prices/lookup";
+import { currentSnapshot, readSnapshotRows } from "../prices/store";
 import type { Provider } from "../prices/types";
 
 export interface Budget {
@@ -79,15 +79,21 @@ export interface Suggestion {
 }
 
 // The suggestion for one provider: if that provider carried every task at
-// the given volume, on the dearest model the user picked there. Undefined
-// when no picked model there has both an input and an output price.
+// the given volume, on the dearest of `picked`: the models the user's tasks
+// use there, or, before any task has a model, every model the user picked
+// there. Undefined when none of them has both an input and an output price.
+// Prices come from one read of the current snapshot.
 export async function suggestBudget(db: D1Database, picked: PickedModel[], applicationsADay: number): Promise<Suggestion | undefined> {
+  const snapshot = picked.length ? await currentSnapshot(db) : undefined;
+  const rows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
+  const dearest = (m: PickedModel, kind: "input" | "output") =>
+    rows
+      .filter((r) => r.provider === m.provider && r.model === m.model && r.tokenKind === kind && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location))
+      .sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];
   let best: Suggestion | undefined;
   for (const m of picked) {
-    const [input, output] = await Promise.all([
-      lookupPrice(db, { ...m, tokenKind: "input" }),
-      lookupPrice(db, { ...m, tokenKind: "output" }),
-    ]);
+    const input = dearest(m, "input");
+    const output = dearest(m, "output");
     if (!input || !output) continue;
     const perApplication =
       (TOKENS_PER_APPLICATION.input * input.usdPerMTok + TOKENS_PER_APPLICATION.output * output.usdPerMTok) / 1_000_000;
@@ -99,8 +105,19 @@ export async function suggestBudget(db: D1Database, picked: PickedModel[], appli
   return best;
 }
 
-// The models this user picked at one provider (written by T17).
+// The models the suggestion is worked from at one provider: those the
+// user's tasks use there (main and fallback, task_routes), else every model
+// the user picked there (user_models, T17).
 export async function pickedModels(db: D1Database, userId: string, provider: Provider): Promise<PickedModel[]> {
+  const { results: used } = await db
+    .prepare(
+      `SELECT DISTINCT m.provider, m.model, m.location FROM user_models m JOIN task_routes t ON t.user_id = m.user_id
+         AND ((t.main_provider = m.provider AND t.main_model = m.model) OR (t.fallback_provider = m.provider AND t.fallback_model = m.model))
+       WHERE m.user_id = ? AND m.provider = ? ORDER BY m.model`,
+    )
+    .bind(userId, provider)
+    .all<PickedModel>();
+  if (used.length) return used;
   const { results } = await db
     .prepare("SELECT provider, model, location FROM user_models WHERE user_id = ? AND provider = ? ORDER BY model")
     .bind(userId, provider)

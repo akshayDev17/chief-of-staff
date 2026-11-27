@@ -3,14 +3,15 @@
 //
 // Each card suggests a monthly value with its basis, marked "estimate" with
 // its "checked on" date (the date the prices it uses were read), worked out
-// from the list price of the dearest model the user picked there and the
+// from the list price of the dearest model the user's tasks use there (or,
+// before any task has one, the dearest model the user picked there) and the
 // design's tokens per application (budgets.ts) at the volume the user plans.
 // The user accepts it with one tap or types their own; until then the card
 // says the provider's models cannot be called. The Usage page, not built
 // yet, is named but not linked.
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
-import type { Provider } from "../prices/types";
+import { isProvider, type Provider } from "../prices/types";
 import { rerunBudgetWait } from "../providers/check";
 import {
   DEFAULT_APPLICATIONS_A_DAY,
@@ -99,7 +100,7 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
 <p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers and models</a> · <strong>Budgets</strong> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
 <h2>Budgets, one per provider</h2>
-<p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st; a task's fallback on another provider carries on within that provider's own budget.</p>
+<p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st, a task's fallback model there too. The key OpenRouter issued the app also has its own credit limit, set on OpenRouter's page when you connected; OpenRouter stops the key there.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 <form class="row" method="get" action="${BUDGETS_PATH}" style="margin:8px 0">
 <label class="small" for="per-day">Applications a day you plan</label>
@@ -121,8 +122,6 @@ const CSS = `
 .big { font-size: 1.6rem; font-weight: 500; line-height: 1.1; margin: 4px 0; }
 `;
 
-const PROVIDERS: readonly Provider[] = ["bedrock", "foundry", "vertex"];
-const isProvider = (p: string): p is Provider => (PROVIDERS as readonly string[]).includes(p);
 
 // The volume the suggestion is worked at: a whole number of applications a
 // day from 1 to 100, else the default.

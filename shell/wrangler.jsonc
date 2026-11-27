@@ -11,10 +11,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": false,
-  // The app's public origin (https://host, no path; src/issuer.ts
-  // readAppOrigin): the issuer and the consent return live under
-  // <APP_ORIGIN>/chief-of-staff. Not secret, so it ships with every release;
-  // the release's --var values are added alongside it.
+  // The app's public origin (https://host, no path; src/app-config.ts
+  // readAppOrigin): OpenRouter's consent page returns to
+  // <APP_ORIGIN>/chief-of-staff, and the issuer lives there too. Not secret,
+  // so it ships with every release; the release's --var values are added
+  // alongside it.
   "vars": { "APP_ORIGIN": "https://akshayprabhakant.com" },
   // The app lives at akshayprabhakant.com/chief-of-staff (src/paths.ts). A
   // route pattern cannot hold a query, so this one pattern is the only one
@@ -36,21 +37,14 @@
       "migrations_dir": "migrations"
     }
   ],
-  // 06:00 UTC daily: refresh the price table from the vendors' price sources.
-  // 07:00 UTC Mondays: remind the maintainers to re-read the listing prices.
-  // Every minute: the provider checks whose next try is due (T16).
-  "triggers": { "crons": ["0 6 * * *", "0 7 * * 1", "* * * * *"] },
-  // A refresh reads every region's AWS price-list files; give it room.
-  "limits": { "cpu_ms": 300000 }
-  // The provider plug-ins' values are never written here
-  // (src/providers/README.md, "What the owner sets up"; the Google price
-  // reader uses the same issuer and pool, and no key): the secrets
-  // ISSUER_KEYS and ENTRA_CERT_KEY, and the variables AWS_APP_ROLE_ARN,
-  // AWS_REGION, BEDROCK_TEMPLATE_URL, ENTRA_CLIENT_ID, ENTRA_CERT_THUMBPRINT,
-  // FOUNDRY_CREDENTIAL, GOOGLE_WIF_PROVIDER, none of them secret, which the
-  // release passes from the GitHub environment `production` when set there
-  // (scripts/release-deploy.sh; APP_ORIGIN is in "vars" above).
-  // The vault key (32 random bytes, base64; src/vault.ts) goes
-  // in Secrets Store as a binding with the first ticket that stores a vault
-  // item; the three v1 provider connections need none.
+  // 06:00 UTC daily: refresh the price table and model list from
+  // OpenRouter's models API.
+  // Every minute: the provider checks whose next try is due (T16), and the
+  // queued tests of Test all models.
+  "triggers": { "crons": ["0 6 * * *", "* * * * *"] }
+  // The secrets are never written here: VAULT_KEY (32 random bytes, base64;
+  // src/vault.ts, src/providers/secrets.ts), which seals the key OpenRouter
+  // issues each user, and ISSUER_KEYS (src/issuer.ts), both stored with
+  // `npx wrangler secret put` (README "Releasing the shell"), which a release
+  // keeps.
 }

@@ -1,7 +1,11 @@
 // One price row: one provider, one model, one deployment type and region, and
 // one kind of token, in USD per million tokens (design-v3 1.3).
 
-export type Provider = "foundry" | "bedrock" | "vertex";
+export type Provider = "openrouter";
+
+export const PROVIDERS: readonly Provider[] = ["openrouter"];
+
+export const isProvider = (value: string): value is Provider => (PROVIDERS as readonly string[]).includes(value);
 
 export type TokenKind =
   | "input"
@@ -10,13 +14,10 @@ export type TokenKind =
   | "cache_write_1h"
   | "output";
 
-export type Deployment = "global" | "data-zone" | "regional" | "cross-region";
+// OpenRouter routes each call itself, so every row is `global`.
+export type Deployment = "global";
 
-export type SourceId =
-  | "azure-retail"
-  | "aws-price-list"
-  | "google-catalog"
-  | "maintainer-read";
+export type SourceId = "openrouter-models";
 
 export interface PriceRow {
   provider: Provider;
@@ -34,6 +35,8 @@ export interface PriceRow {
 }
 
 // What one source's read produced: rows, or a failure with its reason.
+// `unmapped` counts the entries the source listed that are not rows (for
+// OpenRouter, the models that are not chat models it sells).
 export type SourceRead =
   | { source: SourceId; ok: true; rows: PriceRow[]; unmapped: number }
   | { source: SourceId; ok: false; error: string };

@@ -3,7 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { DISCOVERY_PATH, ID_TOKEN_LIFETIME_S, JWKS_PATH, mintIdToken, parseIssuerKeys, readIssuer } from "../src/issuer";
 // @ts-expect-error: a plain JavaScript module run by Node.
-import { rotateIssuerKeys } from "../scripts/provider-setup-lib.mjs";
+import { rotateIssuerKeys } from "../scripts/issuer-keys-lib.mjs";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
 import { APP_ORIGIN, decodeJwt, issuerKey, issuerKeys, verifiesAgainst } from "./issuer-fixture";
 
@@ -68,11 +68,11 @@ describe("the issuer's public documents", () => {
 describe("the issuer's tokens", () => {
   it("are RS256, short-lived, with the provider's audience and subject, and verify against the published keys", async () => {
     const keys = issuerKeys("issuer-old", [oldKey]);
-    const token = await mintIdToken(await readIssuer({ APP_ORIGIN, ISSUER_KEYS: keys }), { audience: "sts.amazonaws.com", subject: "chief-of-staff:bedrock", now: NOW });
+    const token = await mintIdToken(await readIssuer({ APP_ORIGIN, ISSUER_KEYS: keys }), { audience: "https://relying-party.example", subject: "chief-of-staff:test", now: NOW });
     const { header, claims } = decodeJwt(token);
     expect(header).toEqual({ alg: "RS256", typ: "JWT", kid: "issuer-old" });
     const iat = NOW.getTime() / 1000;
-    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/chief-of-staff/oidc`, aud: "sts.amazonaws.com", sub: "chief-of-staff:bedrock", iat, nbf: iat, exp: iat + ID_TOKEN_LIFETIME_S });
+    expect(claims).toMatchObject({ iss: `${APP_ORIGIN}/chief-of-staff/oidc`, aud: "https://relying-party.example", sub: "chief-of-staff:test", iat, nbf: iat, exp: iat + ID_TOKEN_LIFETIME_S });
     expect(ID_TOKEN_LIFETIME_S).toBeLessThanOrEqual(300);
     const published = await (await anonymous(JWKS_PATH, keys)).json();
     expect(await verifiesAgainst(token, published as never)).toBe(true);

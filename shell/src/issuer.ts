@@ -1,34 +1,39 @@
-// The app's own OpenID Connect issuer (design-v3 1.4, T16). AWS, Google and
-// (if M2 shows it works across tenants) Microsoft trust it, so the app holds
-// no long-lived cloud key: the provider plug-ins mint a short ID token here and
-// trade it for that provider's own short-lived credential.
+// The app's own OpenID Connect issuer (design-v3 1.4, T16). A provider that
+// trusts it lets the app hold no long-lived key: a plug-in mints a short ID
+// token here and trades it for that provider's own short-lived credential.
+// No model provider reads it today (OpenRouter issues the app a key through
+// OAuth PKCE instead); it is kept, with its public paths and signing key, for
+// the coming "Connect Anthropic" build, which authenticates with it through
+// workload identity federation (the owner, 2026-11-27).
 //
 //   issuer URL:   <APP_ORIGIN>/chief-of-staff/oidc
 //   discovery:    <APP_ORIGIN>/chief-of-staff/oidc/.well-known/openid-configuration
 //   key set:      <APP_ORIGIN>/chief-of-staff/oidc/jwks.json
 //
 // Those two documents are the only paths served without the owner's sign-in:
-// the providers fetch them (index.ts exempts exactly these two from the
+// a relying party fetches them (index.ts exempts exactly these two from the
 // Access check; the portfolio-app tool's Bypass Access application covers
 // exactly these two, README "Cloudflare Access").
 //
-// One app-wide signing key, RS256 (the one algorithm all three accept:
-// Microsoft's federated credentials "Only issuers that provide tokens signed
-// using the RS256 algorithm are supported", AWS takes "RSA keys (RS256, RS384,
-// or RS512)", Google "RS256 or ES256"; data/cos-provider-connect/report.md,
-// read 2026-11-24). It sits in the Worker secret ISSUER_KEYS:
+// One app-wide signing key, RS256, the algorithm every workload identity
+// federation the app has met accepts (Microsoft: "Only issuers that provide
+// tokens signed using the RS256 algorithm are supported"; AWS "RSA keys
+// (RS256, RS384, or RS512)"; Google "RS256 or ES256";
+// data/cos-provider-connect/report.md, read 2026-11-24). It sits in the
+// Worker secret ISSUER_KEYS:
 //
 //   {"signing": "<kid>", "keys": [<JWK>, ...]}
 //
 // Every key in `keys` is published; only `signing` signs, and it must be a
 // private key. Rotating is one place, this secret, in three steps that keep
 // old and new public keys published together (README "Rotating the issuer
-// key"; scripts/provider-setup.mjs rotate-issuer does each step):
+// key"; scripts/issuer-keys.mjs rotate does each step):
 //   1. publish: add the new key, still signing with the old one;
-//   2. sign: once every provider has fetched the new key set, sign with the new key;
+//   2. sign: once every relying party has fetched the new key set, sign with the new key;
 //   3. retire: once every token signed with the old key has expired, drop it.
 // Tokens live 5 minutes; nothing here is cached beyond one request.
 
+import { AppNotConfigured, readAppOrigin } from "./app-config";
 import { BASE_PATH } from "./paths";
 
 export const ISSUER_PATH = `${BASE_PATH}/oidc`;
@@ -55,24 +60,7 @@ export interface Issuer {
   keys: JsonWebKey[];
 }
 
-// The app's own side of a provider (this issuer, an AWS role ARN, the Entra
-// certificate...) is not configured yet: the owner's one-time T10 steps.
-export class AppNotConfigured extends Error {
-  constructor(readonly missing: string[]) {
-    super(`not configured yet: ${missing.join(", ")}`);
-    this.name = "AppNotConfigured";
-  }
-}
-
 const RS256 = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" } as const;
-
-// The app's own address, `https://<host>` with no path: where the issuer and
-// the redirect targets live. Undefined when not set or not https.
-export function readAppOrigin(env: { APP_ORIGIN?: string }): string | undefined {
-  const origin = env.APP_ORIGIN?.trim().replace(/\/+$/, "");
-  if (!origin || !/^https:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) return undefined;
-  return origin;
-}
 
 export const issuerUrl = (appOrigin: string): string => `${appOrigin}${ISSUER_PATH}`;
 
@@ -140,7 +128,7 @@ export async function signJwt(
 }
 
 // A short ID token for one provider's token exchange, with the audience and
-// subject that provider was told to trust (scripts/provider-setup.mjs prints them).
+// subject that provider was told to trust.
 export async function mintIdToken(issuer: Issuer, claims: { audience: string; subject: string; now: Date }): Promise<string> {
   const iat = Math.floor(claims.now.getTime() / 1000);
   return signJwt(

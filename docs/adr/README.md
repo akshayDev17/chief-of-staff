@@ -1,10 +1,10 @@
 # Decision records
 
-The decision records of [design-v3](../design-v3.md), one file each, in the template of the course's `ADR_structure.md`: status, context, considered options, decision, rejected alternatives, consequences. Context, decision and consequences are the design's own wording. The considered options and rejected alternatives are taken from the design's comparison tables, and from the alternatives its text names, with the reasons it gives, in the sections each record cites; where the design compares no alternatives for a decision, the record says so and lists only those its text names.
+The decision records of [design-v3](../design-v3.md), one file each, in the template of the course's `ADR_structure.md`: status, context, considered options, decision, rejected alternatives, consequences. Context, decision and consequences are the design's own wording. The considered options and rejected alternatives are taken from the design's comparison tables, and from the alternatives its text names, with the reasons it gives, in the sections each record cites; where the design compares no alternatives for a decision, the record says so and lists only those its text names. A record replaced by a later decision keeps its file, with its status set to "Superseded by ADR-<n>" and a link to the new record; the new record says which one it supersedes.
 
 | Record | Subject | Design section |
 | --- | --- | --- |
-| [ADR-001](001-models-three-providers-registered-per-user.md) | Models: three providers, registered per user, connected with no key held, one proxy with the app's own price table | 1.9 |
+| [ADR-001](001-models-three-providers-registered-per-user.md) | Models: three providers, registered per user, connected with no key held, one proxy with the app's own price table. Superseded by ADR-018 (2026-11-27) | 1.9 (history) |
 | [ADR-002](002-adk-in-python-in-cloudflare-containers.md) | ADK in Python in Cloudflare Containers, inside a Worker shell, one `Chief` per user | 2.7 |
 | [ADR-003](003-browser-run-reads-chrome-in-a.md) | Browser Run reads; Chrome in a container acts, through NodeMaven residential proxies, each user's own sessions | 3.7 |
 | [ADR-004](004-linkedin-one-browser-per-user-fixed.md) | LinkedIn: one browser per user, fixed scripts, page budget; the user signs in, no password stored | 4.10 |
@@ -21,3 +21,4 @@ The decision records of [design-v3](../design-v3.md), one file each, in the temp
 | [ADR-015](015-keeping-each-linkedin-account-safe-signals.md) | Keeping each LinkedIn account safe: signals, stop rule, learning record | 4.3 |
 | [ADR-016](016-no-captcha-solved-in-v1.md) | No captcha solved in v1 | 3.7 |
 | [ADR-017](017-components-and-their-release-units-each.md) | Components and their release units, each stated where it is designed | 2.7 |
+| [ADR-018](018-openrouter-the-only-model-provider.md) | OpenRouter, the only model provider: Connect OpenRouter through OpenRouter's own consent page, the key in the user's vault, tokens and cost from OpenRouter's reply. Supersedes ADR-001 | 1.9 |

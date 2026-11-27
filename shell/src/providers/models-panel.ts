@@ -1,40 +1,50 @@
 // The model list on a provider's Connect screen (design-v3 1.5), shown
 // below a passed Connect, in place of the separate Add a model page.
 //
-//   modelsSection(input) -> HTML        the list, its result, Bedrock's Refresh
+//   modelsSection(input) -> HTML        the list, its result, Refresh model list, Test all models
 //
-// One dropdown lists every chat model the provider sells at a listed price
-// (models/add.ts listOffer). Each entry shows its input and output list
-// price per million tokens, where the app calls it, and its strength as a
-// coloured label worked out from the input price (prices/tiers.ts):
-// Smallest, Middle, Strongest. A native <select> cannot colour its entries,
-// so the dropdown is the ARIA "select-only combobox" pattern: a button that
-// opens a listbox of options, driven by the keyboard (arrows, Home, End,
-// type-ahead, Enter or Space to choose, Escape to close) and by touch, with
-// a plain <select> for a browser without scripts. Choosing a model runs its
-// test call once, right there (models/add.ts addModel): it passes and the
-// model is the user's for tasks, or the plain reason shows under the list.
-// Nothing is tested up front, so no Marketplace product is subscribed to
-// that the user did not choose. A model with no price yet, or one the app
-// cannot call, is listed but cannot be chosen. Friend screens say "Admin"
-// for the owner and never "deployment name" (design-v3 1.6).
+// One dropdown lists every model the provider lists (models/add.ts
+// listOffer; the owner, 2026-11-27: "i would like to list all models and then
+// choose"). Each entry shows its input and output list price per million
+// tokens and its strength as a coloured label worked out from the input price
+// (prices/tiers.ts): Smallest, Middle, Strongest. A native <select> cannot
+// colour its entries, so the dropdown is the ARIA "select-only combobox"
+// pattern: a button that opens a listbox of options, driven by the keyboard
+// (arrows, Home, End, type-ahead, Enter or Space to choose, Escape to close)
+// and by touch, with a plain <select> for a browser without scripts. Choosing
+// a model runs its test call once, right there (models/add.ts addModel): it
+// passes and the model is the user's for tasks, or the plain reason shows
+// under the list. A model the app cannot call, one the user's own account
+// leaves out, or one with no price yet is listed but cannot be chosen, and
+// says why.
+//
+// Test all models (models/test-all.ts) runs every model's test call: it shows
+// the estimate first and runs only once confirmed, then shows each model's
+// result, works now or not, with the plain reason, and the real total.
 
 import { esc, nbDate } from "../prices/page";
 import { SOURCES } from "../prices/sources";
 import type { Tier } from "../prices/tiers";
 import { PROVIDERS_PATH } from "../paths";
-import { refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
+import { blockedReason, refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
+import { CONCURRENCY, RUN_GAP_MINUTES, type TestAllPlan, type TestAllRun } from "../models/test-all";
+import { TEST_MAX_TOKENS } from "./openrouter";
 import type { ProviderPlugin } from "../proxy/plugin";
-import { accessNotes, refreshAgainFrom, type AccountCheck } from "./bedrock-account";
+
+export type TestsFilter = "all" | "works" | "fails";
 
 export interface ModelsSectionInput {
   plugin: ProviderPlugin;
   viewer: "owner" | "friend";
   rows: OfferRow[];
   outcome?: AddOutcome;
-  // Bedrock only: the last Refresh model list, and when the model list was read.
-  accountCheck?: AccountCheck;
+  // When the provider's public list was read, and the user's account's.
   catalogReadAt?: string;
+  accountReadAt?: string;
+  plan: TestAllPlan;
+  run?: TestAllRun;
+  confirmTestAll: boolean;
+  testsFilter: TestsFilter;
   formatCost: (usd: number) => string;
   now: Date;
 }
@@ -42,6 +52,7 @@ export interface ModelsSectionInput {
 const action = (provider: string, verb: string): string => `${PROVIDERS_PATH}/${provider}/${verb}`;
 const hhmm = (iso: string): string => `${iso.slice(11, 16)} UTC`;
 const slug = (model: string): string => model.replace(/[^A-Za-z0-9]+/g, "-");
+const readOn = (iso: string): string => `${hhmm(iso)} on ${nbDate(iso.slice(0, 10))}`;
 
 // Exact to the vendor's precision, at least two decimals: $0.125, $2.00.
 export const usd = (n: number): string => {
@@ -57,46 +68,29 @@ const tokens = (u: TestResult["usage"]): string => {
   return `${input} input and ${u.output} output tokens`;
 };
 
-// Why an entry cannot be chosen, or undefined when it can.
-function blocked(row: OfferRow, plugin: ProviderPlugin): string | undefined {
-  if (!row.price) {
-    return plugin.provider === "foundry" && /^claude\b/i.test(row.model)
-      ? "no price yet: waiting for the maintainers' reading of its listing"
-      : `no price yet: not in ${SOURCES[plugin.priceSource[0]!].label.split(",")[0]!} yet`;
-  }
-  if (!row.callable) return `not offered yet: ${plugin.connect.notCallableReason(row.model)}`;
-  return undefined;
-}
-
-function entryNotes(row: OfferRow, input: ModelsSectionInput): string[] {
+function entryNotes(row: OfferRow): string[] {
   const notes: string[] = [];
   if (row.added) notes.push(`added${row.added.test ? `, test passed ${row.added.test.at.slice(0, 10)}` : ""}`);
-  // Foundry calls the model by the deployment name: the user's own once
-  // added, else the suggested one, the model's ID.
-  if (row.deployment !== undefined && row.callable) {
-    const label = input.viewer === "friend" ? "Foundry's name" : "deployment name";
-    notes.push(row.added?.deployment ? `${label} ${row.added.deployment}` : `suggested ${label} ${row.deployment}`);
-  }
   if (row.noToolUse) notes.push(`no tool use (${row.noToolUse}); for tasks that need no tools`);
   if (row.price?.stale) notes.push("last good price: its source failed at the latest refresh");
-  return [...notes, ...accessNotes(row.model, input.accountCheck)];
+  return [...notes, ...row.notes];
 }
 
 function option(row: OfferRow, input: ModelsSectionInput): string {
   const { plugin } = input;
-  const why = blocked(row, plugin);
+  const why = blockedReason(row, plugin);
   const p = row.price;
-  const where = p ? ` · ${esc(plugin.connect.locationLabel(row.location, row.model))}, chosen by ${row.locationSetBy === "user" ? "you" : "the app"}` : "";
   const price = p
-    ? `<span class="lb-price">${usd(p.input)} in · ${usd(p.output)} out per million tokens${where}</span><span class="lb-src small muted" title="${esc(SOURCES[p.source].label)}">${esc(SOURCES[p.source].label.split(",")[0]!)}, read ${nbDate(p.dateRead)}</span>`
+    ? `<span class="lb-price">${usd(p.input)} in · ${usd(p.output)} out per million tokens</span><span class="lb-src small muted" title="${esc(SOURCES[p.source].label)}">${esc(SOURCES[p.source].label)}, read ${nbDate(p.dateRead)}</span>`
     : `<span class="lb-price"><span class="pill warn">no price yet</span></span>`;
   const tier = row.tier ? `<span class="tier ${tierClass[row.tier]}">${row.tier}</span>` : "";
   // With no price, the price line already says "no price yet".
   const whyNote = why && !p ? why.replace(/^no price yet: /, "") : why;
-  const notes = [...entryNotes(row, input), ...(whyNote ? [whyNote] : [])];
+  const notes = [...entryNotes(row), ...(whyNote ? [whyNote] : [])];
   const noteHtml = notes.length ? `<span class="lb-notes small">${notes.map((n) => esc(n)).join(" · ")}</span>` : "";
+  const name = row.name ? ` <span class="small muted">${esc(row.name)}</span>` : "";
   return `<li role="option" id="opt-${plugin.provider}-${esc(slug(row.model))}" data-model="${esc(row.model)}" aria-selected="false"${why ? ' aria-disabled="true"' : ""}${row.added ? ' class="added"' : ""}>
-<span class="lb-head"><span class="lb-name">${esc(row.model)}</span>${tier}${row.added ? '<span class="pill ok">added</span>' : ""}</span>
+<span class="lb-head"><span class="lb-name">${esc(row.model)}</span>${name}${tier}${row.added ? '<span class="pill ok">added</span>' : ""}</span>
 ${price}${noteHtml}</li>`;
 }
 
@@ -114,7 +108,7 @@ function outcomeBox(input: ModelsSectionInput): string {
     const named = t.repliedModel ? `reply names ${t.repliedModel}` : undefined;
     const spent = [tokens(t.usage), input.formatCost(t.costUsd)].filter(Boolean).join(" · ");
     return `<div class="tc tc-ok" role="status"><p class="tc-verdict"><strong>${esc(o.model.model)} added.</strong> Its test call ran once and passed.</p>
-${replyLine(plugin, t.status, [`${t.modelId} (${plugin.connect.locationLabel(t.location, o.model.model)})`, named, t.text ? `“${t.text}”` : undefined])}
+${replyLine(plugin, t.status, [o.model.model, named, t.text ? `“${t.text}”` : undefined])}
 <p class="tc-fix small">${esc(spent)}. It is now one of your models for each task.</p></div>`;
   }
   const r = o.reply;
@@ -131,40 +125,78 @@ ${replyLine(plugin, t.status, [`${t.modelId} (${plugin.connect.locationLabel(t.l
       ? `<form method="post" action="${action(plugin.provider, "model-help")}"><input type="hidden" name="model" value="${esc(o.model)}"><input type="hidden" name="reason" value="${esc(o.reason)}"><button type="submit" class="btn small help-btn">Ask Admin for help</button></form>`
       : "";
   const fix = refusalFix(o, plugin);
-  return `<div class="tc tc-bad" role="alert"><p class="tc-verdict"><strong>${esc(refusalText(o, plugin, input.viewer))}</strong></p>
+  return `<div class="tc tc-bad" role="alert"><p class="tc-verdict"><strong>${esc(refusalText(o, plugin))}</strong></p>
 ${reply}
 ${fix ? `<p class="tc-fix small">${esc(fix)}</p>` : ""}
 ${links || help ? `<div class="row">${links}${help}</div>` : ""}</div>`;
 }
 
 function refreshLine(input: ModelsSectionInput): string {
-  if (input.plugin.provider !== "bedrock") return "";
-  const c = input.accountCheck;
-  const read = input.catalogReadAt ? `Bedrock's model list read ${hhmm(input.catalogReadAt)} on ${nbDate(input.catalogReadAt.slice(0, 10))}` : "Bedrock's model list not read yet";
-  const checked = c ? ` · your AWS account checked ${hhmm(c.checkedAt)}` : "";
-  const again = c ? refreshAgainFrom(c.checkedAt, input.now) : undefined;
-  const wait = again ? ` Refresh it again from ${hhmm(again.toISOString())}.` : "";
-  const notes = [c?.catalogError, c?.note].filter(Boolean).map((n) => `<p class="small muted">${esc(n!)}</p>`).join("");
-  return `<form class="row" method="post" action="${action("bedrock", "refresh")}" style="margin:6px 0">
-<button type="submit" class="btn small refresh"${again ? ` disabled data-enable-at="${again.getTime()}"` : ""}>Refresh model list</button><span class="small muted">${read}${checked}. Refresh reads the list again now and checks, in your own AWS account, each Marketplace model's terms and Anthropic's form.${wait}</span>
-</form>${notes}`;
+  const short = input.plugin.connect.guide.short;
+  const read = input.catalogReadAt ? `${esc(short)}'s model list read ${readOn(input.catalogReadAt)}` : `${esc(short)}'s model list not read yet`;
+  const account = input.accountReadAt ? ` · your account's list read ${readOn(input.accountReadAt)}` : "";
+  return `<form class="row" method="post" action="${action(input.plugin.provider, "refresh")}" style="margin:6px 0">
+<button type="submit" class="btn small refresh">Refresh model list</button><span class="small muted">${read}${account}. Refresh reads both again now.</span>
+</form>
+<p class="small muted">Every model ${esc(short)} lists is here, from its public list, which needs no key. Your key reads which of them your account allows (your ${esc(short)} provider preferences, privacy settings and guardrails can leave some out); whether a model answers for you right now shows only when it is tested.</p>`;
+}
+
+function testAllSection(input: ModelsSectionInput): string {
+  const { plugin, plan, run } = input;
+  const p = plugin.provider;
+  const name = plugin.connect.guide.name;
+  const count = plan.models.length;
+  const head = `<h4 id="${p}-test-all">Test all models</h4>`;
+  let body: string;
+  if (run && !run.finishedAt) {
+    body = `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Testing… ${run.done} of ${run.modelCount} done.</strong></p>
+<p class="tc-fix small">A few models at a time, ${CONCURRENCY} at once. This page refreshes by itself; you can leave it and come back.</p></div>`;
+  } else if (input.confirmTestAll && !plan.wait) {
+    body = `<div class="tc tc-sw" role="alertdialog" aria-labelledby="${p}-confirm-h"><p class="tc-verdict" id="${p}-confirm-h"><strong>Test all ${count} models?</strong></p>
+<p class="small">Each test call sends a few words and allows at most ${TEST_MAX_TOKENS} reply tokens. Estimated total: about ${esc(input.formatCost(plan.estimateUsd))} (${esc(name)}'s prices for the test's tokens), billed to your ${esc(name)} account. Every model that works is added to your models for tasks.</p>
+<div class="row"><form method="post" action="${action(p, "test-all")}"><button type="submit" class="btn small">Run the test</button></form><a class="btn small ghost" href="${PROVIDERS_PATH}?provider=${p}#${p}-test-all">Cancel</a></div></div>`;
+  } else {
+    const wait = plan.wait ? `<span class="small muted">${esc(plan.wait)}</span>` : `<span class="small muted">${count} models · estimated total about ${esc(input.formatCost(plan.estimateUsd))}, shown again before it runs. At most once every ${RUN_GAP_MINUTES} minutes.</span>`;
+    const button = plan.wait
+      ? `<button type="button" class="btn small secondary" disabled>Test all models</button>`
+      : `<a class="btn small secondary" href="${PROVIDERS_PATH}?provider=${p}&test-all=confirm#${p}-test-all">Test all models</a>`;
+    body = `<div class="row">${button}${wait}</div>`;
+  }
+  return `<section class="test-all" aria-labelledby="${p}-test-all">${head}<p class="small">See which of ${esc(name)}'s models work for your account right now, and which don't, with the reason.</p>${body}${run ? resultsList(input, run) : ""}</section>`;
+}
+
+function resultsList(input: ModelsSectionInput, run: TestAllRun): string {
+  const p = input.plugin.provider;
+  const done = run.tests.filter((t) => t.state !== "queued");
+  if (!done.length) return "";
+  const works = done.filter((t) => t.state === "passed").length;
+  const shown = done.filter((t) => input.testsFilter === "all" || (input.testsFilter === "works" ? t.state === "passed" : t.state === "failed"));
+  const filter = (f: TestsFilter, label: string) =>
+    input.testsFilter === f ? `<strong aria-current="true">${label}</strong>` : `<a href="${PROVIDERS_PATH}?provider=${p}&tests=${f}#${p}-test-all">${label}</a>`;
+  const items = shown
+    .map((t) => {
+      const ok = t.state === "passed";
+      const reply = t.result?.reply ? ` <span class="tc-reply">${esc([t.result.reply.status, t.result.reply.errorName, t.result.reply.message ? `“${t.result.reply.message}”` : ""].filter(Boolean).join(" · "))}</span>` : "";
+      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : "doesn't work now"}</span>${ok ? "" : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}`}</li>`;
+    })
+    .join("");
+  const when = run.finishedAt ? `Tested ${readOn(run.startedAt)}` : `Started ${readOn(run.startedAt)}`;
+  return `<p class="small" style="margin-top:8px">${when}: ${works} of ${done.length} work now. Real cost so far, from ${esc(input.plugin.connect.guide.short)}'s reported cost: ${esc(input.formatCost(run.realCostUsd))} (estimated ${esc(input.formatCost(run.estimateUsd))}).</p>
+<p class="small">Show: ${filter("all", "All")} · ${filter("works", "Works now")} · ${filter("fails", "Doesn't work")}</p>
+<ul class="results small">${items || "<li>None.</li>"}</ul>`;
 }
 
 export function modelsSection(input: ModelsSectionInput): string {
-  const { plugin, viewer } = input;
+  const { plugin } = input;
   const p = plugin.provider;
   const name = plugin.connect.guide.name;
   const list = `${p}-models`;
-  const intro = `<p class="small">Every chat model ${esc(name)} sells at a listed price, of every model family. Choose one and its test call runs once, right here; when it passes, the model is yours for each task. Strength comes from the input price: <span class="tier tier-s">Smallest</span> under $0.50 per million tokens, <span class="tier tier-m">Middle</span> $0.50 to under $2.50, <span class="tier tier-l">Strongest</span> $2.50 and up.</p>`;
+  const intro = `<p class="small">Every model ${esc(name)} lists, of every maker. Choose one and its test call runs once, right here; when it passes, the model is yours for each task. Strength comes from the input price: <span class="tier tier-s">Smallest</span> under $0.50 per million tokens, <span class="tier tier-m">Middle</span> $0.50 to under $2.50, <span class="tier tier-l">Strongest</span> $2.50 and up.</p>`;
   if (!input.rows.length) {
     return `<section class="models" aria-labelledby="${p}-models-h"><h3 id="${p}-models-h">Your models at ${esc(name)}</h3>${intro}${refreshLine(input)}
-<p class="small muted">The price table lists no chat model at ${esc(name)} yet.</p></section>`;
+<p class="small muted">The price table lists no model at ${esc(name)} yet: Refresh model list reads it now.</p></section>`;
   }
-  const deployment = plugin.connect.deploymentName
-    ? `<label class="small" for="${p}-deployment">${esc(viewer === "friend" ? "Foundry's name for the model" : "Deployment name")} <span class="muted">(leave empty for the suggested name, the model's ID)</span></label>
-<input class="f mono" id="${p}-deployment" name="deployment" value="" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}" autocomplete="off" spellcheck="false" style="max-width:24em">`
-    : "";
-  const choosable = input.rows.filter((r) => !blocked(r, plugin));
+  const choosable = input.rows.filter((r) => !blockedReason(r, plugin));
   const fallback = `<noscript><div class="row"><select class="f" name="model" aria-label="Model">${choosable.map((r) => `<option value="${esc(r.model)}">${esc(r.model)}${r.price ? ` · ${usd(r.price.input)} in · ${usd(r.price.output)} out` : ""}${r.tier ? ` · ${r.tier}` : ""}</option>`).join("")}</select><button type="submit" class="btn small">Choose and test</button></div></noscript>`;
   return `<section class="models" aria-labelledby="${p}-models-h">
 <h3 id="${p}-models-h">Your models at ${esc(name)}</h3>
@@ -173,8 +205,7 @@ ${refreshLine(input)}
 ${outcomeBox(input)}
 <form method="post" action="${action(p, "choose")}" class="choose" data-listbox>
 <input type="hidden" data-model-input value="">
-${deployment}
-<span class="small" id="${list}-label"><strong>Choose a model</strong></span>
+<span class="small" id="${list}-label"><strong>Choose a model</strong> <span class="muted">(${input.rows.length} listed, ${choosable.length} can be chosen)</span></span>
 <div class="lb-wrap">
 <button type="button" class="lb-btn" id="${list}-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="${list}" aria-labelledby="${list}-label ${list}-button" hidden>Choose a model to test</button>
 <ul role="listbox" id="${list}" class="lb" aria-labelledby="${list}-label" tabindex="-1" hidden>
@@ -184,6 +215,7 @@ ${input.rows.map((r) => option(r, input)).join("\n")}
 ${fallback}
 </form>
 <p class="small muted" style="margin-top:6px">A model is added only when its test call passes; a reply naming a different model is refused with a plain reason. A model with no price yet cannot be chosen, because the budget stop needs a real price.</p>
+${testAllSection(input)}
 </section>`;
 }
 
@@ -207,6 +239,11 @@ export const MODELS_CSS = `
 .lb-name { font-weight: 600; }
 .lb-price { font-size: .85rem; font-variant-numeric: tabular-nums; }
 .lb-src, .lb-notes { color: var(--muted); overflow-wrap: anywhere; }
+.test-all { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.test-all h4 { margin: 0 0 4px; font-size: .95rem; }
+.results { list-style: none; padding: 0; margin: 6px 0 0; max-height: 26em; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.results li { padding: 5px 9px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.results li:first-child { border-top: 0; }
 @media (max-width: 759px) { .lb-wrap { max-width: none; } .lb { position: static; box-shadow: none; } }
 `;
 

@@ -1,261 +1,169 @@
-# Connecting the providers (T16, design-v3 1.4 to 1.6, ADR-001)
+# Connecting the provider (T16, design-v3 1.4 to 1.6, ADR-018)
 
-Each provider is a "Connect <Provider>" button backed by one plug-in. No user
-hands the app a key: each user grants the app's own identity a narrow
-permission inside their own account, revocable there, and the app turns that
-grant into a credential that lasts about an hour. A connection record holds
-nothing secret.
+OpenRouter is the app's one model provider (the owner, 2026-11-27: "so delete
+all the three: bedrock, gcp and foundry, and only have openrouter"). It is a
+"Connect <Provider>" button backed by one plug-in, `openrouter.ts`; adding a
+provider later is one more plug-in, and its button appears by itself.
 
-Every user grants the same app, so a grant alone does not say which user made
-it. Each connection is used only for the user who proved control of it (T116,
-design-v3 1.4): Bedrock by the user's own external ID, Foundry by the tenant
-in the user's own signed Microsoft sign-in, Vertex AI by a role granted to the
-user's own Google identity. Typing another user's project ID, or forging the
-tenant in Foundry's consent callback, reaches nothing of theirs.
+Two rules hold for every provider (the owner, 2026-11-27): each user pays for
+their own model use and the owner pays for no one else's; and no user ever
+**gives** (pastes) a key or secret to the app. A user **authorizing** a key at
+the provider, so the provider issues it to the app through its own consent
+page, is allowed, and is not giving a key.
 
-| Provider | Plug-in | The user types | The record holds | The credential |
-| --- | --- | --- | --- | --- |
-| Amazon Bedrock | `bedrock.ts` | the 12-digit AWS account ID | the model-caller role's ARN, the user's external ID | the issuer's token → `AssumeRoleWithWebIdentity` (the app's role) → `AssumeRole` (the user's role, with the external ID): 1 hour |
-| Microsoft Foundry | `foundry.ts` | the Foundry resource address, the Azure directory's ID (only where to sign in) | the tenant ID (the `tid` of the user's own Microsoft sign-in, its ID token verified against Microsoft's keys and its `idp` showing a personal Microsoft account; admin consent's callback is only checked against it), the endpoint | client credentials in that tenant only, proven by the app's certificate (or, with `FOUNDRY_CREDENTIAL=federated`, the issuer's token): 60 to 90 minutes |
-| Google Vertex AI | `vertex.ts` | the project ID | the project ID | the issuer's token with the user's own app ID as its subject → Google's STS (Workload Identity Federation) → that user's own federated principal's token, used directly: 1 hour |
+## Connect OpenRouter (`openrouter.ts`, `check.ts`)
 
-Connect Microsoft Foundry is two Microsoft pages: the sign-in at the typed
-directory's own endpoint (`/{tenant}`, scope `openid`, returning to
-`/models/setup/providers/foundry/signed-in`), then admin consent in the
-signed-in tenant (`/{tid}/adminconsent`, returning to `.../consented`). Each
-leg's state, and the sign-in's nonce, sit on the user's own check row and
-are spent on first use; those pending fields alone say which leg an answer
-is for. Foundry is for personal Microsoft accounts only (the owner,
-2026-11-25): the signed token's `idp` must name the personal Microsoft
-account provider, never "`tid` is the consumers tenant", and a work or school
-sign-in is refused at Connect, naming Bedrock and Vertex AI, with nothing
-stored. There is no one-app-user-per-directory rule: someone a user invites
-into their own directory who also uses the app is that directory owner's
-responsibility (the owner: "i dont think that should be imagined as a gap,
-because its now upto that user that added the other guy onto their
-directory. the model related expense managements now exclusively falls on
-their shoulders, not mine at all."). Whether the token tells the two apart
-every time is checked live in M2 step 11, check 8.
+OpenRouter's OAuth PKCE (https://openrouter.ai/docs/guides/overview/auth/oauth,
+read 2026-11-27):
 
-Connect Google Vertex AI shows the user's own principal to grant,
-`principal://iam.googleapis.com/projects/<pool project number>/locations/global/workloadIdentityPools/<pool>/subject/<user id>`,
-derived from `GOOGLE_WIF_PROVIDER`; no user's project grants a service
-account shared by every user. The user ID is always a UUID, and the pool
-admits only UUID subjects and one more, `price-reader`: the price table's
-reader of Google's Cloud Billing Catalog (`src/prices/google.ts`), which
-holds one role on the app's own project and nothing on any user's. A user's
-token can never carry `price-reader`, and the price reader's token carries
-no user's ID. Both tokens come from the one exchange in
-`src/google-federation.ts`.
+1. The user taps **Connect OpenRouter**. There is no field. The app makes a
+   PKCE verifier (kept in the user's vault, never sent to the browser) and a
+   state value (on the user's check row), and sends the user to
+   `https://openrouter.ai/auth` with `callback_url`
+   (`<APP_ORIGIN>/chief-of-staff/models/setup/providers/openrouter/consented`),
+   the S256 `code_challenge`, `state`, `key_label=Chief of staff` and `limit`:
+   the user's monthly OpenRouter budget in the app, or $10 before one is set.
+   The user can change the limit on OpenRouter's page.
+2. The user signs in at OpenRouter and taps Authorize. OpenRouter sends them
+   back with `code` and `state`. The state must be this user's and is spent
+   once; the app then posts the code and verifier to
+   `https://openrouter.ai/api/v1/auth/keys` and receives `{ key }`: "an API
+   key tied to their account. Their requests are billed to their own
+   OpenRouter credits". Codes last 10 minutes.
+3. The key goes straight into the user's vault (`secrets.ts`, `src/vault.ts`:
+   the user's own AES-256-GCM key, wrapped by the vault key `VAULT_KEY`). It
+   is never shown, logged, put in an error message or sent to the browser.
+   The connection record holds only `method` (`oauth_pkce`) and `key_hash`,
+   the key's SHA-256, which names the key's own page on OpenRouter
+   (`https://openrouter.ai/keys/<hash>`, as OpenRouter's PKCE page builds it).
+4. The Connect test call runs by itself (below), and the account's own model
+   list is read with the new key (`src/models/account-list.ts`).
 
-Each plug-in has three parts (`src/proxy/plugin.ts`): its **Connect method**
-(`connect`: fields, setup link, test request, the plain reasons for the
-vendor's errors, the guide with its "checked on" date and pages), its
-**caller** (`mintCredential`, `call`: usage read from the reply, cache writes
-split into 5-minute and 1-hour, long prompts marked) and its **price source**
-(`priceSource`). `index.ts` registers the three; Models › Setup › Providers
-shows a button for each registered plug-in, so adding a provider is one
-plug-in. Each plug-in's file cites the vendor pages it follows, read
-2026-11-25.
+**Disconnect** deletes the key and the verifier from the vault, the record,
+the check and the account's model list; the models stop answering at once.
+The app cannot revoke the key at OpenRouter: deleting a key ("Delete an
+existing API key. Authenticate with a management key.", 403 "Only management
+keys can perform this operation",
+https://openrouter.ai/docs/api/api-reference/api-keys/delete-an-api-key.md,
+read 2026-11-27) needs the account's management key, which the app never
+holds. So the screen tells the user to delete the "Chief of staff" key at
+https://openrouter.ai/settings/keys, with a link to the key's own page.
 
-The callers speak each provider's own format: Converse on Bedrock (every
-model family; each model's ID and locations come from Bedrock's own model
-list, read daily by the app's own role and matched to the price table,
-`bedrock-catalog.ts`; until the first read, only the built-in
-`BEDROCK_MODEL_IDS`), Anthropic's Messages format for
-Claude on Foundry (`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`),
-Chat Completions for every other Foundry model
-(`/openai/v1/chat/completions`, by the user's deployment name) and
-`generateContent` for Gemini on Vertex AI. The last two came with the model list
-(T17, `src/models/README.md`) and are checked live in M2 step 3. The model list
-lists every chat model each provider sells at a listed price, of every
-family; a model no caller here reaches yet (on Vertex AI, any publisher but
-Anthropic and Google) shows "not offered yet" until a follow-up fix adds it.
+## The caller
+
+Chat Completions at `https://openrouter.ai/api/v1/chat/completions`, with the
+user's key as `Authorization: Bearer`, the model set to the one chosen, and
+OpenRouter's own model fallback (`models`, `route`) taken out, so a call runs
+on exactly that model and the proxy's fallback rule alone decides. It sends
+`HTTP-Referer: <APP_ORIGIN>/chief-of-staff` and
+`X-OpenRouter-Title: Chief of staff`, OpenRouter's attribution headers
+(https://openrouter.ai/docs/api-reference/authentication). A generation that
+fails after it started answers 200 with an error in the body; that is read as
+the failure it is.
+
+Usage and cost come from the reply ("Full usage details are always included
+automatically in every response",
+https://openrouter.ai/docs/use-cases/usage-accounting; token counts "are
+calculated using the model's native tokenizer",
+https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
+
+- uncached input: `prompt_tokens` less `prompt_tokens_details.cached_tokens`
+  and `cache_write_tokens` (OpenAI's convention, which OpenRouter's caching
+  example follows; the docs do not say it in words);
+- cached input: `cached_tokens`; cache writes: `cache_write_tokens`, counted
+  as 1-hour writes, the dearer kind, since OpenRouter does not split them;
+- output: `completion_tokens`, reasoning included;
+- cost: `usage.cost` (US dollars: "the base currency is US dollars",
+  https://openrouter.ai/docs/faq), plus `cost_details.upstream_inference_cost`
+  when the user's account sent the call through its own provider key
+  (`is_byok`), so the ledger counts what the user pays;
+- the reply's `id`, OpenRouter's generation ID, kept on the ledger row.
+
+## Plain reasons
+
+| Status | What the user sees |
+| --- | --- |
+| no key in the vault, 401 | the connection isn't set up yet, or was removed (Connect OpenRouter again) |
+| 402 | your OpenRouter account or this key is out of credits |
+| 403 | OpenRouter refused this request for your account (moderation, a guardrail, privacy settings) |
+| 404 | that model ID doesn't exist here |
+| 408, 429, 502, 503 | busy or out of quota, not a setup fault |
+| other | OpenRouter refused the test call, in its own words |
+
+Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
+(read 2026-11-27).
+
+## The Connect check (`check.ts`)
+
+After Connect, the test call runs by itself, on the plug-in's own test model
+(`openai/gpt-6-luna`, $0.10 in and $0.50 out per million tokens on
+2026-11-27; if OpenRouter stops listing it, the next of `TEST_MODELS`, else
+the first model it lists that the app can call), never on a model the user
+chose. Its reply is capped at 16 tokens. It is a real call through the proxy
+(`sendTestCall`), priced and written to the ledger (task `test_call`); it
+needs the model's price (it waits, and is tried again every 15 minutes, until
+the price table has one) and no budget yet, and waits while one is set and
+spent. A connection whose test call had passed and that then gets a 401 is
+recorded as `revoked`, for T49's urgent alert. The cron (`* * * * *`) runs due
+checks only for providers a plug-in serves: rows left from Bedrock, Vertex AI
+or Foundry are never picked.
+
+Each result is three lines, shown only to the user who made the call: the
+plain reason, OpenRouter's own reply, the fix. "Ask Admin for help" (friends
+only) records the item's name and the plain reason, never the reply.
 
 ## The issuer (`src/issuer.ts`)
 
 The Worker is its own OpenID Connect issuer at
-`<APP_ORIGIN>/chief-of-staff/oidc` (`https://akshayprabhakant.com/chief-of-staff/oidc`
-once deployed), with its discovery document at
+`<APP_ORIGIN>/chief-of-staff/oidc`, with its discovery document at
 `/chief-of-staff/oidc/.well-known/openid-configuration` and its key set at
-`/chief-of-staff/oidc/jwks.json`. Those two paths are the only ones served
-without the owner's sign-in: the Worker exempts exactly them from its Access
-check, and the owner's `portfolio-app` tool makes a second Access application
-on exactly those two paths with a Bypass policy (README "Cloudflare
-Access"). Tokens are RS256 and live 5 minutes, with the
-audience and subject each provider was told to trust:
-
-| Provider | `aud` | `sub` |
-| --- | --- | --- |
-| AWS | `sts.amazonaws.com` | `chief-of-staff:bedrock` |
-| Google | `https://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/chief-of-staff/providers/chief-of-staff-worker` | the user's own app ID, only for that user's own calls |
-| Microsoft (federated only) | `api://AzureADTokenExchange` | `chief-of-staff:foundry` |
+`/chief-of-staff/oidc/jwks.json`. No model provider reads it today: it is
+kept, with its public paths and signing key, for the coming "Connect
+Anthropic" build (Claude Platform OAuth with linked billing), which
+authenticates with it through workload identity federation (the owner,
+2026-11-27). Those two paths are the only ones served without the owner's
+sign-in: the Worker exempts exactly them from its Access check, and the
+owner's `portfolio-app` tool makes a second Access application on exactly
+those two paths with a Bypass policy (README "Cloudflare Access"). Tokens are
+RS256 and live 5 minutes.
 
 ### Rotating the issuer key
 
 The key lives in one place, the Worker secret `ISSUER_KEYS`
 (`{"signing": "<kid>", "keys": [<JWK>, ...]}`): every key in it is published,
-and only `signing` signs. A rotation never breaks a connection, because old
-and new public keys are published together until the old one can no longer
-be in use. Run each step on the owner's machine, from the `issuer-keys.json`
-that `provider-setup.mjs keys` made:
+and only `signing` signs. Old and new public keys are published together
+until the old one can no longer be in use. Make the first key with
+`node scripts/issuer-keys.mjs keys <dir>` (outside the repository), then run
+each step on the owner's machine:
 
-1. `node scripts/provider-setup.mjs rotate-issuer <dir>/issuer-keys.json publish`,
-   then `npx wrangler secret put ISSUER_KEYS < <dir>/issuer-keys.json`. A new
-   key is published beside the old one, which still signs.
-2. A day later, when AWS and Google have fetched the new key set: the same
-   with `sign`. The new key signs; both stay published.
-3. A day later, when every token signed with the old key has expired (tokens
-   live 5 minutes, credentials minted from them at most an hour): the same
-   with `retire`. Only the new key is published.
+1. `node scripts/issuer-keys.mjs rotate <dir>/issuer-keys.json publish`, then
+   `npx wrangler secret put ISSUER_KEYS < <dir>/issuer-keys.json`. A new key
+   is published beside the old one, which still signs.
+2. A day later, when every relying party has fetched the new key set: the
+   same with `sign`. The new key signs; both stay published.
+3. A day later, when every token signed with the old key has expired: the
+   same with `retire`. Only the new key is published.
 
-The tests run a whole rotation and check that tokens signed with either key
-verify against the published set until the old key is retired
-(`test/issuer.test.ts`), and `make provider-setup-check` runs the script itself.
+The tests run a whole rotation (`test/issuer.test.ts`), and
+`make issuer-keys-check` runs the script itself.
 
-## Release units (design-v3 1.4, ADR-017)
-
-- **The plug-ins** ship in the Worker and roll back with it; each has its
-  own version label (`bedrock-1.0.0`, `foundry-1.1.0`, `vertex-1.1.0`) on
-  every ledger row it writes, test calls included.
-- **The Bedrock template** (`shell/bedrock-template/`) has its own version
-  and publish workflow; users' stacks keep their version, so a new one stays
-  compatible with them, and the check reads each stack's version
-  (`provider_checks.template_version`). Rollback: `BEDROCK_TEMPLATE_URL`
-  back to the previous version.
-- **The Entra registration** changes on a planned schedule, since a change
-  to it reaches every user's consent at once. To replace the certificate:
-  run `provider-setup.mjs keys <new dir>` (its new issuer key is not
-  needed and stays unused), upload the new public certificate
-  beside the old one, store the new `ENTRA_CERT_KEY` and
-  `ENTRA_CERT_THUMBPRINT`, and remove the old certificate from the
-  registration only after every token minted with it has expired (90
-  minutes at most; wait a day).
-- **The Vertex AI assets** (the pool and provider, with each user's own
-  principal, and the custom role command) keep the role ID
-  `chiefOfStaffModelCaller` and its one permission, so roles users already
-  made keep working.
-- **The issuer key** has its own rotation cycle (above).
-
-## The Connect check (`check.ts`)
-
-After "Connect", the test call runs by itself; there is no test-call button.
-
-- The test call always runs on the plug-in's own test model
-  (`connect.testModel`: Nova 2.0 Lite at its pinned profile IDs on Bedrock,
-  Claude Haiku 5.5 on Foundry and Vertex AI), never on a model the user
-  added, so a picked model's Marketplace terms or use-case form never fail
-  Connect. Where the user added the test model itself, its row gives the
-  starting location and, on Foundry, the deployment name they kept.
-- While the provider-side grant is not there yet (the stack not created, the
-  role not assigned), the check tries again every minute for an hour after
-  Connect (the cron `* * * * *`), and the page refreshes itself.
-- "Still switching this on" (Bedrock's Marketplace agreement) is tried again
-  every 15 minutes; the item ticks when a call passes.
-- A connection whose test call had passed and then loses its grant, found by
-  the check or by a real call through the proxy, is recorded as `revoked`
-  (`provider_checks.state`), for T49's urgent alert.
-- A test call is a real call, sent through the proxy (`sendTestCall` in
-  `src/proxy/proxy.ts`), which prices it, writes its ledger row (`task`
-  `test_call`), raises `price_missing` and records a removed grant as for any
-  call. It needs the model's list price, as every call does; it needs no
-  budget yet (budgets come after providers on the checklist), and waits while
-  one is set and spent; saving that provider's budget on Models › Setup ›
-  Budgets, or Try again, runs it again at once.
-- Each result is three lines, shown only to the user who made the call: the
-  plain reason, the provider's own reply, the fix. "Ask Admin for help"
-  (friends only) records the item's name and the plain reason in
-  `help_requests`, never the reply, for T49 to deliver.
-
-## Region
-
-The app picks the test call's region from what the test model supports: on
-Bedrock, Global where Bedrock names a Global profile for the model and the
-price table prices it there, else the app's region (the model's own ID where
-it runs on demand there, or the geography profile Bedrock names); on Foundry the
-deployment type is chosen when the user deploys the model; on Vertex AI a
-specific location (`vertex-locations.ts`, from Google's model pages: the `us`
-multi-region for Claude 4.7 and later and for Gemini, `us-east5` for older
-Claude), then Global. The user can change it on the page; the test call
-proves it.
-
-## What the owner sets up (T10)
-
-`node scripts/provider-setup.mjs keys <dir>` makes the issuer key and the
-Entra certificate outside the repository and prints only what to upload and
-the Wrangler commands for the private halves. `node scripts/provider-setup.mjs
-values` (with `APP_ORIGIN`, `AWS_ACCOUNT_ID`, `GOOGLE_PROJECT_ID`,
-`GOOGLE_PROJECT_NUMBER`, `GITHUB_REPOSITORY`, `GITHUB_OWNER_ID`,
-`GITHUB_REPOSITORY_ID` and `BEDROCK_TEMPLATE_BUCKET` in the environment)
-prints every other value: the AWS identity provider and the
-app role's trust and permission policies (the permission policy lets it
-assume each user's model-caller role and read Bedrock's own model list,
-`bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`; a role
-made before 2026-11-27 needs that second statement added, else the daily
-refresh raises a refresh-failed alert and Bedrock offers only its built-in
-models), the Google pool and provider, and
-the Entra registration with its two return addresses (the Microsoft
-sign-in's and admin consent's). Google's pool needs no service account, no
-service-account impersonation grant and no API key: each user grants their
-own principal. The app's own project needs `sts.googleapis.com` and
-`cloudbilling.googleapis.com` enabled, not `aiplatform.googleapis.com` (each
-user enables Vertex AI in their own project), and one grant: the price
-reader's principal,
-`principal://iam.googleapis.com/projects/<project number>/locations/global/workloadIdentityPools/chief-of-staff/subject/price-reader`,
-gets a custom role on that project, `chiefOfStaffPriceReader`, holding only
-`serviceusage.services.use`, so it can name the project as its quota project. Nothing is guessed during T10.
-
-The Worker reads the values below. Each variable except `APP_ORIGIN` is set
-as an environment variable of the GitHub environment `production` (Settings →
-Environments → production → Environment variables), never in the Cloudflare
-dashboard: every release deploys the ones set there as Worker variables and
-leaves out the ones that are not (`scripts/release-deploy.sh`; the
-repository README, "Setting the provider variables", has the steps), and a
-deploy replaces whatever the dashboard held.
-The two secrets are stored with `npx wrangler secret put`, which a deploy
-keeps.
+## What the owner sets up
 
 | Name | Kind | What |
 | --- | --- | --- |
-| `APP_ORIGIN` | variable | `https://<host>`, no path; the issuer and Microsoft's sign-in and consent returns are under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"` (`https://akshayprabhakant.com`), so every release ships it |
+| `APP_ORIGIN` | variable | `https://<host>`, no path: OpenRouter's consent page returns under `<APP_ORIGIN>/chief-of-staff`, and the issuer lives there. Set in `shell/wrangler.jsonc` `"vars"`, so every release ships it |
+| `VAULT_KEY` | secret | the vault key: 32 random bytes, base64 (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \| npx wrangler secret put VAULT_KEY`). It unwraps every user's vault key: never rotate it casually. Until it is set, Connect OpenRouter says the app's own side is missing `VAULT_KEY` |
 | `ISSUER_KEYS` | secret | the issuer's keys (above) |
-| `AWS_APP_ROLE_ARN` | variable | the app's own role in the owner's AWS account |
-| `AWS_REGION` | variable | where STS and Bedrock are called and the stack is made; default `us-east-1` |
-| `BEDROCK_TEMPLATE_URL` | variable | the published template version the link opens (`bedrock-template/README.md`) |
-| `ENTRA_CLIENT_ID` | variable | the multi-tenant Entra app's client ID |
-| `ENTRA_CERT_KEY` | secret | its certificate's private key, PKCS #8 PEM |
-| `ENTRA_CERT_THUMBPRINT` | variable | the certificate's `x5t#S256` |
-| `FOUNDRY_CREDENTIAL` | variable | `certificate` (default) or `federated` |
-| `GOOGLE_WIF_PROVIDER` | variable | the workload identity pool provider's full name; each user's own principal, the price reader's and the price reader's quota project (the pool's own project) are derived from it |
 
-Until they are set, every page still renders, and a test call says plainly
-which of the app's own values is missing. A variable added to `production`
-reaches the Worker with the next release.
+No GitHub variable and no client secret is needed: PKCE has no client
+secret, the callback is built from `APP_ORIGIN`, and the app's name is fixed
+in code. The secrets are stored with `npx wrangler secret put`, which a
+release keeps.
 
-## Waiting on T10 (checked live in M2)
+## Release units (design-v3 1.4, ADR-017)
 
-Nothing here has run against a cloud account. M2 steps 1, 2, 10 and the
-Connect checks of step 11 (federated credentials across Entra tenants, admin
-consent from a personal Microsoft account, a Foundry role without `listkeys`,
-a console-enabled Bedrock model through the model-caller role, the
-`aws-marketplace:ProductId` condition holding for Bedrock's automatic
-first-call subscription (`bedrock-template/README.md`), Vertex AI
-billing to the user's project, the time from revoking a grant to refusal,
-and (g): Vertex AI's Claude endpoint answering a per-user federated principal
-granted the role directly; if it does not, each user gets their own service
-account in the app's project, which only that user's principal may act as),
-the Cloud Billing Catalog answering the price reader's federated token with
-the app's project as quota project (design-v3 1.6, item 9; if Google refuses
-it, the owner is told and no API key is made),
-the template version read from a live stack, a live issuer-key rotation,
-the app's own role reading Bedrock's model list (`ListFoundationModels` and
-`ListInferenceProfiles` through `AssumeRoleWithWebIdentity`; the owner's own
-sign-in read both on 2026-11-26, the role has not), and Foundry's key
-question (T13) all wait on the owner's accounts. On Bedrock, these are still
-open from the owner's family check (us-east-1, 2026-11-26 and 2026-11-27):
-whether Converse reports a GPT model's implicit cache reads and its "30m"
-writes, and whether a call on `bedrock-runtime` to a model priced under a
-`-mantle-` usage type bills at that row (the price table keeps the higher of
-the two where both are listed). Google's exact
-error strings are recorded from live failures then; real vendor error bodies
-saved for tests go only into the private test-examples store.
+- **The plug-in** ships in the Worker and rolls back with it; its version
+  label (`openrouter-2026-11-27`) is on every ledger row it writes.
+- **The issuer key** has its own rotation cycle (above).
+- **The vault key** is set once; rotating it means re-sealing every vault
+  item, a data migration (`src/data-migrations.ts`), never a casual change.

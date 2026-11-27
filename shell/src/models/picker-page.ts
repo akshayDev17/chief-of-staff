@@ -6,11 +6,15 @@
 //   POST /chief-of-staff/models/setup/tasks/change    task, main, fallback (or none)
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
-// Only the user's own passed models are offered. With one, every task uses
-// it ("Model now"). With more, each task shows its main model and its
-// fallback on another provider: the user's choice, or the proposal at the
-// task's suggested strength marked "proposed" until accepted (again, for an
-// accepted task whose proposal has changed). A proposed model of the other
+// Only the user's own passed models are offered (chosen one by one, or passed
+// in Test all models). With one, every task uses it ("Model now"). With more,
+// each task shows its main model and its fallback, another of the user's
+// models: the user's choice, or the proposal at the task's suggested strength
+// marked "proposed" until accepted (again, for an accepted task whose
+// proposal has changed). Changing a task chooses the provider and then the
+// model, for the main and the fallback (the owner, 2026-11-27: "for each kind
+// of task : choose the provider and the model"); OpenRouter is the one
+// provider today, and another provider's passed models join the same lists. A proposed model of the other
 // strength, where the user has none of the task's own, says so. Any task can be
 // changed to any of the user's models, the Strongest included. A model known
 // to make no tool call (the plug-in's `noToolUse`, shown in the model list too)
@@ -32,7 +36,7 @@ export interface PickerPageInput {
   viewer: Viewer;
   offered: Offered[];
   routes: TaskRoute[];
-  // Each provider's short name on screen ("Bedrock").
+  // Each provider's short name on screen ("OpenRouter").
   providerName: (p: Provider) => string;
   // True for a model known to make no tool call.
   noToolUse: (m: { provider: Provider; model: string }) => boolean;
@@ -43,59 +47,72 @@ export interface PickerPageInput {
 const modelName = (m: Offered, input: PickerPageInput): string =>
   `${m.model} · ${input.providerName(m.provider)}${input.noToolUse(m) ? " · no tool use" : ""}`;
 
+// One provider select and one model select, the models grouped by provider;
+// a small script shows only the chosen provider's models, and the server
+// checks the pair either way.
+function pairSelects(id: string, role: "main" | "fallback", chosen: Offered | undefined, input: PickerPageInput): string {
+  const providers = [...new Set(input.offered.map((m) => m.provider))];
+  const none = role === "fallback" ? `<option value="">None</option>` : "";
+  const providerOptions = providers
+    .map((p) => `<option value="${esc(p)}"${chosen?.provider === p ? " selected" : ""}>${esc(input.providerName(p))}</option>`)
+    .join("");
+  const groups = providers
+    .map(
+      (p) =>
+        `<optgroup label="${esc(input.providerName(p))}" data-provider="${esc(p)}">${input.offered
+          .filter((m) => m.provider === p)
+          .map((m) => `<option value="${esc(m.model)}"${chosen && modelKey(m) === modelKey(chosen) ? " selected" : ""}>${esc(m.model)}${input.noToolUse(m) ? " · no tool use" : ""}${m.tier ? ` (${m.tier})` : ""}</option>`)
+          .join("")}</optgroup>`,
+    )
+    .join("");
+  const label = role === "main" ? "Main" : "Fallback (another model)";
+  return `<fieldset class="pair" data-pair><legend class="small">${label}</legend>
+<label class="small" for="${id}-${role}-p">Provider</label>
+<select class="f" id="${id}-${role}-p" name="${role}_provider" data-pair-provider>${role === "fallback" ? `<option value=""${chosen ? "" : " selected"}>None</option>` : ""}${providerOptions}</select>
+<label class="small" for="${id}-${role}-m">Model</label>
+<select class="f" id="${id}-${role}-m" name="${role}_model" data-pair-model>${none}${groups}</select></fieldset>`;
+}
+
 function changeForm(r: TaskRoute, now: Route | undefined, input: PickerPageInput): string {
-  const option = (m: Offered, selected: boolean) =>
-    `<option value="${esc(modelKey(m))}"${selected ? " selected" : ""}>${esc(modelName(m, input))}${m.tier ? ` (${m.tier})` : ""}</option>`;
-  const mains = input.offered.map((m) => option(m, now?.main !== undefined && modelKey(m) === modelKey(now.main))).join("");
-  const fallbacks = input.offered.map((m) => option(m, now?.fallback !== undefined && modelKey(m) === modelKey(now.fallback))).join("");
   const id = `t-${r.task.id}`;
-  const fallback =
-    input.offered.length > 1 && new Set(input.offered.map((m) => m.provider)).size > 1
-      ? `<label class="small" for="${id}-f">Fallback (another provider)</label>
-<select class="f" id="${id}-f" name="fallback"><option value="">None</option>${fallbacks}</select>`
-      : "";
   return `<details class="change"><summary class="btn small ghost">Change</summary>
 <form method="post" action="${TASK_MODELS_PATH}/change" class="pick">
 <input type="hidden" name="task" value="${esc(r.task.id)}">
-<label class="small" for="${id}-m">Main</label>
-<select class="f" id="${id}-m" name="main">${mains}</select>
-${fallback}
+${pairSelects(id, "main", now?.main, input)}
+${input.offered.length > 1 ? pairSelects(id, "fallback", now?.fallback, input) : ""}
 <div class="row"><button type="submit" class="btn small">Save</button></div></form></details>`;
 }
 
 // Why a proposed model is not of the task's suggested strength.
-function substituteNote(task: Task, m: Offered, atAnotherProvider: boolean): string {
+function substituteNote(task: Task, m: Offered, asFallback: boolean): string {
   if (!m.tier || m.tier === task.tier) return "";
-  return ` <span class="small">a ${m.tier} model, since you have no ${task.tier} model${atAnotherProvider ? " at another provider" : ""} yet</span>`;
+  return ` <span class="small">a ${m.tier} model, since you have no ${asFallback ? "other " : ""}${task.tier} model yet</span>`;
 }
 
 function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput, single: boolean): string {
   if (single) return `<td data-l="Model now">${route ? esc(modelName(route.main, input)) : "–"}</td>`;
-  if (!route) return `<td data-l="Main">none yet: add a model of the suggested strength</td><td data-l="Fallback (another provider)">–</td>`;
+  if (!route) return `<td data-l="Main">none yet: add a model of the suggested strength</td><td data-l="Fallback (another model)">–</td>`;
   const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
   const fromProposal = r.pending || r.current?.setHow === "accepted";
-  const note = (m: Offered, atAnotherProvider: boolean) => (fromProposal ? substituteNote(r.task, m, atAnotherProvider) : "");
+  const note = (m: Offered, asFallback: boolean) => (fromProposal ? substituteNote(r.task, m, asFallback) : "");
   const fallback = route.fallback
     ? esc(modelName(route.fallback, input)) + tag + note(route.fallback, true)
-    : input.offered.some((m) => m.provider !== route.main.provider)
+    : input.offered.length > 1
       ? "none"
-      : "none: add a model at another provider";
-  return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another provider)">${fallback}</td>`;
+      : "none: add another model for a fallback";
+  return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another model)">${fallback}</td>`;
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
   const single = input.offered.length === 1;
-  const providers = new Set(input.offered.map((m) => m.provider)).size;
   const intro = !input.offered.length
     ? `<div class="banner warn">Choose a model first: only your own models that passed their test call are offered here. Choose one below a provider's passed Connect. <a href="${PROVIDERS_PATH}">Providers and models</a></div>`
     : single
-      ? `<p>You have one model that passed, so every task uses it for now. Choose a model of the suggested strength, or at another provider for a fallback, and the app proposes it here.</p>`
-      : providers > 1
-        ? `<p>You have models at more than one provider, so each task gets a main model and a fallback on another provider, at the suggested strength for that task. You can change any of them.</p>`
-        : `<p>Your models are all at one provider, so each task gets a main model at the suggested strength and no fallback. Choose a model at another provider for a fallback. You can change any of them.</p>`;
+      ? `<p>You have one model that passed, so every task uses it for now. Choose another model, or run Test all models on <a href="${PROVIDERS_PATH}">Providers and models</a>, and the app proposes a main model and a fallback for each task here.</p>`
+      : `<p>Each task gets a main model and a fallback, another of your models, at the suggested strength for that task, from the models that passed their test. When the main model's provider is busy or fails the call, the fallback answers it. To change a task, choose its provider and model. You can change any of them.</p>`;
   const head = single
     ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
-    : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another provider)</th><th></th>`;
+    : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
   const body = input.routes
     .map((r) => {
       const route = r.pending ? r.proposal : r.current;
@@ -139,6 +156,25 @@ ${intro}
 ${table}
 <div class="row" style="margin-top:10px">${accept}<a class="btn${pending ? " secondary" : ""}" href="${BUDGETS_PATH}">Next: budget</a>${help}</div>
 </main>
+<script>
+document.querySelectorAll("[data-pair]").forEach(function (pair) {
+  var provider = pair.querySelector("[data-pair-provider]"), model = pair.querySelector("[data-pair-model]");
+  if (!provider || !model) return;
+  function show() {
+    var chosen = provider.value, first = null;
+    model.querySelectorAll("optgroup").forEach(function (g) {
+      var on = g.getAttribute("data-provider") === chosen;
+      g.hidden = !on; g.disabled = !on;
+      if (on && !first) first = g.querySelector("option");
+    });
+    var current = model.selectedOptions[0];
+    if (!chosen) model.value = "";
+    else if (!current || !current.parentElement || current.parentElement.getAttribute("data-provider") !== chosen) { if (first) model.value = first.value; }
+  }
+  provider.addEventListener("change", show);
+  show();
+});
+</script>
 </body>
 </html>`;
 }
@@ -153,6 +189,8 @@ details.change > summary::-webkit-details-marker { display: none; }
 form.pick { display: grid; gap: 4px; min-width: 14em; margin-top: 6px; }
 form.pick label { color: var(--muted); }
 form.pick select { max-width: 100%; }
+fieldset.pair { border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 8px; margin: 0; display: grid; gap: 4px; }
+fieldset.pair legend { padding: 0 4px; color: var(--muted); }
 `;
 
 const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|help))?$`);
@@ -164,7 +202,7 @@ const html = (body: string, status = 200) => new Response(body, { status, header
 const PROBLEMS: Record<ChangeProblem, string> = {
   no_such_task: "There is no such task.",
   not_your_model: "Pick one of your own models that passed its test call.",
-  same_provider: "The fallback must be on another provider than the main model.",
+  same_model: "The fallback must be another model than the main one.",
 };
 
 // Every route is scoped to the signed-in user.
@@ -198,7 +236,8 @@ export async function handleTaskModels(
     return page({ said: n ? `Accepted: ${n} ${n === 1 ? "task uses its" : "tasks use their"} proposed models.` : "There was nothing to accept." });
   }
   if (verb === "change") {
-    const problem = await changeTask(db, userId, field("task"), field("main"), field("fallback") || undefined, now);
+    const pair = (role: "main" | "fallback") => (field(`${role}_provider`) && field(`${role}_model`) ? modelKey({ provider: field(`${role}_provider`) as Provider, model: field(`${role}_model`) }) : "");
+    const problem = await changeTask(db, userId, field("task"), pair("main"), pair("fallback") || undefined, now);
     if (problem) return page({ problem: PROBLEMS[problem] }, 400);
     return page({ said: `${taskById(field("task"))!.label}: saved.` });
   }

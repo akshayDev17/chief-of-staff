@@ -31,9 +31,9 @@ One container image holds Python, ADK, Playwright and Chrome. Each run is an ADK
 - **ADK TypeScript inside a Worker**: "Not supported, and not a documented route to these models": "nothing from Google says Workers are supported", in TypeScript Claude is reached "through Google Cloud Agent Platform only", and "The course is also written in Python" (section 2.1).
 - **B. Cloudflare Agents SDK in TypeScript**: "B is the simpler machine and is the fallback ... But B cannot do what the owner asked: the course teaches ADK in Python, and the owner wants its patterns "tested in reality"; rebuilding them in TypeScript under other names would test Cloudflare's tooling instead" (section 2.4). It stays the fallback if proof 2 fails (section 2.7).
 - **C. ADK on a Google runtime** (Google Agent Runtime or Cloud Run): C and D "exercise ADK but move the agent off Cloudflare and add cross-cloud links for every browser action" (section 2.4); "The browser would still be at Cloudflare, a cloud away from the agent that drives it" (section 2.2).
-- **D. ADK on Azure Container Apps**: as C, and "The agent would sit beside the models, with one vendor holding both. That is the opposite of the owner's reason for keeping the models with other vendors" (sections 2.2 and 2.4).
+- **D. ADK on Azure Container Apps**: as C: "The agent would run at Azure, a cloud away from the browser at Cloudflare" (sections 2.2 and 2.4). When Foundry was one of the model providers, D would also have put the agent beside the models, with one vendor holding both; since 2026-11-27 the models come through OpenRouter (ADR-018).
 - **Google GKE**: "Not an option: this project uses no Kubernetes (T01)" (section 2.2).
-- **AWS Bedrock AgentCore Runtime**: "A fourth vendor, for nothing this app needs" (section 2.2).
+- **AWS Bedrock AgentCore Runtime**: "Another vendor, for nothing this app needs" (section 2.2).
 - **Loop in the Durable Object**: Cloudflare's preferred arrangement, but "Cloudflare itself says where a non-JavaScript agent loop should go: a container driven by a Durable Object, with the memory kept in the Durable Object" (section 2.3); a loop in the Durable Object is arrangement B.
 - **Everything in one container**: if the container dies, "The session and the run are lost." (section 2.3).
 

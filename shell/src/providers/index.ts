@@ -1,29 +1,21 @@
 // The registered provider plug-ins: one per "Connect <Provider>" button.
-// Each is built from the Worker's configuration; one whose app-side values
-// are not set yet (T10) is still listed, and its test call says so plainly.
-// Bedrock's is also given Bedrock's own model list, matched to the price
-// table (src/providers/bedrock-catalog.ts), which `readProviderPlugins`
-// reads from D1 for each request.
+// OpenRouter is the only one (the owner, 2026-11-27). Its plug-in is given
+// OpenRouter's own model list, stored with the current price snapshot
+// (src/prices/openrouter.ts), which `readProviderPlugins` reads from D1 for
+// each request, and the user's vault for the key OpenRouter issued
+// (src/providers/secrets.ts).
 
-import type { GoogleFederationEnv } from "../google-federation";
+import type { OpenRouterCatalog } from "../prices/openrouter";
+import { readCurrentCatalog } from "../prices/store";
 import type { PluginRegistry } from "../proxy/plugin";
-import { bedrockPlugin, regionOf, type BedrockEnv } from "./bedrock";
-import { readBedrockOffer, type BedrockOffer } from "./bedrock-catalog";
-import { foundryPlugin, type FoundryEnv } from "./foundry";
-import { vertexPlugin } from "./vertex";
+import { openrouterPlugin, type OpenRouterEnv } from "./openrouter";
+import { vaultSecrets, type SecretStore, type VaultEnv } from "./secrets";
 
-export type ProvidersEnv = BedrockEnv & FoundryEnv & GoogleFederationEnv;
+export type ProvidersEnv = OpenRouterEnv & VaultEnv;
 
-export const providerPlugins = (
-  env: ProvidersEnv,
-  fetcher: typeof fetch = fetch,
-  now: () => Date = () => new Date(),
-  bedrockOffer?: BedrockOffer,
-): PluginRegistry => ({
-  bedrock: bedrockPlugin(env, fetcher, now, bedrockOffer),
-  foundry: foundryPlugin(env, fetcher, now),
-  vertex: vertexPlugin(env, fetcher, now),
+export const providerPlugins = (env: ProvidersEnv, secrets: SecretStore, catalog: OpenRouterCatalog | undefined, fetcher: typeof fetch = fetch): PluginRegistry => ({
+  openrouter: openrouterPlugin(env, secrets, catalog, fetcher),
 });
 
 export const readProviderPlugins = async (env: ProvidersEnv, db: D1Database): Promise<PluginRegistry> =>
-  providerPlugins(env, fetch, () => new Date(), await readBedrockOffer(db, regionOf(env)));
+  providerPlugins(env, vaultSecrets(db, env), await readCurrentCatalog(db));
