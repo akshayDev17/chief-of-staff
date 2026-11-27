@@ -5,16 +5,17 @@
 // both, with Google's Lyria music model listed at $0 a token; OpenRouter
 // refuses every paid model with 402 and answers the free one. Connect makes
 // no call; the account line says the account never bought credits; the free
-// model is labelled Free and passes when chosen; a paid one says it needs
-// credit, with Add credits; the music model is never offered or tested; Test
-// all models says the paid ones need credit; and a free model is usable for
-// every task in one step.
+// model is labelled Free and passes its test; a paid one says it needs
+// credit, with Add credits; the music model is never tested; Test all models
+// says the paid ones need credit; and the free model that passed is usable
+// for every task in one step.
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { handleTaskModels } from "../src/models/picker-page";
 import { routeTask, TASKS } from "../src/models/tasks";
 import { FRESH_LIST_WAIT, readTestAll, runQueuedTests } from "../src/models/test-all";
+import { readLatestTests } from "../src/models/usable";
 import { refreshPrices } from "../src/prices/refresh";
 import { readCurrentCatalog } from "../src/prices/store";
 import { isTrulyFreeTextModel } from "../src/prices/openrouter";
@@ -50,8 +51,9 @@ let fetcher: ReturnType<typeof fakeFetch>;
 const plugins = async () => providerPlugins(ENV, vaultSecrets(env.DB, ENV), await readCurrentCatalog(env.DB), fetcher);
 const handle = async (request: Request, now = NOW) =>
   handleProviders(request, { db: env.DB, plugins: await plugins(), readPlugins: plugins, secrets: vaultSecrets(env.DB, ENV), userId, viewer: "owner", appOrigin: ORIGIN, now, fetcher });
-const post = (path: string, fields: Record<string, string> = {}) =>
-  handle(new Request(`${BASE}${path}`, { method: "POST", body: new URLSearchParams(fields), headers: { origin: ORIGIN } }));
+const post = (path: string, fields: Record<string, string> = {}, json = false) =>
+  handle(new Request(`${BASE}${path}`, { method: "POST", body: new URLSearchParams(fields), headers: { origin: ORIGIN, ...(json ? { accept: "application/json" } : {}) } }));
+const tested = async (model: string) => ((await (await post("/openrouter/test", { model }, true)).json()) as { main: string }).main;
 const get = (path = "", now = NOW) => handle(new Request(`${BASE}${path}`), now);
 const tasks = async (path = "", fields?: Record<string, string>) =>
   handleTaskModels(
@@ -65,10 +67,11 @@ async function connect(overrides: Overrides): Promise<Response> {
   return get(`/openrouter/consented?code=code-1&state=${auth.searchParams.get("state")}`);
 }
 
-// One model's entry in the listbox.
+// One model's row in the table.
 const entry = (html: string, id: string): string => {
-  const at = html.indexOf(`data-model="${id}"`);
-  return at < 0 ? "" : html.slice(at, html.indexOf("</li>", at));
+  const at = html.indexOf(`<li class="row" id="`);
+  const start = html.indexOf(`data-id="${id}"`, at);
+  return start < 0 ? "" : html.slice(html.lastIndexOf("<li", start), html.indexOf("</li>", start));
 };
 
 const after = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
@@ -80,10 +83,9 @@ async function storeOldCatalog(): Promise<{ models: Array<{ id: string; blocked?
   const stored = (await env.DB.prepare("SELECT snapshot_id, catalog FROM openrouter_catalogs ORDER BY snapshot_id DESC LIMIT 1").first<{ snapshot_id: number; catalog: string }>())!;
   const old = JSON.parse(stored.catalog) as { version?: number; models: Array<{ id: string; blocked?: string; free?: true }> };
   delete old.version;
-  for (const m of old.models) {
-    delete m.free;
-    if (m.id === MUSIC) delete m.blocked;
-  }
+  for (const m of old.models) delete m.free;
+  // The old rules listed the music model as callable.
+  old.models.push({ id: MUSIC });
   await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = ? WHERE snapshot_id = ?").bind(JSON.stringify(old), stored.snapshot_id).run();
   return old;
 }
@@ -111,13 +113,13 @@ describe("a $0 OpenRouter account", () => {
     expect((await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY })).status).toBe(303);
     expect(chatModels()).toEqual([]);
     const html = await (await get()).text();
-    expect(html).toContain("<strong>OpenRouter account:</strong> never bought credits");
-    // The free model carries the Free label; the music model is listed but cannot be chosen.
+    expect(html).toContain("<strong>Account:</strong> never bought credits");
+    // The free model carries the Free label; the music model is listed but cannot be tested.
     expect(entry(html, FREE)).toContain('<span class="pill free">Free</span>');
     expect(entry(html, "openai/gpt-6-luna")).not.toContain("pill free");
-    expect(html).toContain(`data-model="${MUSIC}" aria-selected="false" aria-disabled="true"`);
-    expect(html).toContain("it also gives audio, images or video, priced beyond its token rates");
-    expect(html).not.toContain(`<option value="${MUSIC}"`);
+    // Never testable, so never shown; About this list counts it.
+    expect(entry(html, MUSIC)).toBe("");
+    expect(html).toContain("1 model that gives audio, images or video, gives no text, or lists no price.");
     expect(html).toContain("Free models work without credit. OpenRouter allows free models 20 requests a minute, and 50 a day");
     expect(html).toContain("https://openrouter.ai/settings/privacy");
   });
@@ -136,7 +138,8 @@ describe("a $0 OpenRouter account", () => {
     for (const seconds of [0, 60, 20 * 60]) await minuteCron(after(seconds), fetcher);
     expect((await tasks()).status).toBe(200);
     const html = await (await get("", after(20 * 60))).text();
-    expect(html).toContain(FRESH_LIST_WAIT);
+    expect(html).toContain("Waiting for a fresh model list.");
+    expect(FRESH_LIST_WAIT).toMatch(/^Waiting for a fresh model list/);
     expect(modelListReads()).toBe(0);
     expect(chatModels()).toEqual([]);
     expect(await queued()).toBe(before);
@@ -144,7 +147,7 @@ describe("a $0 OpenRouter account", () => {
 
     expect((await post("/openrouter/refresh")).status).toBe(303);
     expect(modelListReads()).toBe(1);
-    expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)!.blocked).toBeDefined();
+    expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)).toBeUndefined();
     for (let minute = 21; (await queued()) > 0 && minute < 50; minute++) await minuteCron(after(minute * 60), fetcher);
     expect(modelListReads()).toBe(1);
     const done = (await readTestAll(env.DB, userId, "openrouter"))!;
@@ -155,23 +158,24 @@ describe("a $0 OpenRouter account", () => {
     expect(done.tests.find((t) => t.model === FREE)).toMatchObject({ state: "passed" });
   });
 
-  it("passes the free model when it is chosen, and says a paid one needs credit, with Add credits first", async () => {
+  it("passes the free model when it is tested, and says a paid one needs credit, with Add credits first", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
-    const free = await post("/openrouter/choose", { model: FREE });
-    expect(await free.text()).toContain(`<strong>${FREE} passed.</strong>`);
-    const paidModel = MODELS.data.find((m) => !isTrulyFreeTextModel(m) && Number(m.pricing.prompt) > 0 && !m.id.startsWith("~") && m.id !== "anthropic/claude-sonnet-5.5")!.id;
-    const paid = await (await post("/openrouter/choose", { model: paidModel })).text();
-    expect(paid).toContain(`<strong>Needs credit on OpenRouter.</strong> <span class="small">${paidModel}</span>`);
+    const free = entry(await tested(FREE), FREE);
+    expect(free).toMatch(/<strong>[^<]+ passed\.<\/strong> Tasks can use it\./);
+    const paidModel = MODELS.data.find((m) => !isTrulyFreeTextModel(m) && Number(m.pricing.prompt) > 0 && !m.id.startsWith("~") && !m.id.endsWith(":batch") && m.id !== "anthropic/claude-sonnet-5.5")!.id;
+    const paid = entry(await tested(paidModel), paidModel);
+    // A 402 says nothing about the model: no verdict, so the row stays untested.
+    expect(paid).toContain('data-state="pending"');
+    expect((await readLatestTests(env.DB, userId, "openrouter")).has(paidModel)).toBe(false);
     // The one action leads; OpenRouter's own words are in the collapsed details.
-    expect(paid).toMatch(/<div class="row"><a class="btn small" href="https:\/\/openrouter.ai\/settings\/credits"[^>]*>Add credits<\/a><\/div>\n<details class="more"><summary>Details<\/summary><p class="tc-reply">OpenRouter replied: 402/);
+    expect(paid).toMatch(/<strong>Needs credit on OpenRouter\.<\/strong><\/span><button type="button" class="link hide" data-hide="[^"]+">Hide<\/button><\/p><div class="acts"><a class="btn small outline ext" href="https:\/\/openrouter.ai\/settings\/credits"[^>]*>Add credits<\/a><\/div><details><summary>Details<\/summary><p>OpenRouter replied: 402/);
     expect(paid).not.toContain("cheapest free model");
     // The music model is never sent.
-    const music = await post("/openrouter/choose", { model: MUSIC });
-    expect(music.status).toBe(400);
+    await tested(MUSIC);
     expect(chatModels()).toEqual([FREE, paidModel]);
   });
 
-  it("never tests the music model in Test all models: the free one works, the paid ones need credit; the free one is added and used for every task in one step", async () => {
+  it("never tests the music model in Test all models: the free one works, the paid ones need credit; the free one is usable for every task in one step", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     expect((await post("/openrouter/test-all")).status).toBe(303);
     await runQueuedTests(env.DB, await plugins(), NOW);
@@ -184,11 +188,14 @@ describe("a $0 OpenRouter account", () => {
     const paid = run.tests.filter((t) => t.model !== FREE);
     expect(paid.length).toBeGreaterThan(0);
     for (const t of paid) expect(t).toMatchObject({ state: "failed", result: { reason: "no_credits", text: "Needs credit on OpenRouter." } });
-    const page = await (await get("?tests=fails")).text();
-    expect(page).toContain("needs credit");
+    const page = await (await get()).text();
+    // Never usable, so no outcome tag; the reason line says it.
+    expect(entry(page, paid[0]!.model)).not.toContain('class="pill');
+    expect(entry(page, paid[0]!.model)).toContain('<span class="meta why">Needs credit on OpenRouter. · ');
+    expect(entry(page, FREE)).toContain('data-state="works"');
+    expect(entry(page, FREE)).not.toContain('class="pill ok"');
 
-    // Add the free model from the results; it is the only passed model.
-    expect((await post("/openrouter/add-tested", { model: FREE })).status).toBe(200);
+    // The free model passed, so it is usable: no Add.
     const picker = await (await tasks()).text();
     expect(picker).toContain("Your models that passed are all free, so the app proposes none");
     expect(picker).toContain("Use my free models for every task");
@@ -200,7 +207,7 @@ describe("a $0 OpenRouter account", () => {
 
   it("says a 402 on a free model plainly, never as a paid model's", async () => {
     await connect({ chat: () => Response.json(NO_CREDIT, { status: 402 }), currentKey: FREE_TIER_KEY });
-    const html = await (await post("/openrouter/choose", { model: FREE })).text();
+    const html = entry(await tested(FREE), FREE);
     expect(html).toContain("<strong>OpenRouter asked for credit even for this free model.</strong>");
     expect(html).not.toContain("cheapest free model");
   });

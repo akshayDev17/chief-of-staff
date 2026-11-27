@@ -7,6 +7,7 @@
 
 import { currentSnapshot, readSnapshotRows } from "../prices/store";
 import type { Provider } from "../prices/types";
+import { readUsableModels } from "../models/usable";
 
 export interface Budget {
   monthlyUsd: number;
@@ -105,22 +106,18 @@ export async function suggestBudget(db: D1Database, picked: PickedModel[], appli
   return best;
 }
 
-// The models the suggestion is worked from at one provider: those the
-// user's tasks use there (main and fallback, task_routes), else every model
-// the user picked there (user_models, T17).
+// The models the suggestion is worked from at one provider: the user's
+// usable models there (models/usable.ts) that their tasks' saved choices use
+// (main and fallback, task_routes), else every usable model there.
 export async function pickedModels(db: D1Database, userId: string, provider: Provider): Promise<PickedModel[]> {
-  const { results: used } = await db
-    .prepare(
-      `SELECT DISTINCT m.provider, m.model, m.location FROM user_models m JOIN task_routes t ON t.user_id = m.user_id
-         AND ((t.main_provider = m.provider AND t.main_model = m.model) OR (t.fallback_provider = m.provider AND t.fallback_model = m.model))
-       WHERE m.user_id = ? AND m.provider = ? ORDER BY m.model`,
-    )
-    .bind(userId, provider)
-    .all<PickedModel>();
-  if (used.length) return used;
-  const { results } = await db
-    .prepare("SELECT provider, model, location FROM user_models WHERE user_id = ? AND provider = ? ORDER BY model")
-    .bind(userId, provider)
-    .all<PickedModel>();
-  return results;
+  const usable = (await readUsableModels(db, userId)).filter((m) => m.provider === provider).map((m) => ({ provider: m.provider, model: m.model, location: m.location }));
+  const { results: routes } = await db
+    .prepare("SELECT main_provider, main_model, fallback_provider, fallback_model FROM task_routes WHERE user_id = ?")
+    .bind(userId)
+    .all<{ main_provider: string; main_model: string; fallback_provider: string | null; fallback_model: string | null }>();
+  const used = new Set(
+    routes.flatMap((r) => [r.main_provider === provider ? r.main_model : undefined, r.fallback_provider === provider ? r.fallback_model : undefined].filter((m): m is string => Boolean(m))),
+  );
+  const inUse = usable.filter((m) => used.has(m.model));
+  return inUse.length ? inUse : usable;
 }

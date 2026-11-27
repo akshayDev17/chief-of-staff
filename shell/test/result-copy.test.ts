@@ -1,16 +1,15 @@
-// Every result on the model test leads with one plain line of 12 words or
+// Every result under a model's row leads with one plain line of 12 words or
 // fewer; the reason and the fix are collapsed under Details (the owner,
 // 2026-11-27: "why not make it even more verbose ... so that the users learn
-// to read a book in 30seconds?"). Each refusal's result box and each Test all
-// models row is rendered, and its visible line counted outside <details>.
+// to read a book in 30seconds?"). Each refusal's result is rendered, and its
+// visible line counted outside <details>; so is each failed row's line.
 import { describe, expect, it } from "vitest";
-import { refusalFix, refusalText, type AddRefusal, type OfferRow } from "../src/models/add";
-import type { TestAllRun } from "../src/models/test-all";
+import { listOfferRow, type ShownLatest } from "./result-copy-helpers";
+import { refusalFix, refusalText, type Refused, type TestRefusal } from "../src/models/test-model";
 import { parseModels } from "../src/prices/openrouter";
 import { esc } from "../src/prices/page";
-import { modelsSection } from "../src/providers/models-panel";
+import { modelParts, type ModelsTableInput } from "../src/providers/models-table";
 import { openrouterPlugin } from "../src/providers/openrouter";
-import { formatCost } from "../src/providers/page";
 import { MODELS } from "./fake-sources";
 import { testSecrets } from "./test-plugin";
 
@@ -18,54 +17,55 @@ const NOW = new Date("2026-11-27T10:00:00Z");
 const plugin = openrouterPlugin({}, testSecrets(), parseModels(MODELS, NOW).catalog);
 // A model the app cannot call, so cannot_call shows its longest reason.
 const BLOCKED = MODELS.data.find((m) => m.architecture.output_modalities.includes("audio"))!.id;
-const REASONS: AddRefusal[] = [
+const REASONS: TestRefusal[] = [
   "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
-  "not_connected", "not_offered", "no_price", "cannot_call", "wrong_model", "budget_spent", "not_passed",
+  "not_connected", "not_offered", "no_price", "no_cap", "cap_refused", "cannot_call", "wrong_model", "budget_spent",
 ];
-const ROW: OfferRow = { model: "openai/gpt-6-luna", location: "global", free: false, callable: true, accountLeftOut: false, notes: [] };
+const ROW = listOfferRow("openai/gpt-6-luna");
 
-const section = (extra: Partial<Parameters<typeof modelsSection>[0]>) =>
-  modelsSection({
-    plugin, viewer: "owner", rows: [ROW], plan: { models: [], estimateUsd: 0 }, confirmTestAll: false, testsFilter: "all", formatCost, now: NOW, ...extra,
-  });
+const rows = (model: string, shown: Map<string, ShownLatest>, view: ModelsTableInput["view"]) =>
+  modelParts({
+    plugin, viewer: "owner", rows: [listOfferRow(model)], plan: { models: [], estimateUsd: 0 }, retest: { models: [], estimateUsd: 0, skipped: 0 },
+    shown, usedBy: new Map(), view, now: NOW,
+  }).rows;
+const failed = (o: Refused): Map<string, ShownLatest> =>
+  new Map([[o.model, { state: "failed", testedAt: NOW.toISOString(), result: { reason: o.reason, text: refusalText(o, plugin), fix: refusalFix(o, plugin), ...(o.reply ? { reply: o.reply } : {}) } }]]);
 
 const visible = (html: string): string => html.replace(/<details[\s\S]*?<\/details>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 const words = (text: string): number => text.split(" ").filter(Boolean).length;
 
-describe("a result on the model test", () => {
+describe("a result under a model's row", () => {
   it("leads with a line of 12 words or fewer for every refusal, and keeps the reason in Details", () => {
     for (const reason of REASONS) {
       for (const free of [false, true]) {
-        const outcome = { kind: "refused" as const, model: BLOCKED, reason, free, reply: { status: 400, errorName: "e", message: "m", repliedModel: "other/model" } };
-        const html = section({ outcome });
-        const verdict = html.match(/<p class="tc-verdict"><strong>([\s\S]*?)<\/strong>/)![1]!;
+        const outcome: Refused = { kind: "refused", model: BLOCKED, reason, free, reply: { status: 400, errorName: "e", message: "m", repliedModel: "other/model" } };
+        const html = rows(BLOCKED, failed(outcome), { results: [{ model: BLOCKED }] });
+        const verdict = html.match(/<div class="result[^"]*" role="alert"><p class="v">[\s\S]*?<strong>([\s\S]*?)<\/strong>/)![1]!;
         expect(words(visible(verdict)), `${reason}: ${verdict}`).toBeLessThanOrEqual(12);
         const fix = refusalFix(outcome, plugin);
-        if (fix) expect(html.match(/<details class="more"><summary>Details<\/summary>[\s\S]*?<\/details>/)![0]).toContain(esc(fix));
+        if (fix) expect(html.match(/<details><summary>Details<\/summary>[\s\S]*?<\/details>/)![0]).toContain(esc(fix));
       }
     }
   });
 
   it("moves why the app can't call a model into Details", () => {
-    const html = section({ outcome: { kind: "refused", model: BLOCKED, reason: "cannot_call" } });
-    expect(visible(html.slice(html.indexOf('<div class="tc tc-bad"')))).not.toContain(plugin.connect.notCallableReason(BLOCKED)!);
-    expect(html).toContain(plugin.connect.notCallableReason(BLOCKED)!);
+    const html = rows(BLOCKED, new Map(), { results: [{ model: BLOCKED, reason: "cannot_call" }] });
+    const box = html.slice(html.indexOf('<div class="result'));
+    expect(visible(box)).not.toContain(plugin.connect.notCallableReason(BLOCKED)!);
+    expect(box).toContain(esc(plugin.connect.notCallableReason(BLOCKED)!));
   });
 
   it("offers Budgets as the one action when this month's budget is spent", () => {
-    const html = section({ outcome: { kind: "refused", model: ROW.model, reason: "budget_spent" } });
-    expect(html).toMatch(/<div class="row"><a class="btn small" href="[^"]*\/budgets">Budgets<\/a><\/div>/);
+    const html = rows(ROW.model, failed({ kind: "refused", model: ROW.model, reason: "budget_spent" }), { results: [{ model: ROW.model }] });
+    expect(html).toMatch(/<div class="acts"><a class="btn small outline" href="[^"]*\/budgets">Budgets<\/a><\/div>/);
   });
 
-  it("shows each Test all models row's line in 12 words or fewer", () => {
-    const tests = REASONS.map((reason) => {
-      const o = { kind: "refused" as const, model: `${reason}/model`, reason };
-      return { model: o.model, state: "failed" as const, result: { reason, text: refusalText(o, plugin), fix: refusalFix(o, plugin) } };
-    });
-    const run: TestAllRun = { id: 1, startedAt: NOW.toISOString(), finishedAt: NOW.toISOString(), modelCount: tests.length, estimateUsd: 0, tests, done: tests.length, realCostUsd: 0 };
-    const html = section({ run });
-    const lines = [...html.matchAll(/<span class="pill warn">[^<]*<\/span> <span class="small">([^<]*)<\/span>/g)].map((m) => m[1]!);
-    expect(lines).toHaveLength(REASONS.length);
-    for (const line of lines) expect(words(line), line).toBeLessThanOrEqual(12);
+  it("shows each failed row's line in 12 words or fewer, with its Details collapsed", () => {
+    for (const reason of REASONS) {
+      const html = rows(ROW.model, failed({ kind: "refused", model: ROW.model, reason }), {});
+      const line = html.match(/<span class="meta why">([^<]*) · <button type="button" class="link" data-det=/)![1]!;
+      expect(words(line), `${reason}: ${line}`).toBeLessThanOrEqual(12);
+      expect(html).toMatch(/<div class="det" id="det-[^"]+" data-det-panel hidden>/);
+    }
   });
 });

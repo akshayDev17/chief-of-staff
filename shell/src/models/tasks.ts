@@ -8,11 +8,17 @@
 //   changeTask(db, userId, task, main, fallback?, now)
 //   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
 //
-// Only the user's own passed models (user_models, T17: chosen one by one, or
-// added from Test all models' results) are ever offered, each named by its
-// provider and model, so a second provider plugs in without a change here.
-// With one passed model every task uses it, unless it is free. Otherwise each
-// task gets a proposal: a main model
+// Only the user's usable models (models/usable.ts: each model whose latest
+// test passed, on its row or in Test all models, that the provider still
+// offers the user) are ever offered, each named by its provider and model, so
+// a second provider plugs in without a change here. A task uses only its
+// saved choice: its main model while that is usable; once it is not (a later
+// test of the model failed, or the provider dropped it), its saved fallback
+// alone while that is usable, which the task shows it runs on, else nothing,
+// and the task reads "Choose a model" until the user chooses one. Its calls
+// never go to a model the user did not choose for it. A task with no saved
+// choice has no model (migration 0013 saved, as accepted choices, the one
+// model each user's tasks used before this rule). Each task gets a proposal: a main model
 // at the task's strength and a fallback at that strength, another of the
 // user's models (on OpenRouter today, the one provider, a fallback is another
 // OpenRouter model), each model's strength (tier) worked out from its price
@@ -20,7 +26,7 @@
 // the user has no model of the task's own strength, the other non-Strongest
 // tier is proposed instead. A free model (prices/openrouter.ts
 // isTrulyFreeTextModel: rate-limited, and the provider may log prompts)
-// is never proposed, nor used as the one model: a task uses it only once the
+// is never proposed: a task uses it only once the
 // user chooses it, with Change or, for every task with no model and no
 // proposal (all of a $0 account's passed models are free), with one tap
 // ("Use my free models for every task", the owner, 2026-11-27: "use only the
@@ -38,12 +44,14 @@
 // named in its ledger row (and, for a fallback on another provider, a failed
 // credential or a spent budget at the main model's provider too).
 
+import { TASK_MODELS_PATH } from "../paths";
 import { currentSnapshot, readSnapshotRows } from "../prices/store";
 import { modelTier, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import type { ModelRequest, PluginRegistry } from "../proxy/plugin";
 import { callModel, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
-import { readFreeModels, readUserModels, type UserModel } from "./add";
+import { readFreeModels } from "./test-model";
+import { readNotUsable, readUsableModels, type NotUsable, type UsableModel } from "./usable";
 
 export interface Task {
   id: string;
@@ -65,9 +73,9 @@ export const TASKS: readonly Task[] = [
 
 export const taskById = (id: string): Task | undefined => TASKS.find((t) => t.id === id);
 
-// One of the user's passed models, with its strength and input price, and
+// One of the user's usable models, with its strength and input price, and
 // whether it is free (prices/openrouter.ts isTrulyFreeTextModel).
-export interface Offered extends UserModel {
+export interface Offered extends UsableModel {
   tier?: Tier;
   inputUsd?: number;
   free?: boolean;
@@ -80,21 +88,31 @@ export interface Route {
 
 export interface TaskRoute {
   task: Task;
-  // What the task uses now: the user's choice, or with one passed model
-  // that model. Undefined until a proposal is accepted or a model chosen.
-  current?: Route & { setHow: "accepted" | "changed" | "only_model" };
+  // What the task uses now: the user's choice. Undefined until a proposal is
+  // accepted or a model chosen, and while its saved main model is not usable.
+  current?: Route & { setHow: "accepted" | "changed" };
   proposal?: Route;
-  // The proposal waits for the one tap: the task has no model yet, or its
-  // accepted models differ from its proposal now.
+  // The proposal waits for the one tap: the task has no saved choice yet, or
+  // its accepted models differ from its proposal now.
   pending: boolean;
+  // The task's saved choice names a main model that is not usable now
+  // (`main`), for the reason `why`. Its calls go to `fallback`, its saved
+  // fallback, while that is usable; without one the task reads "Choose a
+  // model". No proposal replaces the choice by itself.
+  stopped?: Stopped<Offered> & { why: NotUsable };
+}
+
+export interface Stopped<M> {
+  main: { provider: Provider; model: string };
+  fallback?: M;
 }
 
 export const modelKey = (m: { provider: Provider; model: string }): string => `${m.provider}|${m.model}`;
 
-// The user's passed models with each one's tier, input price and whether it
+// The user's usable models with each one's tier, input price and whether it
 // is free, from one read of the current price snapshot.
 export async function readOffered(db: D1Database, userId: string): Promise<Offered[]> {
-  const models = await readUserModels(db, userId);
+  const models = await readUsableModels(db, userId);
   const snapshot = models.length ? await currentSnapshot(db) : undefined;
   const rows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
   const free = models.length ? await readFreeModels(db) : new Set<string>();
@@ -108,9 +126,6 @@ export async function readOffered(db: D1Database, userId: string): Promise<Offer
     return { ...m, tier: modelTier(m.provider, own), inputUsd, free: free.has(m.model) };
   });
 }
-
-// The one model every task uses: the user's only passed model, unless it is free.
-export const onlyModel = (offered: Offered[]): Offered | undefined => (offered.length === 1 && !offered[0]!.free ? offered[0] : undefined);
 
 const PREFERRED: Record<Task["tier"], readonly Tier[]> = { Smallest: ["Smallest", "Middle"], Middle: ["Middle", "Smallest"] };
 
@@ -131,10 +146,11 @@ export function proposeRoute(task: Task, models: Offered[], free = false): Route
 }
 
 // The tasks with no model and no proposal, which the user's free models can
-// take with one tap, each with the route they would get.
+// take with one tap, each with the route they would get. A task running on
+// its fallback has a model.
 export function freeRoutes(offered: Offered[], routes: TaskRoute[]): Array<{ task: Task; route: Route }> {
   return routes.flatMap((r) => {
-    if (r.current || r.proposal) return [];
+    if (r.current || r.proposal || r.stopped?.fallback) return [];
     const route = proposeRoute(r.task, offered, true);
     return route ? [{ task: r.task, route }] : [];
   });
@@ -154,13 +170,15 @@ interface ChoiceRecord {
 
 const CHOICE_COLUMNS = "task, main_provider, main_model, fallback_provider, fallback_model, set_how";
 
-// A saved choice as models among `byKey` (the user's own); a choice whose
-// main model is no longer there is ignored, as is a fallback no longer there.
-function savedRoute<M extends UserModel>(r: ChoiceRecord, byKey: Map<string, M>): { main: M; fallback?: M } | undefined {
+// A saved choice as models among `byKey` (the user's usable ones): its main
+// model and its fallback while the main is there (a fallback not there is
+// left out); once the main is not, `stopped`, with the fallback where that is.
+// The one rule readTaskRoutes shows and routeTask calls by.
+function savedRoute<M extends UsableModel>(r: ChoiceRecord, byKey: Map<string, M>): { main: M; fallback?: M } | { stopped: Stopped<M> } {
   const main = byKey.get(modelKey({ provider: r.main_provider, model: r.main_model }));
-  if (!main) return undefined;
   const fallback = r.fallback_provider && r.fallback_model ? byKey.get(modelKey({ provider: r.fallback_provider, model: r.fallback_model })) : undefined;
-  return { main, fallback };
+  if (main) return { main, fallback };
+  return { stopped: { main: { provider: r.main_provider, model: r.main_model }, ...(fallback ? { fallback } : {}) } };
 }
 
 export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ offered: Offered[]; routes: TaskRoute[] }> {
@@ -171,27 +189,36 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
     .bind(userId)
     .all<ChoiceRecord>();
   const saved = new Map(results.map((r) => [r.task, r]));
-  const only = onlyModel(offered);
+  const stoppedMains = results.filter((r) => !byKey.has(modelKey({ provider: r.main_provider, model: r.main_model })));
+  const notUsable = await readNotUsable(db, userId, stoppedMains.map((r) => ({ provider: r.main_provider, model: r.main_model })));
+  const why = new Map(stoppedMains.map((r, i) => [r.task, notUsable[i]!]));
   const routes = TASKS.map((task): TaskRoute => {
-    if (only) return { task, current: { main: only, setHow: "only_model" }, pending: false };
-    const proposal = proposeRoute(task, offered);
     const r = saved.get(task.id);
-    const route = r && savedRoute(r, byKey);
-    if (!r || !route) return { task, proposal, pending: proposal !== undefined };
+    const proposal = proposeRoute(task, offered);
+    if (!r) return { task, proposal, pending: proposal !== undefined };
+    const route = savedRoute(r, byKey);
+    if ("stopped" in route) return { task, proposal, pending: false, stopped: { ...route.stopped, why: why.get(task.id)! } };
     const pending = r.set_how === "accepted" && proposal !== undefined && !sameRoute(route, proposal);
     return { task, proposal, current: { ...route, setHow: r.set_how }, pending };
   });
   return { offered, routes };
 }
 
-// The models a call for `task` goes to, or undefined when the task has none:
-// what `readTaskRoutes` names its current route, read from the user's models
-// and the task's one saved choice only.
+const readChoice = (db: D1Database, userId: string, task: string): Promise<ChoiceRecord | null> =>
+  db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
+
+// The models a call for `task` goes to, or undefined when the task has none,
+// from the user's usable models and the task's one saved choice only, by the
+// rule readTaskRoutes shows: its main model and fallback while the main is
+// usable; its fallback alone once only that is. A task with no saved choice
+// has none. Never a model the user did not choose for the task.
 export async function routeTask(db: D1Database, userId: string, task: string): Promise<Route | undefined> {
-  const models = await readUserModels(db, userId);
-  if (models.length === 1 && !(await readFreeModels(db)).has(models[0]!.model)) return { main: models[0]! };
-  const r = await db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
-  return r ? savedRoute(r, new Map(models.map((m) => [modelKey(m), m]))) : undefined;
+  const r = await readChoice(db, userId, task);
+  if (!r) return undefined;
+  const models = await readUsableModels(db, userId);
+  const route = savedRoute(r, new Map(models.map((m) => [modelKey(m), m])));
+  if (!("stopped" in route)) return route;
+  return route.stopped.fallback ? { main: route.stopped.fallback } : undefined;
 }
 
 function prepareChoiceWrite(db: D1Database, userId: string, task: string, route: Route, setHow: "accepted" | "changed", now: Date): D1PreparedStatement {
@@ -226,7 +253,7 @@ export async function useFreeModels(db: D1Database, userId: string, now: Date): 
 
 export type ChangeProblem = "no_such_task" | "not_your_model" | "same_model";
 
-// Sets one task to models the user chose, each one of their passed models
+// Sets one task to models the user chose, each one of their usable models
 // named by provider and model; the fallback, if any, another model.
 export async function changeTask(
   db: D1Database,
@@ -279,7 +306,14 @@ export async function callTask(
 ): Promise<ProxyOutcome | NoModel> {
   const route = await routeTask(db, call.userId, call.task);
   if (!route) {
-    return { kind: "no_model", task: call.task, detail: "choose a model for this task on Models › Setup › Model for each task" };
+    const chosen = (await readChoice(db, call.userId, call.task)) !== null;
+    return {
+      kind: "no_model",
+      task: call.task,
+      detail: chosen
+        ? "no usable model for this task: test its model again on Models › Setup › Providers and models, or choose another on Model for each task"
+        : `no model chosen for this task: choose one for it on Models › Setup › Model for each task (${TASK_MODELS_PATH})`,
+    };
   }
   const { userId, task, site, company, runId } = call;
   return callModel(

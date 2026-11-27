@@ -1,82 +1,112 @@
-# Choosing a model (T17, design-v3 1.5)
+# Testing models, and the usable ones (T17, design-v3 1.5)
 
-There is no separate Add a model page: the model list is the model test on
-the provider's Connect screen, shown once connected and opened at `#test`
-right after Connect (Models › Setup › Providers,
-`src/providers/models-panel.ts`; logic in `add.ts`), and the old path
-`/chief-of-staff/models/setup/add` redirects there.
+There is no separate Add a model page, and no Add at all (the owner,
+2026-11-27: "quite franky remove the add feature altogether"). The model
+table is on the provider's Connect screen, shown once connected (Models ›
+Setup › Providers, `src/providers/models-table.ts`; logic in
+`test-model.ts`, `usable.ts`, `test-all.ts`, `price-caps.ts`), and the old
+path `/chief-of-staff/models/setup/add` redirects there.
 
-**The list** is every model OpenRouter lists (the owner, 2026-11-27: "i would
-like to list all models and then choose"), from its public models API, read
-with the price table (`src/prices/README.md`). The public list needs no key
-and is the same for every account. The user's own account can allow fewer:
-OpenRouter's `/api/v1/models/user`, read with the user's key after Connect and
-on Refresh model list (`account-list.ts`), "filtered by user provider
-preferences, privacy settings, and guardrails" (a guardrail can hold a model
-allowlist). A model the account leaves out stays in the list, marked "not
-offered for your account", and cannot be chosen.
+**Usable models** (`usable.ts` `readUsableModels`) are the models a user's
+tasks can use: every model whose latest test passed, whichever way it ran (Test
+on its row, Test all models, Retest failed), that the provider's current list
+still offers the user. That means the list names it and the app can call it,
+a router has the user's price cap, and the account's own list, where read,
+includes it. A later failed test takes the model out, and a later pass puts
+it back. Only the model's own verdict counts as its latest test: a refusal
+that says nothing about the model (`test-model.ts` `isVerdict`: the
+provider not connected, the month's budget spent, no credential, no credit,
+the provider busy, or a test that could not run) changes nothing about
+whether it is usable. Its row still shows that outcome: Test all's in the
+run, a single Test's in the page's view. The strip's Works / Doesn't work
+counts and filters go by the verdict. Each model's latest verdict is one row of
+`model_latest_tests`. A Test all models run that is still testing a model
+does not change it, so tasks keep their models while a run goes on.
+Migration 0013 carried the tests made before it over: each model's newest
+of its latest run verdict and the passed test it was added with; a run's
+refusal that says nothing about the model is not carried. The old
+`user_models` table is no longer read or written.
 
-The dropdown is a custom listbox (a native `<select>` cannot colour its
-entries; the ARIA select-only combobox pattern, with keyboard, focus and a
-plain `<select>` for a browser without scripts). Each entry shows, with
-nothing to type: the model's ID and name; its input and output list price per
-million tokens, "OpenRouter models API, read <date>", and a note when the last
-refresh failed and the last good price is kept; its strength (Smallest,
-Middle, Strongest) as a coloured label naming it in words; and notes: added,
-"no tool use (OpenRouter lists no tool support for it)", "OpenRouter retires
-it on <date>", "priced higher from <n> prompt tokens". An entry cannot be
-chosen, and says why, when the app cannot call it (a router, a `~` alias, a
-model with no text, a model that also gives audio, images or video), the
-account leaves it out, or it has no price yet.
+**The list** is every model OpenRouter lists that a test can pass (the owner,
+2026-11-27: "i would like to list all models and then choose"; 2026-11-28:
+anything the app can identify as never choosable is not shown), from its
+public models API, read with the price table (`src/prices/README.md`). These
+are left out, each kind counted under "About this list": `~` aliases,
+`:batch` variants, routers no price cap can bound, and models that give
+audio, images or video, give no text, or list no price. The public list needs
+no key and is the same for every account. The user's own account can allow
+fewer: OpenRouter's `/api/v1/models/user`, read with the user's key after
+Connect, on Refresh model list and on Check again (`account-list.ts`),
+"filtered by user provider preferences, privacy settings, and guardrails". A
+model the account leaves out stays in the table with one action on its row:
+a link to the account's settings on OpenRouter, then Check again.
 
-**Choosing** a model sends nothing: the dropdown reads "Choose a model", and
-choosing one only fills the form and turns the disabled Test button into
-"Test with <model>?". **That button** runs the model's own test call once,
-right there, through the
-proxy (`sendTestCall`, task `test_call`), capped at 16 reply tokens. The model
-is added (a `user_models` row, with the passed call's reply, tokens and cost)
-only when the call passes and the reply names that model (`namesPickedModel`:
-the same ID, or with a date stamp or a variant such as `:batch`, never a
-longer ID, such as `<model>-pro` for `<model>`). Otherwise the plain
-reason shows under the list with OpenRouter's own reply.
+**One table**, nothing to type but the search. Search matches any part of a
+model's name, maker or ID. The Maker filter has its own find box and chips.
+The Works / Doesn't work / Not tested yet strip filters the table, over a bar
+of the true ratios. None of these sends a request. Each row shows the model's
+name and maker, its input and output list price per million tokens, its
+strength from the input price (Smallest, Middle, Strongest), a Free label on a
+free model and "Other fees" on one at $0 a token that is not free, Works or
+its failure ("Doesn't work", "Needs credit", "Busy"), and **Test**. Test runs
+the model's own test call once through the proxy (`sendTestCall`, task
+`test_call`), capped at 16 reply tokens, and the result opens under the row.
+The call passes when it answers and its reply names that model
+(`namesPickedModel`: the same ID, or with a date stamp or a variant such as
+`:batch`, never a longer ID such as `<model>-pro` for `<model>`). A router's
+reply names the model it picked, which is the point. A failure shows its
+plain reason, with OpenRouter's own reply collapsed, and names the tasks
+whose saved model it was.
 
-**Test all models** (`test-all.ts`) tests every model the user can choose, to
+**A router's price cap** (`price-caps.ts`). OpenRouter prices a router such as
+`openrouter/auto` by the model it picks for each call (`pricing.prompt`
+"-1"), so it has no price of its own. Only a router OpenRouter publishes
+itself that takes request parameters is listed; its row has a labelled **Set
+price cap**. The cap, in USD per million input and output tokens, is the
+router's price for the table, for its tier and for the budget stop. Every
+call to the router carries OpenRouter's `provider.max_price` at the cap, with
+the fees per request, image and audio unit at "0". It also carries the
+auto-router plugin's `excluded_models`: every listed model whose pricing has
+a per-search or per-request fee, since `max_price` has no field for search
+fees. A refusal under the cap (no model fits, say) shows OpenRouter's own
+words.
+
+**Test all models** (`test-all.ts`) tests every model the user can test, to
 show which work for their account right now (the owner, 2026-11-27:
 "post-connection testing just to let a COS user see that w.r.t. that provider
 what all models work and what arent at the moment"). It first shows how many
-models and the estimated total (each model's price for at most 40 input and
-16 output tokens, plus any fee per call), and runs only on confirm. The
-every-minute cron then claims the queued tests and runs them, 50 a minute at
-most across every user, 5 at once, each the model's own test call (task
-`test_all_models`); a tick claims each test before calling, so overlapping
+models and the estimated total, and runs only on confirm. The every-minute
+cron then claims the queued tests and runs them, at most 50 a minute across
+every user, 5 at once, each the model's own test call (task
+`test_all_models`). A tick claims each test before calling, so overlapping
 ticks never test a model twice, and a claim older than 10 minutes is taken
 again. A 200 with no text (a reasoning model that spent its tokens thinking)
-counts as working. One run at a time per user (a unique index holds it when
-two starts race), a new one at most every 10 minutes. The results (stored per
-user, `model_tests`) show each model as "works now" or "doesn't work now" with
-the plain reason and OpenRouter's reply, filterable, with the real total: the
-sum of the run's ledger rows, OpenRouter's reported cost. A run adds nothing
-to the user's models. Each model that works has a one-tap **Add**
-(`addTestedModel`), which adds it with that run's passed test call and makes
-no new call; it is refused for a model that did not pass in the user's latest
-run.
+counts as working. Each result is recorded in the run, and each verdict
+becomes the model's latest test. One run at a
+time per user (a unique index holds it when two starts race), and a new one
+at most every 10 minutes. **Retest failed (N)** reruns, in the same run, the
+run's failures, verdicts or not, that can still be tested and have not passed since. A run made
+on an older model list (`CATALOG_VERSION`) offers no Retest failed. The real
+total is the sum of the run's ledger rows: OpenRouter's reported cost.
+
+**The estimate** is each model's last measured test cost where the user has
+one: its latest answered test call's ledger row, which is the same request
+and so the same price. Otherwise it is the model's list price for at most 40
+input and 16 output tokens, plus any fee per call, plus one search for a
+model that searches the web on its own. The run of 2026-11-27 cost $0.35
+against a $0.07 token-only estimate, for two reasons. Per-search fees were
+$0.24 of it (Perplexity's Sonar Deep Research alone was $0.23). And some
+models billed 1,300 to 2,100 input tokens for the one-line prompt
+(`test/test-all-estimate.test.ts`, on that run's reported costs).
 
 A free model (`src/prices/openrouter.ts` `isTrulyFreeTextModel`: it gives
 only text and every price OpenRouter lists for it is 0, see
-`src/providers/README.md`) carries a Free label and reads "free:
-rate-limited, and the provider may log prompts" in the model list and in the
-picker, and both show the plug-in's terms for free models (`freeModelTerms`:
-OpenRouter's request limits and the privacy setting that can refuse them,
-with links). A model at $0 a token that is not free that way reads "not free:
-OpenRouter lists other fees for it". A $0 account can do the whole flow:
-Connect makes no call, a free model passes when chosen, Test all models shows
-its paid models as needing credit on OpenRouter, and its free models can be
-added and used for tasks.
-
-`readUserModels(db, userId)` returns the user's added models at every
-provider a plug-in serves (rows left from Bedrock, Vertex AI or Foundry are
-ignored): what the per-task picker offers. Every query is scoped to the
-signed-in user.
+`src/providers/README.md`) carries a Free label. It reads "free:
+rate-limited, and the provider may log prompts" in the picker, and the plug-in's
+terms for free models are under "About this list" (`freeModelTerms`). A $0
+account can do the whole flow. Connect makes no call. A free model passes its
+test. Test all models shows its paid models as needing credit on OpenRouter.
+Its free models that pass are usable for tasks.
 
 # Model for each task (T18, design-v3 1.5 and decision 6)
 
@@ -89,13 +119,29 @@ task defaults to Strongest.
 
 For each task the user chooses the provider and the model (the owner,
 2026-11-27: "for each kind of task : choose the provider and the model"),
-for the main model and the fallback, from their own passed models only. The
-provider list has one entry today, OpenRouter; another provider's passed
+for the main model and the fallback, from their usable models only. The
+provider list has one entry today, OpenRouter; another provider's usable
 models join the same lists (`task_routes` names each by provider and model).
 
-- one passed model: every task uses it, with nothing to tap, unless it is
-  free;
-- more: each task is proposed the cheapest passed model at its tier and, as
+- a task uses only its saved choice. A task with no saved choice has no
+  model; migration 0013 saved, as an accepted choice with no fallback, the one
+  model each user's tasks used before (the user's only added model, unless
+  free);
+- a saved choice holds while its main model is usable. Once that model is not
+  usable (a later test of it failed, or the provider dropped it), no proposal
+  or one tap replaces the choice by itself. The task says why its main model
+  is no longer usable, by the same checks as `readUsableModels`
+  (`readNotUsable`): it failed its last test, it is no longer on OpenRouter's
+  list, the account's settings leave it out (with a link to them), or it
+  needs a price cap (with a link to set one), else that it is no longer
+  usable. Its calls go to its saved fallback
+  while that is usable, and the task says it runs on its fallback, named,
+  with its Change form open to choose a new main model; with no usable
+  fallback the task reads "Choose a model" and its calls are refused with a
+  plain reason, never sent to a model the user did not choose for the task
+  (`readTaskRoutes` `stopped`, the one rule `routeTask` calls by and the
+  Providers page's note under a failed result follows);
+- each task is proposed the cheapest passed model at its tier and, as
   its fallback, the next cheapest at that tier, another model (on OpenRouter
   today, so another OpenRouter model), never the main one; where the user has
   none at the task's tier, the other non-Strongest tier, and the page says
@@ -108,15 +154,17 @@ models join the same lists (`task_routes` names each by provider and model).
   tasks with no model and no proposal (a $0 account's passed models are all
   free). It picks by the proposal's own rule among the free models and saves
   the tasks as the user's choice (`set_how` `changed`);
-- any task can be changed to any passed model, the Strongest included, with
+- any task can be changed to any usable model, the Strongest included, with
   a fallback that is another model, or none.
 
 `callTask` sends a task's call through `callModel` with its main model and
 fallback: OpenRouter refusing or failing the main call (429, 408, 5xx, no
 reply) is answered once by the fallback, named in its ledger row. A spent
 budget or a missing key stops both, since they share the one provider.
-Until a proposal is accepted or a model chosen, a task with several models
-has none, and `callTask` refuses it (`no_model`). Every query is scoped to the
+Until a proposal is accepted or a model chosen, a task has none, and
+`callTask` refuses it (`no_model`), saying to choose a model for it on Model
+for each task; so does a task whose saved main model and fallback are both no
+longer usable, saying to test its model again or choose another. Every query is scoped to the
 signed-in user.
 
 # Models › Usage (design-v3 10.1)

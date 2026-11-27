@@ -7,10 +7,13 @@
 // Before sending a call to a provider the core refuses it when:
 // - no plug-in serves the provider (`no_plugin`);
 // - the plug-in cannot call the model, or not at its location
-//   (`not_callable`, with the plug-in's reason): a model the user added that
-//   the provider's list now drops;
+//   (`not_callable`, with the plug-in's reason): a model that passed its test
+//   but the provider's list now drops;
 // - the model has no input or output list price at that location (`no_price`):
-//   the budget stop needs a real price;
+//   the budget stop needs a real price; a router (priced by the model it picks
+//   for each call) is priced at the user's price cap instead, and refused
+//   without one (`no_cap`); its call asks the provider for no model dearer
+//   than the cap;
 // - the user has set no monthly budget for the provider (`no_budget`), except
 //   for a test call (`testCall`), which runs before budgets are set;
 // - the user's spend at the provider since the 1st has reached the budget
@@ -50,8 +53,9 @@
 import { AppNotConfigured } from "../app-config";
 import type { PriceAnswer } from "../prices/lookup";
 import { currentSnapshot, readModelRows } from "../prices/store";
-import { modelTier, type Tier } from "../prices/tiers";
+import { modelTier, tierFromInputPrice, type Tier } from "../prices/tiers";
 import { addAlertOncePerDay } from "../prices/store";
+import { readPriceCap } from "../models/price-caps";
 import type { Provider, TokenKind } from "../prices/types";
 import { readBudget } from "./budgets";
 import { readConnection } from "./connections";
@@ -80,7 +84,7 @@ export interface ModelCall {
   fallback?: ModelChoice;
 }
 
-export type Refusal = "no_plugin" | "not_callable" | "no_price" | "no_budget" | "budget_spent" | "not_connected" | "credential_failed";
+export type Refusal = "no_plugin" | "not_callable" | "no_price" | "no_cap" | "no_budget" | "budget_spent" | "not_connected" | "credential_failed";
 
 export const TEST_TASK = "test_call";
 
@@ -195,7 +199,17 @@ async function attempt(
   if (!plugin.connect.canCall(model)) return refuse("not_callable", `${model} is not offered at ${PROVIDER_NAMES[provider]}: ${plugin.connect.notCallableReason(model)}`);
   if (!plugin.connect.locations(model).includes(location)) return refuse("not_callable", `${PROVIDER_NAMES[provider]} does not offer ${model} at ${location} any more`);
 
-  const { short: prices, long: longPrices, tier } = await modelPrices(db, choice);
+  let { short: prices, long: longPrices, tier } = await modelPrices(db, choice);
+  let maxPrice: { inputUsdPerMTok: number; outputUsdPerMTok: number } | undefined;
+  if (plugin.connect.isRouter?.(model)) {
+    const cap = await readPriceCap(db, call.userId, provider, model);
+    if (!cap) return refuse("no_cap", `${model} is priced by the model it picks for each call: set it a price cap on Models › Setup › Providers`);
+    const at = (usdPerMTok: number) => ({ usdPerMTok, source: plugin.priceSource[0]!, dateRead: (cap.setAt ?? "").slice(0, 10), stale: false });
+    prices = { input: at(cap.input), output: at(cap.output) };
+    longPrices = {};
+    tier = tierFromInputPrice(cap.input);
+    maxPrice = { inputUsdPerMTok: cap.input, outputUsdPerMTok: cap.output };
+  }
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);
 
   const budget = await readBudget(db, call.userId, provider);
@@ -235,7 +249,7 @@ async function attempt(
   let callId: string | undefined;
   let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
   try {
-    const reply = await plugin.call({ credential, connection, model, location, request: choice.request });
+    const reply = await plugin.call({ credential, connection, model, location, request: choice.request, ...(maxPrice ? { maxPrice } : {}) });
     status = reply.status;
     body = reply.body;
     callId = reply.callId;
@@ -315,7 +329,7 @@ export async function callModel(
   return attempt(db, plugins, call, call.fallback, reason, now);
 }
 
-// A model's test call (Test with <model>?, src/models/add.ts): one call on `choice`, with
+// A model's test call (Test on its row, src/models/test-model.ts): one call on `choice`, with
 // every check above except that no budget need be set yet (budgets come after
 // providers on the setup checklist); a budget set and spent still stops it.
 // Its ledger row's task is `test_call`, and it has no fallback.

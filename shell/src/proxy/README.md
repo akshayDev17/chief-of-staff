@@ -39,7 +39,7 @@ no key in the vault) records the connection as revoked, for T49's alert
    current price table (one read of its rows, `modelPrices`), else it is
    refused (`no_price`).
 3. Enforces the provider's monthly budget: none set is refused (`no_budget`),
-   except for a model's test call (Test with <model>?) and Test all models
+   except for a model's test call (Test on its row) and Test all models
    (`sendTestCall`),
    which run before budgets are set; the user's spend at that provider since
    00:00 UTC on the 1st reaching it is refused (`budget_spent`) until the 1st,
@@ -86,8 +86,9 @@ with the user's key: `total_cost`, `tokens_prompt`, `tokens_completion`).
 One monthly budget per user per provider (`provider_budgets`), required, with
 no default, no daily and no per-model budget. Models › Setup › Budgets
 (`GET`/`POST /chief-of-staff/models/setup/budgets`, `budgets-page.ts`) shows each connected
-provider with a suggestion worked out from the dearest picked model's list
-price (`user_models`, written by T17) and the design's tokens per application
+provider with a suggestion worked out from the dearest model's list price
+among the user's usable models (`src/models/usable.ts`: those their tasks'
+saved choices use, else all of them) and the design's tokens per application
 (`TOKENS_PER_APPLICATION` in `budgets.ts`, from design-v3 12.2) at the
 applications a day the user plans (5 until they say), marked "estimate" with
 the date its prices were read. The user accepts it or types their own.

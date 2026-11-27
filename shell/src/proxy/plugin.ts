@@ -145,6 +145,12 @@ export interface Guide {
   // Why Connect again makes a new grant rather than reusing the last one, as
   // a plain sentence; shown collapsed under Connect.
   newGrantEachTime?: string;
+  // The provider's page of the account settings that can leave a model out
+  // of the account's list (privacy, provider preferences): the action on a
+  // model row the account leaves out.
+  accountSettings?: Link;
+  // The provider's page to buy credits.
+  credits?: Link;
 }
 
 // Where "Connect <Provider>" sends the user, and the one secret the app keeps
@@ -167,11 +173,11 @@ export interface ConnectMethod {
   // cannot be trusted.
   finish(verifier: string, returned: URLSearchParams): Promise<{ fields: ConnectionFields; secret: string }>;
   // Whether the plug-in can call the model: the provider still lists it.
-  // A model the user added that the provider has dropped is shown as "not
-  // offered yet" with `notCallableReason`, never picked.
+  // A model the provider has dropped is shown as "not offered" with
+  // `notCallableReason`, never picked.
   canCall(model: string): boolean;
   // Why `model`, which the plug-in cannot call, is not offered, in plain
-  // words after "not offered yet: ".
+  // words after "not offered: ".
   notCallableReason(model: string): string;
   // For a model the provider lists no tool support for, why ("OpenRouter
   // lists no tool support for it"), shown in the model list; the per-task
@@ -179,6 +185,13 @@ export interface ConnectMethod {
   noToolUse?(model: string): string | undefined;
   // Plain notes for the model list's entry ("OpenRouter retires it on …").
   modelNotes?(model: string): string[];
+  // A router: the provider prices each call by the model it picks, so the
+  // model has no price of its own and is called only under the user's price
+  // cap (models/price-caps.ts), which `call` passes on as `maxPrice`.
+  isRouter?(model: string): boolean;
+  // The fee per search, in USD, for a model that searches the web on its own,
+  // which a test call pays on top of its tokens. Undefined: none known.
+  searchFee?(model: string): number | undefined;
   // The IDs of the models the user's own provider account offers, live,
   // read with the user's credential (OpenRouter's /models/user honours the
   // account's provider preferences, privacy settings and guardrails). Throws
@@ -215,7 +228,16 @@ export interface ProviderPlugin {
   // lives only in memory for one call: never stored again, never logged.
   mintCredential(connection: ConnectionFields, context: { userId: string }): Promise<unknown>;
   // The provider's own request, sent straight to the provider for the user.
-  call(input: { credential: unknown; connection: ConnectionFields; model: string; location: string; request: ModelRequest }): Promise<ProviderReply>;
+  // `maxPrice`: a router's price cap, in USD per million tokens; the plug-in
+  // asks the provider for no model dearer than it.
+  call(input: {
+    credential: unknown;
+    connection: ConnectionFields;
+    model: string;
+    location: string;
+    request: ModelRequest;
+    maxPrice?: { inputUsdPerMTok: number; outputUsdPerMTok: number };
+  }): Promise<ProviderReply>;
   // The price source the proxy prices this provider's calls from (T11).
   priceSource: readonly SourceId[];
   connect: ConnectMethod;

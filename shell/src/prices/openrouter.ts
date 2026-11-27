@@ -11,21 +11,37 @@
 // `pricing.prompt: "-1"`", their cost depending on the model they pick; the
 // model's `pricing` is "Pricing from the top provider for this model".
 //
-// Every model the API lists is kept in the model list (the owner,
-// 2026-11-27: "i would like to list all models and then choose"). It can be
-// chosen when it takes text and gives only text (`architecture.output_modalities`
-// exactly `["text"]`), with a prompt and a completion price that are numbers
-// (a free model at $0 included). The others are listed with the reason they
-// cannot be: a router (`-1`), priced by the model it picks for each call, so
-// the budget stop has no price; a `~…` alias, which OpenRouter moves to the
+// Every model the API lists that the app can test is kept in the model list
+// (the owner, 2026-11-27: "i would like to list all models and then choose").
+// It can be tested when it takes text and gives only text
+// (`architecture.output_modalities` exactly `["text"]`), with a prompt and a
+// completion price that are numbers (a free model at $0 included). Every
+// entry that can never be tested is dropped before anything reads the list
+// (the owner, 2026-11-28: "if they can be identified this clearly why cant
+// they be removed before rendering the table rows?", and anything the app can
+// identify as never choosable is not shown), each kind counted in `dropped`:
+// a model that takes or gives no text, one that also gives audio, images or
+// video, or one with no price (`blockedReason`, `unusable`); a `~…` alias, which OpenRouter moves to the
 // newest model of a line (that model is listed under its own ID, and a reply
-// names it, not the alias); a model that takes no text; a model that also
-// gives audio, images or video, whose token prices are not its whole price
-// (OpenRouter lists Google's Lyria music models at "0" per prompt and
-// completion token, `output_modalities` ["text", "audio"], and charges them
-// per clip or song, as their descriptions say; a test call on one was refused
-// with 402 on an account with no credit, 2026-11-27). Only models that can be
-// chosen get price rows.
+// names it, not the alias); a `:batch` variant, which answers no chat call
+// (all 65 tested on 2026-11-27 failed "That model ID doesn't exist here");
+// and a router (`-1`, priced by the models it uses for each call) that no
+// price cap can bound: one that takes no request parameters (openrouter/fusion,
+// a panel of models with web search, among them on 2026-11-28) or one another
+// maker publishes, where OpenRouter documents no way to keep models out.
+// A router OpenRouter publishes itself (its ID's maker is `openrouter`) that
+// takes request parameters is listed as a router (`router`), with no rows,
+// and can be tested once the user sets it a price cap
+// (models/price-caps.ts): every call to it carries OpenRouter's `max_price`
+// at the cap, with any fee per request, image or audio unit at 0, and its
+// auto-router plugin's `excluded_models` set to every listed model that
+// charges a per-search or per-request fee (`feeModels`), which `max_price`
+// cannot price. A model that also gives audio, images or video has token
+// prices that are not its whole price (OpenRouter lists Google's Lyria music
+// models at "0" per prompt and completion token, `output_modalities`
+// ["text", "audio"], and charges them per clip or song, as their
+// descriptions say; a test call on one was refused with 402 on an account
+// with no credit, 2026-11-27). Only models that can be tested get price rows.
 //
 // Free: `isTrulyFreeTextModel`, the one rule every screen uses (the test
 // pick, Test all models, the model list and its labels, the proposals and the
@@ -65,6 +81,9 @@ export interface OpenRouterModel {
   name: string;
   // Why the app cannot call it, in plain words; absent when it can.
   blocked?: string;
+  // Priced per call by the model it picks (`pricing.prompt` "-1"): no rows
+  // of its own; callable once the user sets it a price cap.
+  router?: true;
   // OpenRouter lists `tools` among its supported parameters.
   tools: boolean;
   // The date OpenRouter retires it (YYYY-MM-DD), when it names one.
@@ -73,6 +92,10 @@ export interface OpenRouterModel {
   longPromptFrom?: number;
   // Free by isTrulyFreeTextModel.
   free?: true;
+  // The fee per web search, in USD, for a model that searches on its own
+  // (it takes `web_search_options` and lists a `web_search` price): a test
+  // call on one paid it (Perplexity's Sonar models, 2026-11-27).
+  searchFeeUsd?: number;
 }
 
 // The rules parseModels applies, raised whenever they change. A catalog
@@ -80,8 +103,11 @@ export interface OpenRouterModel {
 // screen until the daily refresh or Refresh model list reads OpenRouter's
 // list again; meanwhile queued Test all models tests wait
 // (models/test-all.ts). 2: free by isTrulyFreeTextModel, and a model that
-// also gives audio, images or video is blocked (2026-11-27).
-export const CATALOG_VERSION = 2;
+// also gives audio, images or video is blocked (2026-11-27). 3: `~` aliases,
+// `:batch` variants and routers no cap can bound dropped, a router OpenRouter
+// publishes that takes request parameters listed as a router, and the
+// fee-charging models listed (2026-11-28).
+export const CATALOG_VERSION = 3;
 
 // The stored model list follows parseModels' current rules.
 export const isCurrentCatalog = (catalog: OpenRouterCatalog | undefined): boolean => catalog?.version === CATALOG_VERSION;
@@ -90,6 +116,11 @@ export interface OpenRouterCatalog {
   version?: number;
   readAt: string;
   models: OpenRouterModel[];
+  // The entries dropped before anything reads the list, by kind.
+  dropped?: Dropped;
+  // Every listed ID whose pricing carries a per-search or per-request fee,
+  // dropped entries included: what a capped router's call keeps out.
+  feeModels?: string[];
 }
 
 export interface Listed {
@@ -148,11 +179,43 @@ export function everyPriceZero(pricing: Record<string, unknown> | undefined): bo
 export const isTrulyFreeTextModel = (m: Listed): boolean =>
   includesText(m.architecture?.input_modalities) && givesOnlyText(m) && everyPriceZero(m.pricing);
 
-// Why the app cannot call a listed model, or undefined when it can.
+export interface Dropped {
+  batch: number;
+  alias: number;
+  router: number;
+  // Takes or gives no text, also gives audio, images or video, or has no price.
+  unusable: number;
+}
+
+// A router: OpenRouter prices each call by the model it picks (`-1`).
+export const isRouter = (m: Listed): boolean => String(m.pricing?.prompt ?? "").trim().startsWith("-");
+
+// The maker of the routers a price cap can bound: OpenRouter itself.
+export const OWN_MAKER = "openrouter";
+
+// A router a price cap can bound: one OpenRouter publishes, which takes
+// request parameters, so its auto-router plugin can keep models out.
+export const isCappableRouter = (m: Listed): boolean =>
+  isRouter(m) && typeof m.id === "string" && m.id.split("/")[0] === OWN_MAKER && Array.isArray(m.supported_parameters) && m.supported_parameters.length > 0;
+
+// An entry that can never be tested, dropped before anything reads the list:
+// a `~` alias, a `:batch` variant, or a router no price cap can bound.
+export function droppedKind(m: Listed & { id: string }): "alias" | "batch" | "router" | undefined {
+  if (m.id.startsWith("~")) return "alias";
+  if (m.id.endsWith(":batch")) return "batch";
+  if (isRouter(m) && !isCappableRouter(m)) return "router";
+  return undefined;
+}
+
+// Its pricing carries a fee per search or per request.
+const chargesFees = (m: Listed): boolean => ["web_search", "request"].some((k) => Number(m.pricing?.[k] ?? 0) > 0);
+
+// Why the app cannot call a listed model, or undefined when it can. A router
+// (one parseModels keeps: a cap can bound it) is callable here; its price
+// comes from the user's cap.
 export function blockedReason(m: Listed): string | undefined {
-  if (typeof m.id === "string" && m.id.startsWith("~")) return "an alias OpenRouter moves to the newest model of its line: choose that model by its own ID";
   if (!includesText(m.architecture?.input_modalities) || !includesText(m.architecture?.output_modalities)) return "it takes or gives no text, and every task sends and reads text";
-  if (String(m.pricing?.prompt ?? "").trim().startsWith("-")) return "OpenRouter prices it by the model it picks for each call, so the budget stop has no price";
+  if (isRouter(m)) return undefined;
   if (!givesOnlyText(m)) return "it also gives audio, images or video, priced beyond its token rates";
   if (perMillion(m.pricing?.prompt) === undefined || perMillion(m.pricing?.completion) === undefined) return "OpenRouter lists no price for it, and the budget stop needs a real price";
   return undefined;
@@ -203,7 +266,8 @@ export function modelPrices(pricing: Record<string, unknown>): { standard: Price
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-// `leftOut`: the listed models that cannot be chosen, so have no rows.
+// `leftOut`: the listed entries that are dropped or cannot be chosen, so have
+// no rows.
 export function parseModels(body: unknown, now: Date): { rows: PriceRow[]; catalog: OpenRouterCatalog; leftOut: number } {
   const data = (body as { data?: unknown } | null)?.data;
   if (!Array.isArray(data)) throw new Error("the models API answered without a `data` list");
@@ -211,16 +275,30 @@ export function parseModels(body: unknown, now: Date): { rows: PriceRow[]; catal
   const rows: PriceRow[] = [];
   const models: OpenRouterModel[] = [];
   let leftOut = 0;
+  const dropped: Dropped = { batch: 0, alias: 0, router: 0, unusable: 0 };
+  const feeModels: string[] = [];
   const seen = new Set<string>();
   for (const m of data as Listed[]) {
     if (typeof m.id !== "string" || !m.id || seen.has(m.id)) continue;
     const id = m.id;
     seen.add(id);
-    const name = typeof m.name === "string" && m.name ? m.name : id;
-    const blocked = blockedReason(m);
-    if (blocked) {
+    if (chargesFees(m)) feeModels.push(id);
+    const drop = droppedKind({ ...m, id });
+    if (drop) {
       leftOut++;
-      models.push({ id, name, blocked, tools: false });
+      dropped[drop]++;
+      continue;
+    }
+    const name = typeof m.name === "string" && m.name ? m.name : id;
+    const tools = Array.isArray(m.supported_parameters) && m.supported_parameters.includes("tools");
+    if (blockedReason(m)) {
+      leftOut++;
+      dropped.unusable++;
+      continue;
+    }
+    if (isRouter(m)) {
+      leftOut++;
+      models.push({ id, name, router: true, tools });
       continue;
     }
     const { standard, long, longPromptFrom } = modelPrices(m.pricing ?? {});
@@ -231,18 +309,21 @@ export function parseModels(body: unknown, now: Date): { rows: PriceRow[]; catal
     for (const [kind, usd] of Object.entries(standard) as Array<[TokenKind, number]>) rows.push(row(kind, usd, false));
     for (const [kind, usd] of Object.entries(long) as Array<[TokenKind, number]>) rows.push(row(kind, usd, true));
     const expires = typeof m.expiration_date === "string" && DATE.test(m.expiration_date) ? m.expiration_date : undefined;
+    const searchFee = Number(m.pricing?.web_search ?? 0);
+    const searchesOnItsOwn = Array.isArray(m.supported_parameters) && m.supported_parameters.includes("web_search_options") && Number.isFinite(searchFee) && searchFee > 0;
     models.push({
       id,
       name,
-      tools: Array.isArray(m.supported_parameters) && m.supported_parameters.includes("tools"),
+      tools,
       ...(isTrulyFreeTextModel(m) ? { free: true as const } : {}),
       ...(expires ? { expires } : {}),
       ...(longPromptFrom ? { longPromptFrom } : {}),
+      ...(searchesOnItsOwn ? { searchFeeUsd: searchFee } : {}),
     });
   }
   if (!rows.length) throw new Error("the models API listed no model the app can call");
   models.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { rows, catalog: { version: CATALOG_VERSION, readAt: now.toISOString(), models }, leftOut };
+  return { rows, catalog: { version: CATALOG_VERSION, readAt: now.toISOString(), models, dropped, feeModels: feeModels.sort() }, leftOut };
 }
 
 export async function readOpenRouter(fetcher: typeof fetch, now: Date): Promise<{ read: SourceRead; catalog?: OpenRouterCatalog }> {

@@ -16,6 +16,8 @@ await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM model_tests"),
+    env.DB.prepare("DELETE FROM model_latest_tests"),
+    env.DB.prepare("DELETE FROM model_price_caps"),
     env.DB.prepare("DELETE FROM model_test_runs"),
     env.DB.prepare("DELETE FROM provider_model_lists"),
     env.DB.prepare("DELETE FROM task_routes"),

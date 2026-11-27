@@ -7,13 +7,17 @@
 //   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
-// Only the user's own passed models are offered (chosen one by one, or added
-// from Test all models' results). With one, every task uses it ("Model now"),
-// unless it is free. With more,
-// each task shows its main model and its fallback, another of the user's
-// models: the user's choice, or the proposal at the task's suggested strength
-// marked "proposed" until accepted (again, for an accepted task whose
-// proposal has changed). Changing a task chooses the provider and then the
+// Only the user's usable models are offered (models/usable.ts: each model
+// whose latest test passed). Each task shows its main model and its
+// fallback, another of the user's models: the user's choice, or the proposal
+// at the task's suggested strength marked "proposed" until accepted (again,
+// for an accepted task whose proposal has changed); a task with neither
+// reads "Choose a model". A task whose saved main model is no longer usable
+// says why (it failed its last test, the provider no longer lists it, the
+// account's settings leave it out, with a link to them, or it needs a price
+// cap, with a link to set one) and that it runs on its fallback, named, with
+// its Change form open to choose a new main model; with no usable fallback
+// it reads "Choose a model" with the same reason. Changing a task chooses the provider and then the
 // model, for the main and the fallback (the owner, 2026-11-27: "for each kind
 // of task : choose the provider and the model"); OpenRouter is the one
 // provider today, and another provider's passed models join the same lists. A proposed model of the other
@@ -33,13 +37,14 @@
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
 import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { rowAnchor, viewQuery } from "../providers/models-table";
 import { modelsSubtabs, nextAction, setupTabsLine } from "./setup-tabs";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
-import { FREE_NOTE } from "./add";
+import { FREE_NOTE } from "./test-model";
 import type { Link } from "../proxy/plugin";
-import { acceptProposals, changeTask, freeRoutes, modelKey, onlyModel, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
+import { acceptProposals, changeTask, freeRoutes, modelKey, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
 
 export interface PickerPageInput {
   viewer: Viewer;
@@ -51,6 +56,8 @@ export interface PickerPageInput {
   noToolUse: (m: { provider: Provider; model: string }) => boolean;
   // The provider's own conditions on free models, shown when one is offered.
   freeTerms?: { text: string; links: Link[] };
+  // The page of the user's account settings at the provider, where it has one.
+  accountSettings?: (p: Provider) => Link | undefined;
   problem?: string;
   said?: string;
 }
@@ -85,9 +92,9 @@ function pairSelects(id: string, role: "main" | "fallback", chosen: Offered | un
 <select class="f" id="${id}-${role}-m" name="${role}_model" data-pair-model>${none}${groups}</select></fieldset>`;
 }
 
-function changeForm(r: TaskRoute, now: Route | undefined, input: PickerPageInput): string {
+function changeForm(r: TaskRoute, now: { main?: Offered; fallback?: Offered } | undefined, input: PickerPageInput): string {
   const id = `t-${r.task.id}`;
-  return `<details class="change"><summary class="btn small ghost">Change</summary>
+  return `<details class="change"${r.stopped?.fallback ? " open" : ""}><summary class="btn small ghost">Change</summary>
 <form method="post" action="${TASK_MODELS_PATH}/change" class="pick">
 <input type="hidden" name="task" value="${esc(r.task.id)}">
 ${pairSelects(id, "main", now?.main, input)}
@@ -101,9 +108,37 @@ function substituteNote(task: Task, m: Offered, asFallback: boolean): string {
   return ` <span class="small">a ${m.tier} model, since you have no ${asFallback ? "other " : ""}${task.tier} model yet</span>`;
 }
 
-function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput, single: boolean): string {
-  if (single) return `<td data-l="Model now">${route ? esc(modelName(route.main, input)) : "–"}</td>`;
-  if (!route) return `<td data-l="Main">none yet: add a model of the suggested strength</td><td data-l="Fallback (another model)">–</td>`;
+const newTab = (l: Link): string => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
+
+// "<model> failed its last test.", or the other reason its saved main model
+// is not usable, with the link that fixes it where there is one.
+function whyStopped(stopped: NonNullable<TaskRoute["stopped"]>, input: PickerPageInput): string {
+  const { provider, model } = stopped.main;
+  const name = esc(input.providerName(provider));
+  const said = (why: string) => `${esc(model)} ${why}`;
+  switch (stopped.why) {
+    case "failed":
+      return said("failed its last test.");
+    case "not_listed":
+      return said(`is no longer on ${name}'s list.`);
+    case "left_out": {
+      const settings = input.accountSettings?.(provider);
+      return said(`is left out by your ${name} settings.`) + (settings ? ` ${newTab(settings)}` : "");
+    }
+    case "no_cap":
+      return said("needs a price cap.") + ` <a href="${esc(`${PROVIDERS_PATH}?${viewQuery(provider, { cap: model })}#${rowAnchor(model)}`)}">Set its price cap</a>`;
+    default:
+      return said("is no longer usable.");
+  }
+}
+
+function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput): string {
+  const onFallback = r.stopped?.fallback;
+  if (onFallback) {
+    return `<td data-l="Main">Runs on its fallback for now: ${whyStopped(r.stopped!, input)} Choose a new main model with Change.</td><td data-l="Fallback (another model)">${esc(modelName(onFallback, input))}</td>`;
+  }
+  if (r.stopped) return `<td data-l="Main">Choose a model <span class="small">${whyStopped(r.stopped, input)}</span></td><td data-l="Fallback (another model)">–</td>`;
+  if (!route) return `<td data-l="Main">Choose a model</td><td data-l="Fallback (another model)">–</td>`;
   const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
   const fromProposal = r.pending || r.current?.setHow === "accepted";
   const note = (m: Offered, asFallback: boolean) => (fromProposal ? substituteNote(r.task, m, asFallback) : "");
@@ -111,7 +146,7 @@ function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInp
     ? esc(modelName(route.fallback, input)) + tag + note(route.fallback, true)
     : input.offered.length > 1
       ? "none"
-      : "none: add another model for a fallback";
+      : "none: test another model for a fallback";
   return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another model)">${fallback}</td>`;
 }
 
@@ -134,33 +169,27 @@ function freeTap(input: PickerPageInput): string {
 
 function freeTermsLine(input: PickerPageInput): string {
   if (!input.freeTerms || !input.offered.some((m) => m.free)) return "";
-  const links = input.freeTerms.links.map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
+  const links = input.freeTerms.links.map(newTab).join(" · ");
   return `<details class="more"><summary>OpenRouter's terms for free models</summary><p class="small muted">${esc(input.freeTerms.text)} ${links}</p></details>`;
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
-  const single = onlyModel(input.offered) !== undefined;
   const intro = !input.offered.length
     ? `<div class="banner warn">Test a model first. Only models that passed are offered here. <a href="${PROVIDERS_PATH}#test">Test a model</a></div>`
-    : single
-      ? `<p>Every task uses your one passed model for now.</p>
-<details class="more"><summary>How to get a fallback</summary><p class="small">Test another model on <a href="${PROVIDERS_PATH}#test">Providers and models</a>. The app then proposes a main model and a fallback for each task.</p></details>`
-      : `<p>Each task gets a main model and a fallback.</p>
+    : `<p>Each task gets a main model and a fallback.</p>
 <details class="more"><summary>How it works</summary><ul class="small">
 <li>Both come from your models that passed, at the task's suggested strength.</li>
 <li>When the main model fails a call, the fallback answers it.</li>
 <li>Change any task: choose its provider, then its model.</li>
 ${input.offered.some((m) => m.free) ? "<li>A free model is never proposed. Choose it with Change, or the one tap.</li>" : ""}
 </ul></details>`;
-  const head = single
-    ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
-    : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
+  const head = `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
   const body = input.routes
     .map((r) => {
       const route = r.pending ? r.proposal : r.current;
-      const change = single ? "" : changeForm(r, route, input);
+      const change = changeForm(r, route ?? (r.stopped?.fallback ? { fallback: r.stopped.fallback } : undefined), input);
       return `<tr><td data-l="Task">${esc(r.task.label)}</td><td data-l="Suggested strength">${r.task.tier}</td>
-${routeCells(r, route, input, single)}
+${routeCells(r, route, input)}
 <td data-l="">${change}</td></tr>`;
     })
     .join("\n");
@@ -263,7 +292,8 @@ export async function handleTaskModels(
     const providerName = (p: Provider) => plugins[p]?.connect.guide.short ?? PROVIDER_NAMES[p];
     const noToolUse = (m: { provider: Provider; model: string }) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
     const freeTerms = offered.filter((m) => m.free).map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
-    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, freeTerms, ...extra }), status);
+    const accountSettings = (p: Provider) => plugins[p]?.connect.guide.accountSettings;
+    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, ...extra }), status);
   };
 
   if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });

@@ -350,10 +350,31 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
       return key;
     },
 
-    async call({ credential, model, request }) {
+    async call({ credential, model, request, maxPrice }) {
       const body: Record<string, unknown> = { ...(request as Record<string, unknown>), model };
       delete body.models;
       delete body.route;
+      // A router's price cap: "The maximum pricing you want to pay for this
+      // request. USD price per million tokens, for prompt and completion"
+      // (ProviderPreferences.max_price in OpenRouter's live OpenAPI spec, read
+      // 2026-11-28; strings, like its prices). Its other fields at "0" leave
+      // out any model with a fee per request, per image or per audio unit.
+      // It has no field for a search fee, so the auto-router plugin's
+      // `excluded_models` ("model patterns to exclude from auto-router
+      // selection", AutoRouterPlugin in the same spec) keeps out every listed
+      // model whose pricing carries a per-search or per-request fee.
+      if (maxPrice) {
+        const provider = typeof body.provider === "object" && body.provider !== null ? (body.provider as Record<string, unknown>) : {};
+        body.provider = {
+          ...provider,
+          max_price: { prompt: String(maxPrice.inputUsdPerMTok), completion: String(maxPrice.outputUsdPerMTok), request: "0", image: "0", audio: "0" },
+        };
+        const fees = catalog?.feeModels ?? [];
+        if (fees.length) {
+          const others = Array.isArray(body.plugins) ? (body.plugins as unknown[]).filter((p) => (p as { id?: unknown } | null)?.id !== "auto-router") : [];
+          body.plugins = [...others, { id: "auto-router", excluded_models: fees }];
+        }
+      }
       const response = await fetcher(OPENROUTER_CHAT_URL, {
         method: "POST",
         headers: {
@@ -384,7 +405,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         steps: [
           "Tap <strong>Connect OpenRouter</strong>.",
           "Sign in on OpenRouter and tap <strong>Authorize</strong>.",
-          "Choose a model below and test it.",
+          "Test models below. Tasks use the ones that pass.",
         ],
         about: [
           "OpenRouter gives the app a key for your own account.",
@@ -403,6 +424,8 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         ],
         revoke: "only you can, on the key's own page. OpenRouter's delete-a-key API takes only your own management key.",
         revokeLinks: keyLinks,
+        accountSettings: link("OpenRouter privacy settings", SETTINGS_PRIVACY),
+        credits: link("Add credits", SETTINGS_CREDITS),
         newGrantEachTime:
           "Each Authorize makes a new key: OpenRouter's flow has no way to reuse one. Each is labelled with its date; delete old ones on OpenRouter.",
       },
@@ -445,6 +468,8 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
 
       canCall: callable,
       notCallableReason: (model) => byId.get(model)?.blocked ?? "OpenRouter no longer lists it",
+      isRouter: (model) => byId.get(model)?.router === true,
+      searchFee: (model) => byId.get(model)?.searchFeeUsd,
       noToolUse: (model) => (callable(model) && !byId.get(model)!.tools ? "OpenRouter lists no tool support for it" : undefined),
       modelNotes: (model) => {
         const m = byId.get(model);

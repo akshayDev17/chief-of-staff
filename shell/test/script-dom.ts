@@ -54,37 +54,6 @@ export function runScript(script: string, document: unknown, href: string, sent:
   new Function("document", "location", "window", "fetch", "XMLHttpRequest", "navigator", script)(document, location, window, fetch, XMLHttpRequest, navigator);
 }
 
-// The Providers page's model listbox, its Test button and, while a Test all
-// models run goes on, the body's reload attributes.
-export function listboxPage(script: string, models: string[], opts: { href?: string; restoredValue?: string; body?: Record<string, string> } = {}) {
-  const options = models.map((m, i) => element({ id: `opt-${i}`, "data-model": m, "aria-selected": "false" }));
-  const button = element();
-  const list = Object.assign(element(), { querySelectorAll: () => options });
-  const input = Object.assign(element(), { value: opts.restoredValue ?? "" });
-  const test = Object.assign(element(), { disabled: true, textContent: "Test" });
-  const section = element({ id: "test" });
-  const body = element(opts.body);
-  const sent: Sent = [];
-  const parts: Record<string, unknown> = { ".lb-btn": button, "[role=listbox]": list, "[data-model-input]": input, "[data-test-button]": test };
-  const form = Object.assign(element(), {
-    querySelector: (s: string) => parts[s] ?? null,
-    contains: () => true,
-    submit: () => { sent.push("submit"); },
-    requestSubmit: () => { sent.push("submit"); },
-  });
-  const document = Object.assign(element(), {
-    querySelectorAll: (s: string) =>
-      s === "form[data-listbox]" ? [form] : s === "[data-model-input]" ? [input] : s === "[data-reload-every]" && opts.body ? [body] : [],
-    querySelector: (s: string) => (s === "[role=listbox]:not([hidden])" && !list.hidden ? list : null),
-    getElementById: (id: string) => (id === "test" ? section : null),
-    readyState: "loading",
-  });
-  const loaded: Array<() => void> = [];
-  const window = { addEventListener: (type: string, fn: () => void) => { if (type === "load") loaded.push(fn); } };
-  runScript(script, document, opts.href ?? "https://cos.example.com/chief-of-staff/models/setup/providers", sent, { window });
-  return { button, list, input, test, options, section, form, sent, load: () => loaded.forEach((fn) => fn()) };
-}
-
 // The inline scripts of a rendered page, in order: the page's own output.
 export const pageScripts = (html: string): string => [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
 
