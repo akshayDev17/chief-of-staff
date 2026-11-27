@@ -6,7 +6,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { clearAccessKeyCache } from "../src/access";
-import { handleUsage, nameModels, taskName } from "../src/models/usage-page";
+import { BOX_ROWS, findText, FIND_JS, handleUsage, nameModels, spendGap, taskName } from "../src/models/usage-page";
 import { readMonthUsage, summariseUsage } from "../src/models/usage";
 import { handleTaskModels } from "../src/models/picker-page";
 import { USAGE_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../src/paths";
@@ -20,6 +20,7 @@ import { writeConnection } from "../src/proxy/connections";
 import { monthSpend, writeLedgerRow, type LedgerRow } from "../src/proxy/ledger";
 import { ENV, generateKey, serveCerts, signToken } from "./access-fixture";
 import { fakeFetch, ISSUED_KEY, keyReply } from "./fake-sources";
+import { element, runScript, type Sent } from "./script-dom";
 import { seedPrices, TEST_CATALOG, testPlugin, testSecrets, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:41:00Z");
@@ -65,7 +66,7 @@ const connect = async () => {
 // The rows of one table, in order, by their names.
 const rowNames = (html: string, table: "models" | "tasks") => {
   const t = html.match(new RegExp(`<table class="usage" id="by-${table}"[\\s\\S]*?</table>`))![0];
-  return [...t.matchAll(/<tr>\n<td><span class="u-name">([^<]*)<\/span>/g)].map((m) => m[1]);
+  return [...t.matchAll(/<tr(?: data-find-text="[^"]*")?>\n<td><span class="u-name">([^<]*)<\/span>/g)].map((m) => m[1]);
 };
 
 describe("the month's usage, from the ledger", () => {
@@ -91,7 +92,7 @@ describe("the month's usage, from the ledger", () => {
   });
 
   it("is empty, all zeros, before any call", () => {
-    expect(summariseUsage([])).toEqual({ total: { key: "", calls: 0, refused: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, estimatedUsd: 0 }, byModel: [], byTask: [] });
+    expect(summariseUsage([])).toEqual({ total: { key: "", calls: 0, refused: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, estimatedUsd: 0 }, byModel: [], byTask: [], beforeKeyUsd: 0 });
   });
 });
 
@@ -186,6 +187,163 @@ describe("the page", () => {
       await (await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins, userId, viewer: "owner", now: NOW })).text(),
     ];
     for (const s of setup) expect(s).toContain(`<nav class="subtabs" aria-label="Models"><span class="on" aria-current="page">Setup</span><a href="${USAGE_PATH}">Usage</a></nav>`);
+  });
+});
+
+describe("Per model's scroll box and search", () => {
+  // A month with `n` models, each called once, named by the live list.
+  async function manyModels(n: number) {
+    const models = Array.from({ length: n }, (_, i) => ({ id: `maker-${i % 3}/model-${i}`, name: `Maker ${i % 3}: Model ${i}`, tools: true }));
+    await writeSnapshot(env.DB, { takenAt: "2026-11-27T07:00:00Z", status: "good", results: [], rows: [], catalog: { version: CATALOG_VERSION, readAt: "2026-11-27T07:00:00.000Z", models } });
+    await connect();
+    for (const [i, m] of models.entries()) await call({ model: m.id, costUsd: 0.01 * (i + 1) });
+  }
+  const box = (html: string) => html.match(/<section class="card" aria-labelledby="by-models-h">[\s\S]*?<\/section>/)![0];
+
+  it("holds the whole list in a box with the header and the month's total pinned, and a search over ten rows", async () => {
+    await manyModels(BOX_ROWS + 2);
+    const { html } = await page();
+    const models = box(html);
+    expect(models).toContain('<div class="tbl-wrap tbl-box" tabindex="0" role="region" aria-label="Per model, scrolls"><table class="usage" id="by-models"');
+    // Every row is in the page, for no-script users; the search waits hidden for the script.
+    expect(rowNames(html, "models")).toHaveLength(BOX_ROWS + 2);
+    expect(models).toContain('<div class="find" data-find="by-models" data-noun="models" hidden>');
+    expect(models).toContain('placeholder="Search name, maker or ID"');
+    expect(models).toContain('<p class="count" data-count aria-live="polite">12 models</p>');
+    expect(models).toContain('<tr class="empty" data-no-match hidden>');
+    expect(models).toContain('<th scope="row">This month');
+    // Still dearest first, and no sort control or form anywhere.
+    expect(rowNames(html, "models")[0]).toBe("Maker 2: Model 11");
+    expect(html.slice(html.indexOf("<body>"), html.indexOf("<script>"))).not.toMatch(/<form|class="th-sort|aria-sort/);
+    expect(html).toContain(".tbl-box thead th { position: sticky; top: 0;");
+    expect(html).toContain(".tbl-box tfoot th, .tbl-box tfoot td { position: sticky; bottom: 0;");
+    // Per task stays a plain table: it has a row per task, about a dozen at most.
+    expect(html).toContain('<div class="tbl-wrap"><table class="usage" id="by-tasks"');
+  });
+
+  it("has no search for ten rows or fewer", async () => {
+    await manyModels(BOX_ROWS);
+    const { html } = await page();
+    expect(box(html)).toContain('class="tbl-wrap tbl-box"');
+    expect(box(html)).not.toContain("data-find=");
+    expect(box(html)).not.toContain("data-no-match");
+  });
+
+  it("matches any part of the readable name, the maker or the ID", () => {
+    expect(findText({ key: "meta-llama/llama-3.1-8b", name: "Meta: Llama 3.1 8B", calls: 0, refused: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, estimatedUsd: 0 }))
+      .toBe("meta: llama 3.1 8b meta-llama/llama-3.1-8b meta llama");
+  });
+
+  // A stand-in page for the search script: the search, the rows, the no-match row.
+  function searchPage(texts: string[]) {
+    const input = element({ id: "find-models" });
+    const x = element({ class: "clear-x" });
+    const count = element();
+    const rows = texts.map((t) => Object.assign(element({ "data-find-text": t }), { hidden: false }));
+    const said = element();
+    const clear = element();
+    const none = Object.assign(element(), { querySelector: (q: string) => (q === "[data-said]" ? said : clear) });
+    const scroller = { scrollTop: 240 };
+    const table = { parentNode: scroller, querySelectorAll: () => rows, querySelector: () => none };
+    const find = Object.assign(element({ "data-find": "by-models", "data-noun": "models" }), {
+      querySelector: (q: string) => ({ input, "[data-count]": count, ".clear-x": x })[q],
+    });
+    const document = { querySelectorAll: (q: string) => (q === "[data-find]" ? [find] : []), getElementById: () => table };
+    const sent: Sent = [];
+    runScript(FIND_JS, document, `${ORIGIN}${USAGE_PATH}`, sent);
+    const type = (v: string) => { input.value = v; input.fire("input"); };
+    return { input, x, count, rows, said, clear, none, find, scroller, sent, type };
+  }
+
+  it("filters the rows as you type, in the page: no request, no reload, the address unchanged", () => {
+    const p = searchPage(["openai: gpt-4o openai/gpt-4o openai", "anthropic: claude anthropic/claude anthropic", "meta: llama 3 meta-llama/llama-3 meta llama"]);
+    expect(p.find.hidden).toBe(false);
+    expect(p.count.textContent).toBe("3 models");
+    expect(p.x.hidden).toBe(true);
+    p.type("LLAMA");
+    expect(p.rows.map((r) => r.hidden)).toEqual([true, true, false]);
+    expect(p.count.textContent).toBe("1 of 3 models");
+    expect(p.scroller.scrollTop).toBe(0);
+    expect(p.x.hidden).toBe(false);
+    p.type("open 4o");
+    expect(p.rows.map((r) => r.hidden)).toEqual([false, true, true]);
+    expect(p.none.hidden).toBe(true);
+    expect(p.input.fire("keydown", "Enter")).toBe(true);
+    expect(p.sent).toEqual([]);
+  });
+
+  it("says when nothing matches, and Clear brings the whole list back", () => {
+    const p = searchPage(["a: one a/one a", "b: two b/two b"]);
+    p.type("zzz");
+    expect(p.rows.every((r) => r.hidden)).toBe(true);
+    expect(p.none.hidden).toBe(false);
+    expect(p.said.textContent).toBe("zzz");
+    expect(p.count.textContent).toBe("0 of 2 models");
+    p.clear.fire("click");
+    expect(p.input.value).toBe("");
+    expect(p.rows.some((r) => r.hidden)).toBe(false);
+    expect(p.none.hidden).toBe(true);
+    expect(p.input.focused).toBe(1);
+    p.type("two");
+    expect(p.input.fire("keydown", "Escape")).toBe(true);
+    expect(p.count.textContent).toBe("2 models");
+    expect(p.sent).toEqual([]);
+  });
+});
+
+describe("when OpenRouter's figure and the app's count differ", () => {
+  const LATER = new Date("2026-11-20T08:15:00Z");
+  const keyFetch = (usd: number) => fakeFetch({ currentKey: () => keyReply({ usage_monthly: usd }) });
+  async function reconnectedOn(at: Date) {
+    await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: HASH }, at);
+    await testSecrets().put(userId, "openrouter", "key", ISSUED_KEY, at);
+    await setBudget(env.DB, userId, "openrouter", 30, "accepted", NOW);
+  }
+
+  it("counts this month's calls made before the current key", async () => {
+    await call({ costUsd: 0.35, at: new Date("2026-11-19T10:00:00Z") });
+    await call({ costUsd: 0.2, at: new Date("2026-11-21T10:00:00Z") });
+    await call({ costUsd: 9, at: new Date("2026-10-30T10:00:00Z") });
+    expect((await readMonthUsage(env.DB, userId, NOW, LATER)).beforeKeyUsd).toBeCloseTo(0.35, 10);
+    expect((await readMonthUsage(env.DB, userId, NOW)).beforeKeyUsd).toBe(0);
+  });
+
+  it("says the difference is calls made on an earlier key, when those account for it", async () => {
+    await reconnectedOn(LATER);
+    await call({ costUsd: 0.35, at: new Date("2026-11-19T10:00:00Z") });
+    const { html } = await page(keyFetch(0));
+    expect(html).toContain('<div class="gap"><p class="small">OpenRouter shows $0.00 for your current key; all $0.35 was spent this month on an earlier key.</p>');
+    expect(html).toContain("<summary>Why the two figures differ</summary>");
+    expect(html).toContain("the key the app holds now, made when you connected on 20 November at 08:15 UTC. Each Connect makes a new key.");
+    expect(html).toContain(": $0.35 before that key was made, $0.00 since.");
+    expect(html).toContain("<li>The app's count, $0.35, is what stops calls at your budget.</li>");
+    expect(html).not.toContain("cannot tell");
+  });
+
+  it("says the other part was on an earlier key when the current key has spent too", async () => {
+    await reconnectedOn(LATER);
+    await call({ costUsd: 0.35, at: new Date("2026-11-19T10:00:00Z") });
+    await call({ costUsd: 0.1, at: new Date("2026-11-25T10:00:00Z") });
+    const { html } = await page(keyFetch(0.1));
+    expect(html).toContain("OpenRouter shows $0.10 for your current key; the other $0.35 was spent this month on an earlier key.");
+  });
+
+  it("says only that they differ, and which one stops calls, when the app cannot tell why", async () => {
+    await reconnectedOn(LATER);
+    await call({ costUsd: 0.4, at: new Date("2026-11-25T10:00:00Z") });
+    const { html } = await page(keyFetch(0.1));
+    expect(html).toContain("<p class=\"small\">OpenRouter's figure for your current key, $0.10, and the app's count, $0.40, differ. The app's count, $0.40, is what stops calls at your budget.</p>");
+    expect(html).toContain("The app cannot tell what the rest of the difference is.");
+    expect(html).not.toContain("earlier key.");
+  });
+
+  it("says nothing when they agree, or when OpenRouter's figure could not be read", async () => {
+    expect(spendGap(0.35, { usage: { monthlyUsd: 0.351 } as never, readAt: NOW.toISOString() }, 0)).toBeUndefined();
+    expect(spendGap(0.35, { unread: "OpenRouter did not answer" }, 0.35)).toBeUndefined();
+    expect(spendGap(0.35, undefined, 0.35)).toBeUndefined();
+    await reconnectedOn(LATER);
+    await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
+    expect((await page(keyFetch(0.2))).html).not.toContain('<div class="gap">');
   });
 });
 

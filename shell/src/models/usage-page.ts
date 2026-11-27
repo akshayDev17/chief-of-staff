@@ -17,6 +17,24 @@
 // isTrulyFreeTextModel) carries "free"; every other one is paid.
 //
 // Both tables list the dearest first, ties by name: where the money went.
+// The order is fixed: no sort control, so nothing on the page changes the
+// address.
+//
+// Per model grows with every model tried (a Test all models run adds
+// hundreds), so it scrolls inside its own box, about ten rows tall, its
+// column header and its "This month" foot pinned to the box's top and
+// bottom. Over ten rows, a search sits above it: any part of a model's name,
+// maker or ID, with a live count and a Clear when nothing matches. It runs
+// in the page only: no request, no reload, the address unchanged. Without
+// scripts the search stays hidden and the box holds the whole list. Per task
+// is bounded by the app's tasks, about a dozen rows, so it stays a plain
+// table.
+//
+// When OpenRouter's figure for the current key and the app's count differ,
+// one line under the figures says why, from what the app knows: calls this
+// month made before the current key (usage.ts beforeKeyUsd) are not in that
+// key's figure. When those do not account for the difference, the line says
+// only that the two differ and which one stops calls.
 //
 // With nothing to show yet, the page says what is missing and puts its one
 // next action where the figures will appear: Connect OpenRouter, then Set a
@@ -31,7 +49,7 @@ import { OPENROUTER_ACTIVITY_URL } from "../providers/openrouter";
 import type { SecretStore } from "../providers/secrets";
 import { BAR_CSS, BAR_JS, barParts, budgetText, money, readKeyFigure, renderBudgetBar, type KeyFigure } from "../proxy/budget-bar";
 import { readBudget } from "../proxy/budgets";
-import { connectedProviders, readConnection } from "../proxy/connections";
+import { connectedAt, connectedProviders, readConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
 import type { ConnectionFields } from "../proxy/plugin";
 import { TEST_TASK } from "../proxy/proxy";
@@ -74,6 +92,8 @@ export interface UsagePageInput {
   // OpenRouter's own figure for the key, read once the budget is set.
   key?: KeyFigure;
   connection?: ConnectionFields;
+  // When the current key was made: the connection's connected_at.
+  keySince?: string;
   usage: MonthUsage;
   models: NamedLine[];
   tasks: NamedLine[];
@@ -89,6 +109,7 @@ export function nextStep(input: Pick<UsagePageInput, "connected" | "budgetUsd" |
 }
 
 const dayMonth = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" });
+const dayMonthTime = (iso: string) => `${dayMonth(iso)} at ${iso.slice(11, 16)} UTC`;
 const count = (n: number) => n.toLocaleString("en-US");
 
 function costCell(l: NamedLine): string {
@@ -98,12 +119,20 @@ function costCell(l: NamedLine): string {
   return `${figure}${note}`;
 }
 
+// What a model's search matches: its readable name, its ID, and its
+// maker's part of the ID with dashes as spaces ("meta-llama" as "meta llama").
+export const findText = (l: NamedLine): string => {
+  const maker = l.key.includes("/") ? l.key.slice(0, l.key.indexOf("/")).replace(/[-_]/g, " ") : "";
+  return `${l.name} ${l.key} ${maker}`.toLowerCase();
+};
+
 function row(l: NamedLine, table: "models" | "tasks"): string {
   const id = table === "models" ? `<span class="u-sub mono">${esc(l.key)}${l.listed ? "" : " · not in OpenRouter's list now"}</span>` : "";
   const free = l.free ? ` <span class="pill free">free</span>` : "";
   const refused = l.refused ? `${count(l.refused)} refused` : "";
   const phone = [`${count(l.calls)} call${l.calls === 1 ? "" : "s"}`, `${count(l.inputTokens + l.outputTokens)} tokens`, refused].filter(Boolean).join(" · ");
-  return `<tr>
+  const find = table === "models" ? ` data-find-text="${esc(findText(l))}"` : "";
+  return `<tr${find}>
 <td><span class="u-name">${esc(l.name)}</span>${free}${id}<span class="u-sub u-phone">${phone}</span></td>
 <td class="num wide">${count(l.calls)}${refused ? `<span class="u-sub">${refused}</span>` : ""}</td>
 <td class="num wide">${count(l.inputTokens)}</td>
@@ -112,19 +141,79 @@ function row(l: NamedLine, table: "models" | "tasks"): string {
 </tr>`;
 }
 
+// Per model's box holds about this many rows; a longer list gets the search.
+export const BOX_ROWS = 10;
+
+const SEARCH_ICON = `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>`;
+const CLEAR_ICON = `<svg viewBox="0 0 12 12" width="11" height="11" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>`;
+
+// The search above Per model, hidden until the page's script shows it.
+function modelSearch(n: number): string {
+  return `<div class="find" data-find="by-models" data-noun="models" hidden>
+<div class="search" role="search"><label class="visually-hidden" for="find-models">Search models by name, maker or ID</label>${SEARCH_ICON}<input type="search" id="find-models" aria-controls="by-models" placeholder="Search name, maker or ID" autocomplete="off" spellcheck="false"><button type="button" class="clear-x" data-clear aria-label="Clear search" hidden>${CLEAR_ICON}</button></div>
+<p class="count" data-count aria-live="polite">${count(n)} models</p>
+</div>`;
+}
+
 function table(table: "models" | "tasks", lines: NamedLine[], input: UsagePageInput, emptyRow: string): string {
   const label = table === "models" ? "Model" : "Task";
   const sorted = sortDearestFirst(lines);
   const { total } = input.usage;
-  const body = sorted.length ? sorted.map((l) => row(l, table)).join("\n") : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
+  const boxed = table === "models" && sorted.length > 0;
+  const searchable = boxed && sorted.length > BOX_ROWS;
+  const noMatch = searchable
+    ? `\n<tr class="empty" data-no-match hidden><td colspan="5"><span>No model matches “<span data-said></span>”.</span> <button type="button" class="btn secondary small" data-clear>Clear</button></td></tr>`
+    : "";
+  const body = sorted.length ? sorted.map((l) => row(l, table)).join("\n") + noMatch : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
   const foot = sorted.length
     ? `<tfoot><tr><th scope="row">This month<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
     : "";
-  return `<div class="tbl-wrap"><table class="usage" id="by-${table}" aria-labelledby="by-${table}-h">
+  const frame = boxed
+    ? `${searchable ? modelSearch(sorted.length) : ""}<div class="tbl-wrap tbl-box" tabindex="0" role="region" aria-label="Per model, scrolls">`
+    : `<div class="tbl-wrap">`;
+  return `${frame}<table class="usage" id="by-${table}" aria-labelledby="by-${table}-h">
 <thead><tr><th scope="col">${label}</th><th scope="col" class="num wide">Calls</th><th scope="col" class="num wide">Input tokens</th><th scope="col" class="num wide">Output tokens</th><th scope="col" class="num">Cost</th></tr></thead>
 <tbody>
 ${body}
 </tbody>${foot}</table></div>`;
+}
+
+// How OpenRouter's figure for the current key and the app's count differ,
+// when they do by half a cent or more. `explained`: the calls made before
+// the current key account for the whole difference.
+export interface SpendGap {
+  reportedUsd: number;
+  ledgerUsd: number;
+  beforeKeyUsd: number;
+  explained: boolean;
+}
+
+const HALF_CENT = 0.005;
+
+export function spendGap(ledgerUsd: number, key: KeyFigure | undefined, beforeKeyUsd: number): SpendGap | undefined {
+  if (!key || !("usage" in key)) return undefined;
+  const reportedUsd = key.usage.monthlyUsd;
+  if (Math.abs(ledgerUsd - reportedUsd) < HALF_CENT) return undefined;
+  const explained = beforeKeyUsd >= HALF_CENT && Math.abs(ledgerUsd - beforeKeyUsd - reportedUsd) < HALF_CENT;
+  return { reportedUsd, ledgerUsd, beforeKeyUsd, explained };
+}
+
+function gapNote(gap: SpendGap, keySince: string | undefined): string {
+  const made = keySince ? `, made when you connected on ${dayMonthTime(keySince)}` : "";
+  const stops = `The app's count, ${money(gap.ledgerUsd)}, is what stops calls at your budget.`;
+  const line = gap.explained
+    ? `OpenRouter shows ${money(gap.reportedUsd)} for your current key; ${gap.reportedUsd >= HALF_CENT ? "the other" : "all"} ${money(gap.beforeKeyUsd)} was spent this month on an earlier key.`
+    : `OpenRouter's figure for your current key, ${money(gap.reportedUsd)}, and the app's count, ${money(gap.ledgerUsd)}, differ.`;
+  const facts = [
+    `OpenRouter's figure counts one key only: the key the app holds now${made}. Each Connect makes a new key.`,
+    `The app counts every call it sent to OpenRouter this month, on any key${
+      gap.beforeKeyUsd >= HALF_CENT ? `: ${money(gap.beforeKeyUsd)} before that key was made, ${money(gap.ledgerUsd - gap.beforeKeyUsd)} since` : ""
+    }.`,
+    ...(gap.explained ? [] : [`The app cannot tell what the rest of the difference is. Compare the calls on <a href="${OPENROUTER_ACTIVITY_URL}" target="_blank" rel="noopener noreferrer">OpenRouter's Activity page</a>.`]),
+    stops,
+  ];
+  return `<div class="gap"><p class="small">${line}${gap.explained ? "" : ` ${stops}`}</p>
+<details class="more"><summary>Why the two figures differ</summary><ul class="small">${facts.map((f) => `<li>${f}</li>`).join("")}</ul></details></div>`;
 }
 
 function spendCard(input: UsagePageInput, step: NextStep): string {
@@ -144,9 +233,11 @@ function spendCard(input: UsagePageInput, step: NextStep): string {
   const pct = (p.spent / input.budgetUsd) * 100;
   const pctText = p.spent > 0 && pct < 1 ? "under 1%" : `${Math.round(pct)}%`;
   const bar = renderBudgetBar({ budgetUsd: input.budgetUsd, ledgerUsd, key: input.key, connection: input.connection });
+  const gap = spendGap(ledgerUsd, input.key, input.usage.beforeKeyUsd);
   return `<section class="card lead" aria-labelledby="spend-h"><h2 id="spend-h">Model spend this month</h2>
 <p class="fig"><span class="big">${money(p.spent)}</span><span class="of">/ ${budgetText(input.budgetUsd)} (${pctText})</span></p>
 <p class="small muted">${resets}</p>
+${gap ? gapNote(gap, input.keySince) : ""}
 ${bar}
 </section>`;
 }
@@ -194,7 +285,7 @@ ${table("tasks", input.tasks, input, noCalls)}
 <li>OpenRouter's own record: <a href="${OPENROUTER_ACTIVITY_URL}" target="_blank" rel="noopener noreferrer">its Activity page</a>, filtered by the “Chief of staff” key.</li>
 </ul></details>
 </main>
-<script>${BAR_JS}
+<script>${BAR_JS}${FIND_JS}
 </script>
 </body>
 </html>`;
@@ -235,8 +326,72 @@ table.usage .num .u-sub { white-space: nowrap; }
   table.usage .num .u-sub { white-space: normal; }
   .u-phone { display: block; }
 }
+/* Per model: the search above it, then its own scroll box. */
+.find { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 8px; }
+.search { position: relative; flex: 0 1 340px; min-width: 0; }
+.search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.search input { width: 100%; min-height: 36px; padding: 0 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; font-size: .9rem; }
+.search input::placeholder { color: var(--muted); }
+.search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search input::-webkit-search-cancel-button { display: none; }
+.search .clear-x { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.search .clear-x[hidden] { display: none; }
+.search .clear-x:hover { color: var(--text); }
+.search .clear-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.find .count { margin: 0 0 0 auto; font-size: .85rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl-box { max-height: 40rem; overflow: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; }
+.tbl-box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tbl-box table.usage { border-collapse: separate; border-spacing: 0; }
+.tbl-box thead th { position: sticky; top: 0; z-index: 2; background: var(--card); }
+.tbl-box tfoot th, .tbl-box tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--card); }
+.tbl-box th:last-child, .tbl-box td:last-child { padding-right: 8px; }
+.gap { margin: 8px 0 0; }
+.gap > p { margin: 0; }
+.gap details.more { margin-top: 2px; }
+.gap ul { margin: 4px 0 0; padding-left: 20px; }
+@media (max-width: 639px) {
+  .tbl-box { max-height: min(30rem, 64svh); }
+  .search { flex: 1 1 100%; }
+  .find .count { margin: 0; }
+}
 .pill.free { background: var(--ok-soft); color: var(--ok); }
 .pill { white-space: nowrap; }
+`;
+
+// The Per model search: shows the hidden search, then filters the rows on
+// each keystroke. Every word typed must appear in the row's name, maker or
+// ID. Nothing is sent and the address never changes.
+export const FIND_JS = `
+Array.prototype.forEach.call(document.querySelectorAll("[data-find]"), function (find) {
+  var table = document.getElementById(find.getAttribute("data-find"));
+  var box = table.parentNode, input = find.querySelector("input"), count = find.querySelector("[data-count]"), x = find.querySelector(".clear-x");
+  var rows = Array.prototype.slice.call(table.querySelectorAll("tr[data-find-text]"));
+  var none = table.querySelector("tr[data-no-match]"), said = none.querySelector("[data-said]"), noun = " " + find.getAttribute("data-noun");
+  var all = rows.length.toLocaleString("en-US");
+  function apply() {
+    var q = input.value.trim(), words = q.toLowerCase().split(/\\s+/).filter(Boolean), shown = 0;
+    rows.forEach(function (r) {
+      var text = r.getAttribute("data-find-text");
+      var hit = words.every(function (w) { return text.indexOf(w) !== -1; });
+      r.hidden = !hit;
+      if (hit) shown++;
+    });
+    count.textContent = words.length ? shown.toLocaleString("en-US") + " of " + all + noun : all + noun;
+    said.textContent = q;
+    none.hidden = shown > 0;
+    x.hidden = !input.value;
+    box.scrollTop = 0;
+  }
+  function clear() { input.value = ""; apply(); input.focus(); }
+  input.addEventListener("input", apply);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") e.preventDefault();
+    if (e.key === "Escape" && input.value) { e.preventDefault(); clear(); }
+  });
+  [x, none.querySelector("[data-clear]")].forEach(function (b) { b.addEventListener("click", clear); });
+  find.hidden = false;
+  apply();
+});
 `;
 
 export interface UsageDeps {
@@ -249,10 +404,11 @@ export interface UsageDeps {
 
 export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
   const { db, userId, now } = deps;
+  const keySince = await connectedAt(db, userId, "openrouter");
   const [providers, budget, usage, connection, catalog] = await Promise.all([
     connectedProviders(db, userId),
     readBudget(db, userId, "openrouter"),
-    readMonthUsage(db, userId, now),
+    readMonthUsage(db, userId, now, keySince),
     readConnection(db, userId, "openrouter"),
     readCurrentCatalog(db),
   ]);
@@ -262,6 +418,7 @@ export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
     budgetUsd: budget?.monthlyUsd,
     ...(budget ? { key: await readKeyFigure(deps.secrets, userId, now, deps.fetcher) } : {}),
     connection,
+    ...(keySince ? { keySince: keySince.toISOString() } : {}),
     usage,
     models: nameModels(usage.byModel, catalog),
     tasks: nameTasks(usage.byTask),
