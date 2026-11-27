@@ -4,7 +4,7 @@ The decision records of [design-v3](../design-v3.md), one file each, in the temp
 
 | Record | Subject | Design section |
 | --- | --- | --- |
-| [ADR-001](001-models-three-providers-registered-per-user.md) | Models: three providers, registered per user, credentials in each user's vault, one proxy with the app's own price table | 1.9 |
+| [ADR-001](001-models-three-providers-registered-per-user.md) | Models: three providers, registered per user, connected with no key held, one proxy with the app's own price table | 1.9 |
 | [ADR-002](002-adk-in-python-in-cloudflare-containers.md) | ADK in Python in Cloudflare Containers, inside a Worker shell, one `Chief` per user | 2.7 |
 | [ADR-003](003-browser-run-reads-chrome-in-a.md) | Browser Run reads; Chrome in a container acts, through NodeMaven residential proxies, each user's own sessions | 3.7 |
 | [ADR-004](004-linkedin-one-browser-per-user-fixed.md) | LinkedIn: one browser per user, fixed scripts, page budget; the user signs in, no password stored | 4.10 |
