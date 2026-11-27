@@ -76,8 +76,8 @@ export const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 // (https://openrouter.ai/docs/faq, read 2026-11-27).
 export const OPENROUTER_ACTIVITY_URL = "https://openrouter.ai/activity";
 export const KEY_LABEL = "Chief of staff";
-// "Chief of staff · 2026-11-27 14:05 UTC": the key's label, from when Connect was tapped.
-export const keyLabelAt = (now: Date): string => `${KEY_LABEL} · ${now.toISOString().slice(0, 10)} ${now.toISOString().slice(11, 16)} UTC`;
+// "Chief of staff · 2026-11-27 14:05:59 UTC": the key's label, from when Connect was tapped.
+export const keyLabelAt = (now: Date): string => `${KEY_LABEL} · ${now.toISOString().slice(0, 10)} ${now.toISOString().slice(11, 19)} UTC`;
 export const APP_TITLE = "Chief of staff";
 
 // The test call's request: the smallest that proves a model answers, its

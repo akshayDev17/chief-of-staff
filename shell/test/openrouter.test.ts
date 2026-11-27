@@ -29,7 +29,7 @@ describe("Connect OpenRouter: OAuth PKCE", () => {
     expect(url.searchParams.get("code_challenge")).toBe(await challengeOf(verifier));
     expect(url.searchParams.get("state")).toBe("s1");
     // Each Connect mints a new key, so each label names when it was made.
-    expect(url.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 14:05 UTC");
+    expect(url.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 14:05:59 UTC");
     expect(url.searchParams.get("limit")).toBe("31.00");
     // RFC 7636: 43 to 128 characters of the unreserved set; never sent to the browser.
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);

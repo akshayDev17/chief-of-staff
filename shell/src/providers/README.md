@@ -22,7 +22,7 @@ read 2026-11-27):
    `https://openrouter.ai/auth` with `callback_url`
    (`<APP_ORIGIN>/chief-of-staff/models/setup/providers/openrouter/consented`),
    the S256 `code_challenge`, `state`, `key_label` and `limit`. The label is
-   dated, `Chief of staff · 2026-11-27 14:05 UTC` (UTC, when Connect was
+   dated, `Chief of staff · 2026-11-27 14:05:59 UTC` (UTC, when Connect was
    tapped), because every Authorize mints a new key (below). `limit` is
    the user's monthly OpenRouter budget in the app, or $10 before one is set.
    It is the key's own credit limit on OpenRouter, separate from the app's

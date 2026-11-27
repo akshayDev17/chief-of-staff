@@ -88,7 +88,7 @@ describe("Connect OpenRouter", () => {
     const check = await readCheck(env.DB, userId, "openrouter");
     expect(check?.consentState).toBe(auth.searchParams.get("state"));
     // Each key's label names when Connect was tapped.
-    expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 10:00 UTC");
+    expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 10:00:00 UTC");
     const { results } = await env.DB.prepare("SELECT name FROM vault_items WHERE user_id = ?").bind(userId).all<{ name: string }>();
     expect(results.map((r) => r.name)).toEqual(["provider-verifier:openrouter"]);
   });
@@ -284,7 +284,7 @@ describe("Connect OpenRouter", () => {
     const later = new Date("2026-11-28T09:30:00Z");
     const start = await post("/openrouter/connect", {}, { now: later });
     const auth = new URL(start.headers.get("location")!);
-    expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-28 09:30 UTC");
+    expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-28 09:30:00 UTC");
     const back = await get(`/openrouter/consented?code=code-2&state=${auth.searchParams.get("state")}`, { now: later });
     expect(back.status).toBe(303);
     expect(await readConnection(env.DB, userId, "openrouter")).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY) });
