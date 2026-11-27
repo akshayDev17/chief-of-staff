@@ -1,50 +1,88 @@
-// Models › Setup › Model for each task, rendered on the server (design T02 /
-// T18).
+// Models › Setup › Model for each task, rendered on the server (design-v3 1.5
+// and 10.1, T18).
 //
 //   GET  /chief-of-staff/models/setup/tasks
+//   POST /chief-of-staff/models/setup/tasks/change    task (one or more), main.<task>, fallback.<task>
 //   POST /chief-of-staff/models/setup/tasks/accept    the one tap: every proposal is taken
-//   POST /chief-of-staff/models/setup/tasks/change    task, main, fallback (or none)
 //   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
-// Only the user's usable models are offered (models/usable.ts: each model
-// whose latest test passed). Each task shows its main model and its
-// fallback, another of the user's models: the user's choice, or the proposal
-// at the task's suggested strength marked "proposed" until accepted (again,
-// for an accepted task whose proposal has changed); a task with neither
-// reads "Choose a model". A task whose saved main model is no longer usable
-// says why (it failed its last test, the provider no longer lists it, the
-// account's settings leave it out, with a link to them, or it needs a price
-// cap, with a link to set one) and that it runs on its fallback, named, with
-// its Change form open to choose a new main model; with no usable fallback
-// it reads "Choose a model" with the same reason. Changing a task chooses the provider and then the
-// model, for the main and the fallback (the owner, 2026-11-27: "for each kind
-// of task : choose the provider and the model"); OpenRouter is the one
-// provider today, and another provider's passed models join the same lists. A proposed model of the other
-// strength, where the user has none of the task's own, says so. Any task can be
-// changed to any of the user's models, the Strongest included. A model known
-// to make no tool call (the plug-in's `noToolUse`, shown in the model list too)
-// reads "no tool use" wherever it is named, and a free model reads FREE_NOTE;
-// a free model is never proposed, only chosen: with Change, or with one tap
+// One row per task: its suggested strength, and a dropdown for its main model
+// and one for its fallback. Each dropdown lists only the user's usable models
+// (models/usable.ts: each model whose latest test passed, that the provider
+// still offers the user) whose strength chip is the task's (the owner,
+// 2026-11-27: "when suggested strenght == Smallest --> the dropdown next to
+// it should only contain all passing run models tagged with the smallest
+// chip"), the cheapest first, grouped under their provider, so choosing one
+// chooses the provider and the model (OpenRouter is the one provider today).
+// A long list has a search box at its top. Each model shows its name, its ID
+// and its list price per million input and output tokens, or Free.
+//
+// A task's saved choice is always shown, even where its model is no longer in
+// the list: one of another strength saved before the rule says so and keeps
+// running; one no longer usable says why, by the checks that decide it (it
+// failed its last test, it is no longer on the provider's list, the account's
+// settings leave it out, it needs a price cap), with the action that fixes
+// it, and the row says whether the task runs on its fallback or has no model.
+// A task whose strength has no usable model says so in its row, with a link to
+// Providers and models showing that strength's models not tested yet.
+//
+// Choosing a model sends nothing (the owner, 2026-11-27: "upon changing a
+// model in the dropdwon, i believe some request is sent"): the changed rows
+// are counted in a bar with Save and Undo, and Save sends them all at once in
+// place, with no reload and the address unchanged. Without scripts the
+// dropdowns are plain selects, each row has its own Save, and every form
+// posts and redirects back (post-redirect-get). One solid blue button at a
+// time: Save while a row is changed, else the first of Accept all with one
+// tap, Use my free models, the first row's fix, and Next.
+//
+// A free model is never proposed, only chosen: in its dropdown, or with one tap
 // for every task that has no model and no proposal (a $0 account's passed
 // models are all free), which the page offers and explains, with the
-// provider's own terms for free models. Friend screens say "Admin" for
-// the owner and never "tier".
+// provider's own terms for free models. A model known to make no tool call
+// (the plug-in's `noToolUse`) says so. Friend screens say "Admin" for the owner.
 //
 // TODO(T18): tasks name no tools yet. Once a task's agent sends tools, never
 // propose a "no tool use" model for it, and refuse one chosen for it.
 
-import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
+import { esc } from "../prices/page";
+import type { Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
-import { rowAnchor, viewQuery } from "../providers/models-table";
-import { modelsSubtabs, nextAction, setupTabsLine } from "./setup-tabs";
+import { ICON, rowAnchor, usd, viewQuery } from "../providers/models-table";
+import { PAGE_STYLE } from "../providers/page-style";
 import type { Viewer } from "../providers/page";
-import type { PluginRegistry } from "../proxy/plugin";
+import type { Link, PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
+import { modelsSubtabs, nextAction, SETUP_TABS } from "./setup-tabs";
+import { readModelNames, readToTest } from "./picker-data";
+import { PICKER_SCRIPT } from "./picker-script";
 import { FREE_NOTE } from "./test-model";
-import type { Link } from "../proxy/plugin";
-import { acceptProposals, changeTask, freeRoutes, modelKey, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
+import {
+  acceptProposals,
+  changeTasks,
+  freeRoutes,
+  modelKey,
+  offeredFor,
+  readTaskRoutes,
+  taskById,
+  TASKS,
+  useFreeModels,
+  type ChangeProblem,
+  type Offered,
+  type Task,
+  type TaskChange,
+  type TaskRoute,
+} from "./tasks";
+import type { NotUsable } from "./usable";
+
+// Where a strength with no usable model can get one: Providers and models,
+// showing that strength's models, those not tested yet where there are any.
+export interface ToTest {
+  provider: Provider;
+  connected: boolean;
+  untested: Partial<Record<Tier, number>>;
+}
 
 export interface PickerPageInput {
   viewer: Viewer;
@@ -58,226 +96,396 @@ export interface PickerPageInput {
   freeTerms?: { text: string; links: Link[] };
   // The page of the user's account settings at the provider, where it has one.
   accountSettings?: (p: Provider) => Link | undefined;
+  // The provider's name for a model no longer usable, where its list has one.
+  nameOf?: (m: { provider: Provider; model: string }) => string | undefined;
+  toTest?: ToTest;
   problem?: string;
   said?: string;
 }
 
-const marks = (m: Offered, input: PickerPageInput): string => `${input.noToolUse(m) ? " · no tool use" : ""}${m.free ? ` · ${FREE_NOTE}` : ""}`;
+type Ref = { provider: Provider; model: string };
 
-const modelName = (m: Offered, input: PickerPageInput): string => `${m.model} · ${input.providerName(m.provider)}${marks(m, input)}`;
-
-// One provider select and one model select, the models grouped by provider;
-// a small script shows only the chosen provider's models, and the server
-// checks the pair either way.
-function pairSelects(id: string, role: "main" | "fallback", chosen: Offered | undefined, input: PickerPageInput): string {
-  const providers = [...new Set(input.offered.map((m) => m.provider))];
-  const none = role === "fallback" ? `<option value="">None</option>` : "";
-  const providerOptions = providers
-    .map((p) => `<option value="${esc(p)}"${chosen?.provider === p ? " selected" : ""}>${esc(input.providerName(p))}</option>`)
-    .join("");
-  const groups = providers
-    .map(
-      (p) =>
-        `<optgroup label="${esc(input.providerName(p))}" data-provider="${esc(p)}">${input.offered
-          .filter((m) => m.provider === p)
-          .map((m) => `<option value="${esc(m.model)}"${chosen && modelKey(m) === modelKey(chosen) ? " selected" : ""}>${esc(m.model + marks(m, input))}${m.tier ? ` (${m.tier})` : ""}</option>`)
-          .join("")}</optgroup>`,
-    )
-    .join("");
-  const label = role === "main" ? "Main" : "Fallback (another model)";
-  return `<fieldset class="pair" data-pair><legend class="small">${label}</legend>
-<label class="small" for="${id}-${role}-p">Provider</label>
-<select class="f" id="${id}-${role}-p" name="${role}_provider" data-pair-provider>${role === "fallback" ? `<option value=""${chosen ? "" : " selected"}>None</option>` : ""}${providerOptions}</select>
-<label class="small" for="${id}-${role}-m">Model</label>
-<select class="f" id="${id}-${role}-m" name="${role}_model" data-pair-model>${none}${groups}</select></fieldset>`;
+// What a dropdown shows for one model: its name, ID and price, or Free.
+function modelView(m: Offered | Ref, input: PickerPageInput, tag = ""): string {
+  const o = "tier" in m || "inputUsd" in m || "free" in m ? (m as Offered) : undefined;
+  const name = o?.name ?? input.nameOf?.(m) ?? m.model;
+  const price = o?.free
+    ? `<span class="pill free" title="${esc(FREE_NOTE)}">Free</span>`
+    : o?.inputUsd !== undefined && o.outputUsd !== undefined
+      ? `<span class="ov-pr num">${usd(o.inputUsd)} / ${usd(o.outputUsd)}</span>`
+      : "";
+  const tool = input.noToolUse(m) ? `<span class="ov-x">no tool use</span>` : "";
+  return `<span class="ov"><span class="ov-l1"><span class="ov-nm">${esc(name)}</span>${price}</span><span class="ov-l2"><span class="ov-id">${esc(m.model)}</span>${tool}${tag}</span></span>`;
 }
 
-function changeForm(r: TaskRoute, now: { main?: Offered; fallback?: Offered } | undefined, input: PickerPageInput): string {
-  const id = `t-${r.task.id}`;
-  return `<details class="change"${r.stopped?.fallback ? " open" : ""}><summary class="btn small ghost">Change</summary>
-<form method="post" action="${TASK_MODELS_PATH}/change" class="pick">
-<input type="hidden" name="task" value="${esc(r.task.id)}">
-${pairSelects(id, "main", now?.main, input)}
-${input.offered.length > 1 ? pairSelects(id, "fallback", now?.fallback, input) : ""}
-<div class="row"><button type="submit" class="btn small">Save</button></div></form></details>`;
+// A plain select's words for one model, for a page without scripts.
+function optionText(m: Offered | Ref, input: PickerPageInput, note = ""): string {
+  const o = "inputUsd" in m || "free" in m ? (m as Offered) : undefined;
+  const name = o?.name ?? input.nameOf?.(m) ?? m.model;
+  const price = o?.free ? FREE_NOTE : o?.inputUsd !== undefined && o.outputUsd !== undefined ? `${usd(o.inputUsd)} / ${usd(o.outputUsd)} per M tokens` : "";
+  return [name, m.model, price, input.noToolUse(m) ? "no tool use" : "", note].filter(Boolean).join(" · ");
 }
 
-// Why a proposed model is not of the task's suggested strength.
-function substituteNote(task: Task, m: Offered, asFallback: boolean): string {
-  if (!m.tier || m.tier === task.tier) return "";
-  return ` <span class="small">a ${m.tier} model, since you have no ${asFallback ? "other " : ""}${task.tier} model yet</span>`;
-}
+const WHY: Record<NotUsable, string> = {
+  failed: "failed its last test",
+  not_listed: "is no longer on the provider's list",
+  left_out: "is left out by your account settings",
+  no_cap: "needs a price cap",
+  unknown: "is no longer usable",
+};
 
-const newTab = (l: Link): string => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
+const whyText = (why: NotUsable, provider: Provider, input: PickerPageInput): string =>
+  why === "not_listed" ? `is no longer on ${input.providerName(provider)}'s list` : why === "left_out" ? `is left out by your ${input.providerName(provider)} settings` : WHY[why];
 
-// "<model> failed its last test.", or the other reason its saved main model
-// is not usable, with the link that fixes it where there is one.
-function whyStopped(stopped: NonNullable<TaskRoute["stopped"]>, input: PickerPageInput): string {
-  const { provider, model } = stopped.main;
-  const name = esc(input.providerName(provider));
-  const said = (why: string) => `${esc(model)} ${why}`;
-  switch (stopped.why) {
+const newTab = (l: Link, cls: string): string => `<a class="${cls}" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
+
+// The one action that fixes a saved model that is no longer usable.
+function fixFor(m: Ref, why: NotUsable, pickId: string, input: PickerPageInput, cls: string): string {
+  switch (why) {
     case "failed":
-      return said("failed its last test.");
-    case "not_listed":
-      return said(`is no longer on ${name}'s list.`);
+      return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, {})}#${rowAnchor(m.model)}`)}">Test it again</a>`;
     case "left_out": {
-      const settings = input.accountSettings?.(provider);
-      return said(`is left out by your ${name} settings.`) + (settings ? ` ${newTab(settings)}` : "");
+      const settings = input.accountSettings?.(m.provider);
+      return settings ? newTab(settings, `${cls} ext`) : "";
     }
     case "no_cap":
-      return said("needs a price cap.") + ` <a href="${esc(`${PROVIDERS_PATH}?${viewQuery(provider, { cap: model })}#${rowAnchor(model)}`)}">Set its price cap</a>`;
+      return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, { cap: m.model })}#${rowAnchor(m.model)}`)}">Set its price cap</a>`;
     default:
-      return said("is no longer usable.");
+      return `<a class="${cls}" href="#${pickId}" data-open="${pickId}">Choose another</a>`;
   }
 }
 
-function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput): string {
-  const onFallback = r.stopped?.fallback;
-  if (onFallback) {
-    return `<td data-l="Main">Runs on its fallback for now: ${whyStopped(r.stopped!, input)} Choose a new main model with Change.</td><td data-l="Fallback (another model)">${esc(modelName(onFallback, input))}</td>`;
+// The link to the strength's models on Providers and models.
+function testLink(tier: Tier, input: PickerPageInput, cls: string): string {
+  const t = input.toTest;
+  if (!t) return "";
+  if (!t.connected) return `<a class="${cls}" href="${PROVIDERS_PATH}">Connect ${esc(input.providerName(t.provider))}</a>`;
+  const untested = t.untested[tier] ?? 0;
+  const q = new URLSearchParams({ provider: t.provider, strength: tier, ...(untested ? { show: "pending" } : {}) });
+  return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${q}#test`)}">${untested ? "Test" : "See"} ${tier} models</a>`;
+}
+
+// What a task shows now in each role: its saved choice, usable or not, else
+// its proposal while it waits for the tap.
+interface Shown {
+  main?: { ref: Ref; model?: Offered; why?: NotUsable };
+  fallback?: { ref: Ref; model?: Offered; why?: NotUsable };
+}
+
+function shownFor(r: TaskRoute): Shown {
+  if (r.pending && r.proposal && !r.current) return { main: { ref: r.proposal.main, model: r.proposal.main }, ...(r.proposal.fallback ? { fallback: { ref: r.proposal.fallback, model: r.proposal.fallback } } : {}) };
+  const gone = r.fallbackGone ? { fallback: { ref: r.fallbackGone, why: r.fallbackGone.why } } : {};
+  if (r.current) return { main: { ref: r.current.main, model: r.current.main }, ...(r.current.fallback ? { fallback: { ref: r.current.fallback, model: r.current.fallback } } : gone) };
+  if (r.stopped) return { main: { ref: r.stopped.main, why: r.stopped.why }, ...(r.stopped.fallback ? { fallback: { ref: r.stopped.fallback, model: r.stopped.fallback } } : gone) };
+  return {};
+}
+
+// What a row needs the user to do: nothing, or the one action its note offers.
+interface RowNeed {
+  // Each sentence, with the role it is about: hidden once that role is changed.
+  note: Array<{ text: string; about?: "main" | "fallback" }>;
+  // The action's HTML, given its button class.
+  action?: (cls: string) => string;
+  // The task has no model now.
+  blocked: boolean;
+}
+
+function rowNeed(r: TaskRoute, list: Offered[], shown: Shown, input: PickerPageInput): RowNeed {
+  const tier = r.task.tier;
+  const id = r.task.id;
+  if (r.stopped) {
+    const m = r.stopped.main;
+    const name = input.nameOf?.(m) ?? m.model;
+    const runs = r.stopped.fallback ? `Runs on its fallback for now.` : `No model now: its calls are refused.`;
+    return { note: [{ text: `${esc(name)} ${esc(whyText(r.stopped.why, m.provider, input))}. ${runs}`, about: "main" }], action: (cls) => fixFor(m, r.stopped!.why, `main-${id}`, input, cls), blocked: !r.stopped.fallback };
   }
-  if (r.stopped) return `<td data-l="Main">Choose a model <span class="small">${whyStopped(r.stopped, input)}</span></td><td data-l="Fallback (another model)">–</td>`;
-  if (!route) return `<td data-l="Main">Choose a model</td><td data-l="Fallback (another model)">–</td>`;
-  const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
-  const fromProposal = r.pending || r.current?.setHow === "accepted";
-  const note = (m: Offered, asFallback: boolean) => (fromProposal ? substituteNote(r.task, m, asFallback) : "");
-  const fallback = route.fallback
-    ? esc(modelName(route.fallback, input)) + tag + note(route.fallback, true)
-    : input.offered.length > 1
-      ? "none"
-      : "none: test another model for a fallback";
-  return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another model)">${fallback}</td>`;
+  if (!shown.main && !list.length) return { note: [{ text: `No ${tier} model has passed a test yet.` }], action: (cls) => testLink(tier, input, cls), blocked: true };
+  if (!shown.main) return { note: [], blocked: true };
+  const notes: RowNeed["note"] = [];
+  // An accepted task whose proposal has changed keeps its models until the tap.
+  if (r.pending && r.current && r.proposal) {
+    const p = r.proposal;
+    notes.push({ text: `Proposed now: ${esc(p.main.name ?? p.main.model)}${p.fallback ? `, with ${esc(p.fallback.name ?? p.fallback.model)} as its fallback` : ""}.` });
+  }
+  let action: RowNeed["action"];
+  const off = (m: Offered | undefined, role: string) => (m?.tier && m.tier !== tier ? `Its ${role} is a ${m.tier} model, kept from before.` : m && !m.tier ? `Its ${role} has no ${tier} chip, kept from before.` : "");
+  const offMain = off(shown.main.model, "main model");
+  if (offMain) notes.push({ text: offMain, about: "main" });
+  if (r.fallbackGone && !r.pending) {
+    const f = r.fallbackGone;
+    notes.push({ text: `Its fallback ${esc(input.nameOf?.(f) ?? f.model)} ${esc(whyText(f.why, f.provider, input))}.`, about: "fallback" });
+    action = (cls) => fixFor(f, f.why, `fallback-${id}`, input, cls);
+  } else {
+    const offFallback = off(shown.fallback?.model, "fallback");
+    if (offFallback) notes.push({ text: offFallback, about: "fallback" });
+    if (!shown.fallback && list.filter((m) => !shown.main || modelKey(m) !== modelKey(shown.main.ref)).length === 0) {
+      notes.push({ text: `No other ${tier} model for a fallback yet.`, about: "fallback" });
+      action = (cls) => testLink(tier, input, cls);
+    }
+  }
+  return { note: notes, action, blocked: false };
+}
+
+// One dropdown: a plain select (no script) and the picker the script shows.
+function dropdown(r: TaskRoute, role: "main" | "fallback", list: Offered[], shown: Shown, input: PickerPageInput): string {
+  const id = `${role}-${r.task.id}`;
+  const tier = r.task.tier;
+  const now = shown[role];
+  const value = now ? modelKey(now.ref) : "";
+  const inList = now ? list.some((m) => modelKey(m) === value) : false;
+  // The saved model where the list no longer has it, kept as it is.
+  const keptTag = now && !inList ? (now.why ? `<span class="pill bad">Not usable</span>` : now.model?.tier ? `<span class="pill">${now.model.tier}</span>` : `<span class="pill">Other fees</span>`) : "";
+  const keptNote = now && !inList ? (now.why ? `${WHY[now.why]}` : "kept from before") : "";
+  const label = role === "main" ? "Main model" : "Fallback";
+  // Nothing to choose: the strength has no usable model, and none is saved.
+  const empty = !list.length && !now;
+  // The plain select.
+  const providers = [...new Set(list.map((m) => m.provider))];
+  const groups = providers
+    .map((p) => `<optgroup label="${esc(input.providerName(p))}">${list.filter((m) => m.provider === p).map((m) => `<option value="${esc(modelKey(m))}"${modelKey(m) === value ? " selected" : ""}>${esc(optionText(m, input))}</option>`).join("")}</optgroup>`)
+    .join("");
+  const first =
+    (now && !inList ? `<option value="${esc(value)}" selected>${esc(optionText(now.model ?? now.ref, input, keptNote))}</option>` : "") +
+    (role === "fallback" ? `<option value=""${value ? "" : " selected"}>None</option>` : !now ? `<option value="" selected>${empty ? `No ${tier} model yet` : `Choose a ${tier} model`}</option>` : "");
+  const select = `<select class="nsel" id="${id}" name="${role}.${esc(r.task.id)}" data-orig="${esc(value)}" aria-labelledby="lbl-${id}"${empty ? " disabled" : ""}>${first}${groups}</select>`;
+  // The picker.
+  const opt = (m: Offered) => `<li role="option" id="o-${id}-${esc(rowAnchor(modelKey(m)))}" data-value="${esc(modelKey(m))}" data-hay="${esc(`${m.name ?? ""} ${m.model} ${input.providerName(m.provider)}`.toLowerCase())}" aria-selected="${modelKey(m) === value}">${modelView(m, input)}</li>`;
+  const options =
+    (role === "fallback" ? `<li role="option" id="o-${id}-none" data-value="" data-hay="none" aria-selected="${!value}"><span class="ov"><span class="ov-l1"><span class="ov-nm">None</span></span><span class="ov-l2"><span class="ov-id">No fallback</span></span></span></li>` : "") +
+    providers.map((p) => `${providers.length > 1 || list.length ? `<li class="pick-group" role="presentation">${esc(input.providerName(p))}</li>` : ""}${list.filter((m) => m.provider === p).map(opt).join("")}`).join("");
+  const placeholder = `<span class="ov"><span class="ov-l1"><span class="ov-nm ov-ph">${role === "fallback" ? "None" : empty ? `No ${tier} model yet` : `Choose a ${tier} model`}</span></span>${role === "fallback" && !value && !empty ? `<span class="ov-l2"><span class="ov-id">No fallback</span></span>` : ""}</span>`;
+  const shownView = now ? modelView(now.model ?? now.ref, input, keptTag) : placeholder;
+  const search = list.length > 6 ? `<input type="search" class="pick-q" placeholder="Search ${list.length} ${tier} models" aria-label="Search ${tier} models" aria-controls="pl-${id}" autocomplete="off" spellcheck="false">` : "";
+  const picker = `<div class="pick" data-pick="${id}" data-role="${role}"><button type="button" class="pick-btn" id="pb-${id}" aria-haspopup="listbox" aria-expanded="false" aria-controls="pl-${id}" aria-labelledby="lbl-${id} pb-${id}"${empty ? " disabled" : ""}><span class="pv">${shownView}</span>${empty ? "" : `<span class="chev">${ICON.chev}</span>`}</button>${
+    empty ? "" : `<div class="pick-pop" hidden>${search}<ul role="listbox" id="pl-${id}" aria-label="${tier} models" tabindex="-1">${options}</ul><p class="pick-none" hidden>No model matches.</p></div>`
+  }</div>`;
+  return `<div class="t-pick"><span class="pl" id="lbl-${id}">${label}<span class="vh"> for ${esc(r.task.label)}</span></span>${picker}${select}</div>`;
+}
+
+function taskRow(r: TaskRoute, input: PickerPageInput, primary: boolean): string {
+  const list = offeredFor(r.task, input.offered);
+  const shown = shownFor(r);
+  const need = rowNeed(r, list, shown, input);
+  const action = need.action?.(`btn small${primary ? " primary" : ""}`) ?? "";
+  const tag = r.pending && !r.current ? `<span class="pill">Proposed</span>` : "";
+  // The action goes with the note it fixes, and hides with it.
+  const about = need.note.find((n) => n.about)?.about;
+  const note = need.note.length ? `<p class="t-says">${need.note.map((n) => `<span${n.about ? ` data-about="${n.about}"` : ""}>${n.text}</span>`).join(" ")}</p>` : "";
+  return `<li class="task" id="task-${esc(r.task.id)}" data-task="${esc(r.task.id)}"${need.blocked ? " data-blocked" : ""}>
+<form method="post" action="${TASK_MODELS_PATH}/change" class="task-f">
+<input type="hidden" name="task" value="${esc(r.task.id)}">
+<div class="t-name"><span class="t">${esc(r.task.label)}</span><span class="t-tags"><span class="pill" title="Suggested strength">${r.task.tier}</span>${tag}</span></div>
+${dropdown(r, "main", list, shown, input)}
+${dropdown(r, "fallback", list, shown, input)}
+<div class="t-note">${note}${action ? `<span class="t-act"${about ? ` data-about="${about}"` : ""}>${action}</span>` : ""}<button type="submit" class="btn small nojs">Save</button></div>
+</form></li>`;
 }
 
 // The one tap for free models, where tasks have no model and no proposal.
-function freeTap(input: PickerPageInput): string {
+function freeTap(input: PickerPageInput, primary: boolean): string {
   const set = freeRoutes(input.offered, input.routes);
   if (!set.length) return "";
   const allFree = input.offered.every((m) => m.free);
   const why = allFree
-    ? "Your models that passed are all free, so the app proposes none."
+    ? "Your models that passed are all free, so none is proposed."
     : `${set.length === 1 ? "One task has" : `${set.length} tasks have`} no proposed model. Your free models can take ${set.length === 1 ? "it" : "them"}.`;
-  return `<div class="banner" role="note"><p style="margin:0 0 6px">${esc(why)}</p>
-<form method="post" action="${TASK_MODELS_PATH}/use-free"><button type="submit" class="btn">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "that task" : "those tasks"}</button></form>
-<details class="more"><summary>Why free models are not proposed</summary><ul class="small">
+  return `<div class="banner free-tap" role="note"><p>${esc(why)}</p>
+<form method="post" action="${TASK_MODELS_PATH}/use-free" data-fetch><button type="submit" class="btn${primary ? " primary" : ""}">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "1 task" : `${set.length} tasks`}</button></form>
+<details><summary>Why free models are not proposed</summary><ul class="small">
 <li>A free model is rate-limited, and its providers may log prompts.</li>
-<li>The tap picks the cheapest free model at each task's strength.</li>
-<li>Another free model becomes its fallback. You can change any task.</li>
+<li>The tap picks the cheapest free model of each task's strength, and another as its fallback.</li>
 </ul></details></div>`;
 }
 
-function freeTermsLine(input: PickerPageInput): string {
-  if (!input.freeTerms || !input.offered.some((m) => m.free)) return "";
-  const links = input.freeTerms.links.map(newTab).join(" · ");
-  return `<details class="more"><summary>OpenRouter's terms for free models</summary><p class="small muted">${esc(input.freeTerms.text)} ${links}</p></details>`;
+// The line under the heading: how many tasks have a model, and what to do.
+function finding(input: PickerPageInput): string {
+  const n = input.routes.filter((r) => r.current || r.stopped?.fallback).length;
+  const pending = input.routes.filter((r) => r.pending).length;
+  if (n === TASKS.length && !pending) return "Every task has a model. Its fallback answers when the main model fails a call.";
+  const has = n === 0 ? "No task has a model yet." : `${n} of ${TASKS.length} tasks have a model.`;
+  return pending ? `${has} ${pending === 1 ? "One task has" : `${pending} tasks have`} proposed models to accept.` : `${has} Each takes a model of its strength that passed its test.`;
 }
 
-export function renderPickerPage(input: PickerPageInput): string {
-  const intro = !input.offered.length
-    ? `<div class="banner warn">Test a model first. Only models that passed are offered here. <a href="${PROVIDERS_PATH}#test">Test a model</a></div>`
-    : `<p>Each task gets a main model and a fallback.</p>
-<details class="more"><summary>How it works</summary><ul class="small">
-<li>Both come from your models that passed, at the task's suggested strength.</li>
-<li>When the main model fails a call, the fallback answers it.</li>
-<li>Change any task: choose its provider, then its model.</li>
-${input.offered.some((m) => m.free) ? "<li>A free model is never proposed. Choose it with Change, or the one tap.</li>" : ""}
-</ul></details>`;
-  const head = `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
-  const body = input.routes
-    .map((r) => {
-      const route = r.pending ? r.proposal : r.current;
-      const change = changeForm(r, route ?? (r.stopped?.fallback ? { fallback: r.stopped.fallback } : undefined), input);
-      return `<tr><td data-l="Task">${esc(r.task.label)}</td><td data-l="Suggested strength">${r.task.tier}</td>
-${routeCells(r, route, input)}
-<td data-l="">${change}</td></tr>`;
-    })
-    .join("\n");
-  const table = input.offered.length
-    ? `<div class="tbl-wrap"><table class="stackable"><thead><tr>${head}</tr></thead>
-<tbody>
-${body}
-</tbody></table></div>`
-    : "";
+const tabsLine = (): string =>
+  `<nav class="tabs" aria-label="Models setup">${SETUP_TABS.map((t) => (t.href === TASK_MODELS_PATH ? `<span aria-current="page">${esc(t.label)}</span>` : `<a href="${t.href}">${esc(t.label)}</a>`)).join("")}</nav>`;
+
+// The page's <main>, also what an in-place request gets back.
+export function renderMain(input: PickerPageInput): string {
   const pending = input.routes.some((r) => r.pending);
+  const free = freeRoutes(input.offered, input.routes).length > 0;
+  // The one solid blue button: Accept, else the free tap, else the first
+  // row's fix for a task with no model, else Next.
+  const fixAt = pending || free ? -1 : input.routes.findIndex((r) => {
+    const need = rowNeed(r, offeredFor(r.task, input.offered), shownFor(r), input);
+    return need.blocked && need.action?.("btn") ;
+  });
+  const rows = input.routes.map((r, i) => taskRow(r, input, i === fixAt)).join("\n");
   const accept = pending
-    ? `<form method="post" action="${TASK_MODELS_PATH}/accept"><button type="submit" class="btn">Accept all with one tap</button></form>`
+    ? `<form method="post" action="${TASK_MODELS_PATH}/accept" data-fetch><button type="submit" class="btn primary">Accept all with one tap</button></form>`
+    : "";
+  const terms = input.freeTerms && input.offered.some((m) => m.free)
+    ? `<li>${esc(input.freeTerms.text)} ${input.freeTerms.links.map((l) => newTab(l, "ext")).join(" · ")}</li>`
     : "";
   const help =
     input.viewer === "friend"
-      ? `<form method="post" action="${TASK_MODELS_PATH}/help"><button type="submit" class="btn help-btn small">Ask Admin for help</button></form>`
+      ? `<form method="post" action="${TASK_MODELS_PATH}/help" data-fetch><button type="submit" class="btn">Ask Admin for help</button></form>`
       : "";
+  const banner = `${input.problem ? `<div class="banner warn" role="alert" tabindex="-1">${esc(input.problem)}</div>` : ""}${input.said ? `<div class="banner ok" role="status" tabindex="-1">${esc(input.said)}</div>` : ""}`;
+  const primaryNext = !pending && !free && fixAt === -1;
+  return `<div class="title-row"><h1>Models</h1>${modelsSubtabs("setup")}</div>
+${tabsLine()}
+<div data-part="banner">${banner}</div>
+<section class="block" aria-labelledby="h-tasks">
+<div class="block-head"><h2 id="h-tasks">Model for each task</h2><p class="sub">${esc(finding(input))}</p></div>
+${freeTap(input, free && !pending)}
+<div class="panel">
+<div class="tasks-head" aria-hidden="true"><span>Task</span><span>Main model</span><span>Fallback</span></div>
+<ul class="tasks" aria-label="Tasks">
+${rows}
+</ul>
+<div class="tasks-foot">${accept}<details><summary>How it works</summary><ul>
+<li>Each list holds your models of the task's strength whose latest test passed, the cheapest first.</li>
+<li>When the main model fails a call, its fallback answers it.</li>
+<li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50.</li>
+<li>A free model is never proposed. Choose it in its list${free ? ", or with the one tap" : ""}.</li>
+${terms}
+</ul></details></div>
+</div>
+<div class="savebar" id="savebar" role="region" aria-label="Unsaved changes" hidden><p class="sb-n" aria-live="polite"></p><p class="sb-err" role="alert"></p><button type="button" class="btn" data-undo>Undo</button><button type="button" class="btn primary" data-save>Save</button></div>
+</section>
+<div class="next-row">${help}${nextAction(TASK_MODELS_PATH, primaryNext ? "btn primary" : "btn")}</div>`;
+}
+
+export function renderPickerPage(input: PickerPageInput): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Models · Model for each task · Chief of staff</title>
-<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}</style>
+<link rel="icon" href="data:,">
+<script>document.documentElement.className += " js";</script>
+<style>${PAGE_STYLE}${CSS}</style>
 </head>
 <body>
-<main class="screen">
-<h1>Models</h1>
-${modelsSubtabs("setup")}
-${setupTabsLine(TASK_MODELS_PATH)}
-<h2>Model for each task</h2>
-${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
-${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
-${intro}
-${freeTap(input)}
-${freeTermsLine(input)}
-${table}
-<div class="row" style="margin-top:10px">${accept}${nextAction(TASK_MODELS_PATH, `btn${pending ? " secondary" : ""}`)}${help}</div>
+<main class="screen" id="screen">
+${renderMain(input)}
 </main>
-<script>
-document.querySelectorAll("[data-pair]").forEach(function (pair) {
-  var provider = pair.querySelector("[data-pair-provider]"), model = pair.querySelector("[data-pair-model]");
-  if (!provider || !model) return;
-  function show() {
-    var chosen = provider.value, first = null;
-    model.querySelectorAll("optgroup").forEach(function (g) {
-      var on = g.getAttribute("data-provider") === chosen;
-      g.hidden = !on; g.disabled = !on;
-      if (on && !first) first = g.querySelector("option");
-    });
-    var current = model.selectedOptions[0];
-    if (!chosen) model.value = "";
-    else if (!current || !current.parentElement || current.parentElement.getAttribute("data-provider") !== chosen) { if (first) model.value = first.value; }
-  }
-  provider.addEventListener("change", show);
-  show();
-});
-</script>
+<script>${PICKER_SCRIPT}</script>
 </body>
 </html>`;
 }
 
 const CSS = `
-.pill { background: var(--line); color: var(--text); }
-.btn.small { font-size: .85rem; min-height: 28px; padding: 3px 9px; }
-.btn.ghost { background: transparent; color: var(--accent); border-color: var(--line); }
-.help-btn { border-color: var(--line); background: var(--card); color: var(--text); }
-details.change > summary { list-style: none; display: inline-flex; cursor: pointer; }
-details.change > summary::-webkit-details-marker { display: none; }
-form.pick { display: grid; gap: 4px; min-width: 14em; margin-top: 6px; }
-form.pick label { color: var(--muted); }
-form.pick select { max-width: 100%; }
-fieldset.pair { border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 8px; margin: 0; display: grid; gap: 4px; }
-fieldset.pair legend { padding: 0 4px; color: var(--muted); }
-.tbl-wrap { margin-top: 10px; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tasks-head, .task-f { display: grid; grid-template-columns: minmax(170px, .9fr) minmax(0, 1.5fr) minmax(0, 1.5fr); gap: 8px 16px; }
+.tasks-head { padding: 10px var(--card-pad); font-size: var(--fs-small); color: var(--muted); border-bottom: 1px solid var(--border); }
+.task { border-bottom: 1px solid var(--rule); }
+.tasks > .task:last-child { border-bottom: 0; }
+.task-f { padding: 12px var(--card-pad); align-items: center; }
+.t-name { display: grid; gap: 4px; min-width: 0; align-self: center; }
+.t-name .t { font-size: var(--fs-body); line-height: 20px; }
+.t-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.t-note [data-about][hidden] { display: none; }
+.t-says { margin: 0; }
+.t-pick { min-width: 0; }
+.pl { display: none; font-size: var(--fs-small); color: var(--muted); margin-bottom: 4px; }
+.t-note { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: var(--fs-small); color: var(--text); }
+.t-note:not(:has(> :not(.nojs))), .js .t-note[data-quiet] { display: none; }
+.js .t-note .nojs, .js .nsel { display: none; }
+html:not(.js) .pick { display: none; }
+html:not(.js) .t-note { display: flex; }
+.nsel { width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--control); border-radius: var(--radius-control); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.pick { position: relative; min-width: 0; }
+.pick-btn { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 5px 10px 5px 12px; border: 1px solid var(--control); border-radius: var(--radius-control); background: var(--surface); text-align: left; transition: border-color var(--t); }
+.pick-btn:hover { border-color: var(--control-hover); }
+.pick-btn[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } /* taste-skill-ignore: focus ring, not a shadow */
+.pick-btn[disabled] { cursor: default; background: var(--raised); border-color: var(--border); }
+.pick-btn .chev { flex: none; display: inline-flex; color: var(--muted); }
+.pick-btn .chev svg { width: 12px; height: 12px; }
+.task[data-dirty] .pick-btn[data-changed] { border-color: var(--accent); }
+.pv { flex: 1; min-width: 0; }
+.ov { display: grid; min-width: 0; }
+.ov-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; line-height: 20px; }
+.ov-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ov-ph { color: var(--muted); }
+.ov-pr { margin-left: auto; flex: none; font-size: 13px; color: var(--muted); }
+.ov-l1 .pill.free { margin-left: auto; }
+.ov-l2 { display: flex; gap: 8px; min-width: 0; font-size: 12px; line-height: 17px; color: var(--muted); }
+.ov-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ov-x { flex: none; }
+.ov-l2 .pill { height: 18px; font-size: 12px; padding: 0 6px; }
+.pick-pop { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; width: max(100%, 340px); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: 0 10px 28px var(--shadow); padding: 8px; } /* taste-skill-ignore: a menu that floats */
+.pick-q { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--control); border-radius: var(--radius-control); background: var(--surface); font-size: 14px; margin-bottom: 6px; }
+.pick-q::-webkit-search-cancel-button { display: none; }
+.pick-q:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } /* taste-skill-ignore: focus ring */
+.pick-pop ul { max-height: 312px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.pick-pop li[role="option"] { padding: 7px 8px; border-radius: 4px; cursor: pointer; }
+.pick-pop li[role="option"]:hover { background: var(--raised); }
+.pick-pop li[role="option"][aria-selected="true"] { background: var(--active); }
+.pick-pop li[role="option"].on { box-shadow: inset 0 0 0 2px var(--accent); } /* taste-skill-ignore: the keyboard's place */
+.pick-pop li[role="option"][hidden] { display: none; }
+.pick-group { padding: 6px 8px 2px; font-size: 12px; color: var(--muted); }
+.pick-none { padding: 10px 8px; font-size: var(--fs-small); color: var(--muted); }
+.tasks-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px var(--card-pad) 16px; border-top: 1px solid var(--border); }
+.tasks-foot details { font-size: var(--fs-small); color: var(--muted); }
+.tasks-foot details ul { margin-top: 8px; padding-left: 18px; list-style: disc; display: grid; gap: 4px; max-width: 70ch; }
+.free-tap { margin: 0 0 16px; display: grid; gap: 10px; }
+.free-tap form { display: block; }
+.free-tap details ul { margin-top: 6px; padding-left: 18px; list-style: disc; }
+.savebar { position: sticky; bottom: 16px; z-index: 20; margin-top: 16px; display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: 0 10px 28px var(--shadow); } /* taste-skill-ignore: a bar that floats over the list */
+.savebar .sb-n { margin-right: auto; font-size: 14px; }
+.savebar .sb-err { color: var(--negative); font-size: var(--fs-small); }
+.savebar .sb-err:empty { display: none; }
+.next-row { gap: 10px; }
+.banner[tabindex]:focus { outline: none; }
+@media (max-width: 860px) {
+  .tasks-head { display: none; }
+  .task-f { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 14px 16px; }
+  .t-name { grid-column: 1 / -1; }
+  .t-note { grid-column: 1 / -1; }
+  .pl { display: block; }
+}
+@media (max-width: 640px) {
+  .task-f { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .pick-pop { width: 100%; }
+  .pick-pop ul { max-height: 50vh; }
+  .tasks-foot { padding: 14px 16px; }
+  .savebar { bottom: 12px; padding: 10px 12px; }
+  .savebar .sb-n { flex: 1 1 100%; }
+  .savebar .btn { flex: 1; }
+}
 `;
 
 const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|use-free|help))?$`);
 
 export const isTaskModelsPath = (pathname: string): boolean => ROUTE.test(pathname);
 
-const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
+function problemText(task: Task | undefined, problem: ChangeProblem): string {
+  const text: Record<ChangeProblem, string> = {
+    no_such_task: "There is no such task.",
+    no_main: "Choose a main model first.",
+    not_your_model: "That model has not passed its test. Choose one from its list.",
+    wrong_strength: `This task takes only ${task?.tier ?? "its strength's"} models. Choose one from its list.`,
+    same_model: "The fallback must be another model than the main one.",
+  };
+  return task ? `${task.label}: ${text[problem]}` : text[problem];
+}
 
-const PROBLEMS: Record<ChangeProblem, string> = {
-  no_such_task: "There is no such task.",
-  not_your_model: "Pick one of your own models that passed its test call.",
-  same_model: "The fallback must be another model than the main one.",
-};
+const PROBLEMS = new Set<string>(["no_such_task", "no_main", "not_your_model", "wrong_strength", "same_model"]);
+
+// What a page shows once, after a redirect, read from its address.
+function flashFrom(params: URLSearchParams): { said?: string; problem?: string } {
+  const problem = params.get("problem") ?? "";
+  if (PROBLEMS.has(problem)) return { problem: problemText(taskById(params.get("task") ?? ""), problem as ChangeProblem) };
+  const saved = (params.get("saved") ?? "").split(",").map((t) => taskById(t)).filter((t): t is Task => t !== undefined);
+  if (saved.length) return { said: `Saved: ${saved.length === 1 ? saved[0]!.label : `${saved.length} tasks`}.` };
+  const n = (k: string) => Number.parseInt(params.get(k) ?? "", 10);
+  if (params.has("accepted")) return { said: n("accepted") > 0 ? `Accepted: ${n("accepted")} ${n("accepted") === 1 ? "task uses its" : "tasks use their"} proposed models.` : "There was nothing to accept." };
+  if (params.has("free")) return { said: n("free") > 0 ? `${n("free")} ${n("free") === 1 ? "task now uses a free model" : "tasks now use your free models"}. Change any task below.` : "There was nothing to set." };
+  if (params.get("asked") === "1") return { said: "Sent to Admin: this item's name and its reason only." };
+  return {};
+}
 
 // Every route is scoped to the signed-in user.
 export async function handleTaskModels(
@@ -287,16 +495,27 @@ export async function handleTaskModels(
   const { db, plugins, userId, viewer, now } = input;
   const url = new URL(request.url);
   const [, verb] = ROUTE.exec(url.pathname) ?? [];
-  const page = async (extra: { problem?: string; said?: string } = {}, status = 200) => {
+  const wantsJson = (request.headers.get("accept") ?? "").includes("application/json");
+  const state = async (flash: { said?: string; problem?: string }): Promise<PickerPageInput> => {
     const { offered, routes } = await readTaskRoutes(db, userId);
     const providerName = (p: Provider) => plugins[p]?.connect.guide.short ?? PROVIDER_NAMES[p];
-    const noToolUse = (m: { provider: Provider; model: string }) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
+    const noToolUse = (m: Ref) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
     const freeTerms = offered.filter((m) => m.free).map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
     const accountSettings = (p: Provider) => plugins[p]?.connect.guide.accountSettings;
-    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, ...extra }), status);
+    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, nameOf: await readModelNames(db), toTest: await readToTest(db, plugins, userId), ...flash };
+  };
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+  // After an action: in place, the page's <main> with what it said; without
+  // the script, a redirect to the page with it in the address.
+  const done = async (flash: { said?: string; problem?: string }, query: Record<string, string>, status = 200): Promise<Response> => {
+    if (wantsJson) return flash.problem ? json({ problem: flash.problem }, status) : json({ main: renderMain(await state(flash)) });
+    return new Response(null, { status: 303, headers: { location: `${url.origin}${TASK_MODELS_PATH}?${new URLSearchParams(query)}` } });
   };
 
-  if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });
+  if (!verb) {
+    if (request.method !== "GET") return new Response(null, { status: 405 });
+    return new Response(renderPickerPage(await state(flashFrom(url.searchParams))), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+  }
   if (request.method !== "POST") return new Response(null, { status: 405 });
   // A form posted from another site is refused.
   const origin = request.headers.get("origin");
@@ -309,23 +528,18 @@ export async function handleTaskModels(
 
   if (verb === "accept") {
     const n = await acceptProposals(db, userId, now);
-    return page({ said: n ? `Accepted: ${n} ${n === 1 ? "task uses its" : "tasks use their"} proposed models.` : "There was nothing to accept." });
+    return done(flashFrom(new URLSearchParams({ accepted: String(n) })), { accepted: String(n) });
   }
   if (verb === "use-free") {
     const set = await useFreeModels(db, userId, now);
-    const mains = [...new Set(set.map((s) => s.route.main.model))];
-    const said = !set.length
-      ? "There was nothing to set."
-      : set.length === TASKS.length && mains.length === 1
-        ? `Every task now uses ${mains[0]}. Change any task below.`
-        : `${set.length} ${set.length === 1 ? "task now uses a free model" : "tasks now use your free models"}. Change any task below.`;
-    return page({ said });
+    return done(flashFrom(new URLSearchParams({ free: String(set.length) })), { free: String(set.length) });
   }
   if (verb === "change") {
-    const pair = (role: "main" | "fallback") => (field(`${role}_provider`) && field(`${role}_model`) ? modelKey({ provider: field(`${role}_provider`) as Provider, model: field(`${role}_model`) }) : "");
-    const problem = await changeTask(db, userId, field("task"), pair("main"), pair("fallback") || undefined, now);
-    if (problem) return page({ problem: PROBLEMS[problem] }, 400);
-    return page({ said: `${taskById(field("task"))!.label}: saved.` });
+    const tasks = [...new Set(form.getAll("task").filter((t): t is string => typeof t === "string"))];
+    const changes: TaskChange[] = tasks.map((task) => ({ task, main: field(`main.${task}`), fallback: field(`fallback.${task}`) }));
+    const refused = changes.length ? await changeTasks(db, userId, changes, now) : { task: "", problem: "no_such_task" as const };
+    if (refused) return done({ problem: problemText(taskById(refused.task), refused.problem) }, { problem: refused.problem, task: refused.task }, 400);
+    return done(flashFrom(new URLSearchParams({ saved: tasks.join(",") })), { saved: tasks.join(",") });
   }
   // "Ask Admin for help": the item's name only.
   if (viewer !== "friend") return new Response(null, { status: 403 });
@@ -333,5 +547,5 @@ export async function handleTaskModels(
     .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
     .bind(userId, "Model for each task", "asked for help choosing a model for each task", now.toISOString())
     .run();
-  return page({ said: "Sent to Admin: this item's name and its reason only." });
+  return done(flashFrom(new URLSearchParams({ asked: "1" })), { asked: "1" });
 }

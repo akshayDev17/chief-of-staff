@@ -3,8 +3,9 @@
 // request or loads a page when it changes (the owner, 2026-11-27: "upon
 // changing a model in the dropdwon, i believe some request is sent"): each
 // page's own script runs against a stand-in DOM (script-dom.ts) that records
-// every submit, navigation and request. Budgets has no dropdown; Providers
-// has none either, and its filters are buttons outside any form.
+// every submit, navigation and request (mini-dom.ts builds the DOM from the
+// page's own HTML). Budgets has no dropdown; Providers has none either, and
+// its filters are buttons outside any form.
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleTaskModels } from "../src/models/picker-page";
@@ -14,6 +15,7 @@ import { handleBudgets } from "../src/proxy/budgets-page";
 import { writeConnection } from "../src/proxy/connections";
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../src/paths";
 import { fakeFetch } from "./fake-sources";
+import { documentOf } from "./mini-dom";
 import { element, fireInline, pageScripts, runScript, type Sent } from "./script-dom";
 import { renderPriceTablePage } from "../src/prices/page";
 import { currentSnapshot, readSnapshotRows, recentAlerts } from "../src/prices/store";
@@ -40,28 +42,6 @@ async function screens(): Promise<Record<string, string>> {
   const budgets = await handleBudgets(new Request(`${ORIGIN}${BUDGETS_PATH}`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher: fakeFetch() });
   const tasks = await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins, userId, viewer: "owner", now: NOW });
   return { [PROVIDERS_PATH]: await providers.text(), [BUDGETS_PATH]: await budgets.text(), [TASK_MODELS_PATH]: await tasks.text() };
-}
-
-// One task's provider select and model select, the models grouped by
-// provider, as the page renders them; each select's form records a submit.
-function pairSelects(byProvider: Record<string, string[]>, provider: string, model: string, sent: Sent) {
-  const form = { submit: () => sent.push("submit"), requestSubmit: () => sent.push("submit") };
-  const groups = Object.entries(byProvider).map(([p, models]) => {
-    const group = Object.assign(element({ "data-provider": p }), { hidden: false, options: [] as Array<{ value: string; parentElement: unknown }> });
-    group.options = models.map((value) => ({ value, parentElement: group }));
-    return Object.assign(group, { querySelector: (s: string) => (s === "option" ? group.options[0] ?? null : null) });
-  });
-  const options = groups.flatMap((g) => g.options);
-  let selected = options.find((o) => o.value === model);
-  const modelSelect = Object.assign(element(), { form, querySelectorAll: (s: string) => (s === "optgroup" ? groups : []) });
-  Object.defineProperties(modelSelect, {
-    value: { get: () => selected?.value ?? "", set: (v: string) => { selected = options.find((o) => o.value === v); } },
-    selectedOptions: { get: () => (selected ? [selected] : []) },
-  });
-  const providerSelect = Object.assign(element(), { form, value: provider });
-  const parts: Record<string, unknown> = { "[data-pair-provider]": providerSelect, "[data-pair-model]": modelSelect };
-  const fieldset = { querySelector: (s: string) => parts[s] ?? null };
-  return { fieldset, provider: providerSelect, model: modelSelect, shown: () => groups.filter((g) => !g.hidden).map((g) => g.attrs["data-provider"]) };
 }
 
 const nextOf = (html: string): string => html.match(/<(?:a|span) class="[^"]*"(?: href="([^"]+)")?(?: aria-disabled="true")? data-next>([^<]+)</)?.slice(1).join("|") ?? "";
@@ -100,22 +80,64 @@ describe("Models › Setup", () => {
     expect([...strip.matchAll(/<button type="button" class="cell" data-filter="(\w+)"/g)].map((m) => m[1])).toEqual(["works", "fails", "pending"]);
   });
 
-  it("sends nothing and loads nothing when a task's provider or model select changes, and shows only that provider's models", async () => {
-    const html = await screens();
+  it("sends nothing and loads nothing when a task's model is chosen, and Save sends the changed rows once, in place", async () => {
+    const html = (await screens())[TASK_MODELS_PATH]!;
+    const doc = documentOf(html);
     const sent: Sent = [];
-    const pair = pairSelects({ openrouter: ["test-luna", "test-mini"], other: ["other-a", "other-b"] }, "openrouter", "test-mini", sent);
-    runScript(pageScripts(html[TASK_MODELS_PATH]!), { querySelectorAll: (s: string) => (s === "[data-pair]" ? [pair.fieldset] : []) }, `${ORIGIN}${TASK_MODELS_PATH}`, sent);
-    expect(pair.shown()).toEqual(["openrouter"]);
-    expect(pair.model.value).toBe("test-mini");
-    pair.provider.value = "other";
-    pair.provider.fire("change");
-    expect(pair.shown()).toEqual(["other"]);
-    expect(pair.model.value).toBe("other-a");
-    pair.model.value = "other-b";
-    pair.model.fire("change");
-    pair.provider.value = "";
-    pair.provider.fire("change");
-    expect(pair.model.value).toBe("");
+    let posted: FormData | undefined;
+    const answer = '<div data-part="banner"><div class="banner ok" role="status" tabindex="-1">Saved: Matching questions.</div></div>';
+    runScript(pageScripts(html), doc, `${ORIGIN}${TASK_MODELS_PATH}`, sent, {
+      window: { addEventListener: () => {}, FormData },
+      fetch: async (_url, init) => { posted = init?.body as FormData; return Response.json({ main: answer }); },
+    });
+    // Matching questions is proposed test-luna, with test-mini as its fallback.
+    const main = doc.getElementById("main-match")!, fallback = doc.getElementById("fallback-match")!;
+    expect([main.value, fallback.value]).toEqual(["openrouter|test-luna", "openrouter|test-mini"]);
+    const open = doc.getElementById("pb-main-match")!;
+    doc.fire("click", open);
+    expect(open.getAttribute("aria-expanded")).toBe("true");
+    // Choosing its fallback as the main model swaps the two.
+    doc.fire("click", doc.querySelector('#pl-main-match li[data-value="openrouter|test-mini"]')!);
+    expect(open.getAttribute("aria-expanded")).toBe("false");
+    expect([main.value, fallback.value]).toEqual(["openrouter|test-mini", "openrouter|test-luna"]);
+    expect(open.textContent).toContain("Test Mini");
+    // The fallback list hides the main model.
+    expect(doc.querySelector('#pl-fallback-match li[data-value="openrouter|test-mini"]')!.hidden).toBe(true);
+    const bar = doc.getElementById("savebar")!;
+    expect([bar.hidden, bar.querySelector(".sb-n")!.textContent]).toEqual([false, "1 task changed"]);
+    // Save is now the one solid blue button.
+    expect(doc.querySelectorAll(".btn.primary").map((b) => b.textContent)).toEqual(["Save"]);
+    expect(sent).toEqual([]);
+    // Undo puts every row back; choosing again marks it again.
+    doc.fire("click", bar.querySelector("[data-undo]")!);
+    expect([main.value, fallback.value, bar.hidden]).toEqual(["openrouter|test-luna", "openrouter|test-mini", true]);
+    expect(doc.querySelectorAll(".btn.primary").map((b) => b.textContent)).toEqual(["Accept all with one tap", "Save"]);
+    doc.fire("click", open);
+    doc.fire("keydown", doc.querySelector("#pl-main-match")!, "ArrowDown");
+    doc.fire("keydown", doc.querySelector("#pl-main-match")!, "Enter");
+    expect(main.value).toBe("openrouter|test-mini");
+    expect(sent).toEqual([]);
+    doc.fire("click", bar.querySelector("[data-save]")!);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/change`]);
+    expect([...posted!.entries()]).toEqual([["task", "match"], ["main.match", "openrouter|test-mini"], ["fallback.match", "openrouter|test-luna"]]);
+    expect(doc.getElementById("screen")!.textContent).toContain("Saved: Matching questions.");
+  });
+
+  it("opens Providers showing one strength's models not tested yet when the address asks, as an empty strength's link does, with Show all", async () => {
+    const html = (await screens())[PROVIDERS_PATH]!;
+    // Every row carries its strength chip.
+    expect(html).toMatch(/<li class="row" id="m-test-luna"[^>]* data-state="works" data-strength="Smallest"/);
+    expect(html).toMatch(/<li class="row" id="m-test-sonnet"[^>]* data-state="pending" data-strength="Strongest"/);
+    const doc = documentOf(html);
+    const sent: Sent = [];
+    const win = { addEventListener: () => {}, fetch: () => {}, history: {}, setTimeout: () => 0, clearTimeout: () => {} };
+    runScript(pageScripts(html), doc, `${ORIGIN}${PROVIDERS_PATH}?provider=openrouter&strength=Strongest&show=pending#test`, sent, { window: win });
+    const shown = () => doc.querySelectorAll("#pick-list > li.row").filter((li) => !li.hidden).map((li) => li.getAttribute("data-id"));
+    expect(shown()).toEqual(["test-sonnet"]);
+    expect(doc.getElementById("pick-count")!.textContent).toBe("1 Strongest models not tested yet · Show all");
+    doc.fire("click", doc.querySelector("[data-show-all]")!);
+    expect(shown().length).toBe(doc.querySelectorAll("#pick-list li.row").length);
     expect(sent).toEqual([]);
   });
 
