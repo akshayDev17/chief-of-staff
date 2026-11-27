@@ -336,14 +336,14 @@ export function renderMain(input: PickerPageInput): string {
 ${tabsLine()}
 <div data-part="banner">${banner}</div>
 <section class="block" aria-labelledby="h-tasks">
-<div class="block-head"><h2 id="h-tasks">Model for each task</h2><p class="sub">${esc(finding(input))}</p></div>
+<div class="block-head"><h2 id="h-tasks">Model for each task</h2><p class="sub">${esc(finding(input))}</p>${accept ? `<div class="head-act">${accept}</div>` : ""}</div>
 ${freeTap(input, free && !pending)}
 <div class="panel">
 <div class="tasks-head" aria-hidden="true"><span>Task</span><span>Main model</span><span>Fallback</span></div>
 <ul class="tasks" aria-label="Tasks">
 ${rows}
 </ul>
-<div class="tasks-foot">${accept}<details><summary>How it works</summary><ul>
+<div class="tasks-foot"><details><summary>How it works</summary><ul>
 <li>Each list holds your models of the task's strength whose latest test passed, the cheapest first.</li>
 <li>When the main model fails a call, its fallback answers it.</li>
 <li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50.</li>
@@ -437,12 +437,17 @@ html:not(.js) .t-note { display: flex; }
 .savebar .sb-n { margin-right: auto; font-size: 14px; }
 .savebar .sb-err { color: var(--negative); font-size: var(--fs-small); }
 .savebar .sb-err:empty { display: none; }
+.savebar[data-done] .btn { display: none; }
+.savebar[data-done] .sb-n { color: var(--positive); }
 .next-row { gap: 10px; }
+.block-head .head-act { margin-left: auto; align-self: center; }
+.block-head .head-act form { display: block; }
 .banner[tabindex]:focus { outline: none; }
 @media (max-width: 860px) {
   .tasks-head { display: none; }
   .task-f { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 14px 16px; }
   .t-name { grid-column: 1 / -1; }
+  .block-head .head-act { margin-left: 0; }
   .t-note { grid-column: 1 / -1; }
   .pl { display: block; }
 }

@@ -10,7 +10,8 @@
 //   A fallback list hides the row's main model.
 // - The bar under the list counts the changed rows, with Undo and Save. Save
 //   sends every changed row in one request, asking for JSON; the answer is the
-//   page's <main>, swapped in place, or a problem shown in the bar with the
+//   page's <main>, swapped in place with the scroll kept and what it says shown
+//   in the bar for a few seconds, or a problem shown in the bar with the
 //   choices kept.
 // - Accept all, Use my free models and Ask Admin for help (forms marked
 //   data-fetch) are sent in place the same way.
@@ -88,6 +89,7 @@ export const PICKER_SCRIPT = String.raw`
     var b = $("savebar");
     if (!b) return;
     var n = dirtyRows().length;
+    b.removeAttribute("data-done");
     b.hidden = n === 0;
     b.querySelector(".sb-n").textContent = n === 1 ? "1 task changed" : n + " tasks changed";
     b.querySelector(".sb-err").textContent = problem || "";
@@ -161,10 +163,20 @@ export const PICKER_SCRIPT = String.raw`
   }
 
   // ---------- sending in place ----------
+  // The answer's <main> in place, the scroll kept; what it says shows in
+  // the bar at the foot of the screen for a few seconds, and in the banner.
   function swap(html) {
+    var y = window.scrollY || 0;
     main.innerHTML = html;
-    var b = main.querySelector('[data-part="banner"] [tabindex]');
-    if (b) b.focus({ preventScroll: false });
+    if (window.scrollTo) window.scrollTo(0, y);
+    var b = main.querySelector('[data-part="banner"] [tabindex]'), bar = $("savebar");
+    if (b) b.focus({ preventScroll: true });
+    if (b && bar) {
+      bar.hidden = false;
+      bar.setAttribute("data-done", "");
+      bar.querySelector(".sb-n").textContent = b.textContent;
+      setTimeout(function () { if (bar.hasAttribute("data-done")) bar.hidden = true; }, 4000);
+    }
   }
   function send(action, body, onProblem) {
     if (busy) return;

@@ -85,7 +85,7 @@ describe("Models › Setup", () => {
     const doc = documentOf(html);
     const sent: Sent = [];
     let posted: FormData | undefined;
-    const answer = '<div data-part="banner"><div class="banner ok" role="status" tabindex="-1">Saved: Matching questions.</div></div>';
+    const answer = '<div data-part="banner"><div class="banner ok" role="status" tabindex="-1">Saved: Matching questions.</div></div><div class="savebar" id="savebar" hidden><p class="sb-n"></p><p class="sb-err"></p></div>';
     runScript(pageScripts(html), doc, `${ORIGIN}${TASK_MODELS_PATH}`, sent, {
       window: { addEventListener: () => {}, FormData },
       fetch: async (_url, init) => { posted = init?.body as FormData; return Response.json({ main: answer }); },
@@ -122,6 +122,9 @@ describe("Models › Setup", () => {
     expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/change`]);
     expect([...posted!.entries()]).toEqual([["task", "match"], ["main.match", "openrouter|test-mini"], ["fallback.match", "openrouter|test-luna"]]);
     expect(doc.getElementById("screen")!.textContent).toContain("Saved: Matching questions.");
+    // The swapped-in page's bar says it too, where the user is looking.
+    expect(doc.getElementById("savebar")!.hidden).toBe(false);
+    expect(doc.getElementById("savebar")!.querySelector(".sb-n")!.textContent).toBe("Saved: Matching questions.");
   });
 
   it("opens Providers showing one strength's models not tested yet when the address asks, as an empty strength's link does, with Show all", async () => {
