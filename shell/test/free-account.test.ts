@@ -189,7 +189,9 @@ describe("a $0 OpenRouter account", () => {
     expect(paid.length).toBeGreaterThan(0);
     for (const t of paid) expect(t).toMatchObject({ state: "failed", result: { reason: "no_credits", text: "Needs credit on OpenRouter." } });
     const page = await (await get()).text();
-    expect(entry(page, paid[0]!.model)).toContain('<span class="pill warn">Needs credit</span>');
+    // Never usable, so no outcome tag; the reason line says it.
+    expect(entry(page, paid[0]!.model)).not.toContain('class="pill');
+    expect(entry(page, paid[0]!.model)).toContain('<span class="meta why">Needs credit on OpenRouter. · ');
     expect(entry(page, FREE)).toContain('data-state="works"');
     expect(entry(page, FREE)).not.toContain('class="pill ok"');
 

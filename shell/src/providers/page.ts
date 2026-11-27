@@ -273,7 +273,7 @@ export async function readPageState(
     const shown = shownTests(run, latest);
     const failed = (view.results ?? []).filter((r) => {
       const s = shown.get(r.model);
-      return !r.reason && s?.state === "failed" && s.verdict === "failed";
+      return s?.state === "failed" && s.verdict === "failed" && !s.notVerdict;
     });
     const usedBy = await tasksStoppedOn(db, userId, provider, failed.map((r) => r.model));
     const catalogCurrent = isCurrentCatalog(catalog);

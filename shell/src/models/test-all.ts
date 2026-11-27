@@ -376,12 +376,13 @@ const passedSince = (latest: LatestTest | undefined, at: string | undefined): bo
 // `verdict` is its latest test (models/usable.ts), which says whether tasks
 // can use it and which the strip counts, absent while it has none. The
 // reported test is the latest one, or the run's newer refusal that says
-// nothing about the model and so made no latest test (`notVerdict`). While
-// the run tests a model, its latest test, and so whether tasks can use it,
-// stays as it was.
+// nothing about the model and so made no latest test (`notVerdict`). A
+// failed latest test stays the reported one, and such a newer refusal is
+// `later`. While the run tests a model, its latest test, and so whether
+// tasks can use it, stays as it was.
 export type ShownTest =
   | { state: "testing" }
-  | ({ state: LatestTest["state"]; verdict?: LatestTest["state"]; notVerdict?: true } & Pick<LatestTest, "testedAt" | "result">);
+  | ({ state: LatestTest["state"]; verdict?: LatestTest["state"]; notVerdict?: true; later?: TestRecord } & Pick<LatestTest, "testedAt" | "result">);
 
 export function shownTests(run: TestAllRun | undefined, latest: Map<string, LatestTest>): Map<string, ShownTest> {
   const out = new Map<string, ShownTest>();
@@ -390,7 +391,8 @@ export function shownTests(run: TestAllRun | undefined, latest: Map<string, Late
     const l = latest.get(t.model);
     if ((t.state === "queued" || t.state === "running") && !run!.finishedAt) out.set(t.model, { state: "testing" });
     else if (t.state === "failed" && t.result && t.testedAt && (!l || isNewer(t.testedAt, l.testedAt))) {
-      out.set(t.model, { state: "failed", ...(l ? { verdict: l.state } : {}), notVerdict: true, testedAt: t.testedAt, result: t.result });
+      if (l?.state === "failed") out.set(t.model, { state: "failed", verdict: "failed", testedAt: l.testedAt, result: l.result, later: t.result });
+      else out.set(t.model, { state: "failed", ...(l ? { verdict: l.state } : {}), notVerdict: true, testedAt: t.testedAt, result: t.result });
     }
   }
   return out;

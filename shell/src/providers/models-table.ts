@@ -266,10 +266,15 @@ function errPart(input: ModelsTableInput): string {
 
 // ---------- the rows ----------
 
-// A failed verdict is "Doesn't work"; a refusal that says nothing about the
-// model names what kept the test from answering.
-function failTag(failed: { result: TestRecord; notVerdict?: true }): string {
+// "Latest test couldn't run: <its plain line>", for a refusal newer than a
+// failed verdict.
+const laterNote = (text: string): string => `Latest test couldn't run: ${lowerFirst(text)}`;
+
+// A failed verdict is "Doesn't work"; on a model still usable, a refusal
+// that says nothing about the model names what kept the test from answering.
+function failTag(failed: { result: TestRecord; verdict?: string; notVerdict?: true }): string {
   if (!failed.notVerdict) return `<span class="pill bad">Doesn't work</span>`;
+  if (failed.verdict !== "passed") return "";
   if (failed.result.reason === "no_credits") return '<span class="pill warn">Needs credit</span>';
   if (failed.result.reason === "busy") return '<span class="pill">Busy</span>';
   return `<span class="pill">Couldn't test</span>`;
@@ -332,13 +337,20 @@ function resultHtml(r: OfferRow, input: ModelsTableInput): string {
   const res = input.view.results!.find((x) => x.model === r.model)!;
   const hide = `<button type="button" class="link hide" data-hide="${esc(r.model)}">Hide</button>`;
   const latest = input.shown.get(r.model);
+  const failedVerdict = latest?.state === "failed" && latest.verdict === "failed" && !latest.notVerdict ? latest : undefined;
   let record: TestRecord | undefined;
+  let later: string | undefined;
   if (res.reason) {
     const refused: Refused = { kind: "refused", model: r.model, reason: res.reason, ...(r.free ? { free: true } : {}) };
-    record = { reason: res.reason, text: refusalText(refused, plugin), fix: refusalFix(refused, plugin), ...(res.reply ? { reply: res.reply } : {}) };
+    const refusal: TestRecord = { reason: res.reason, text: refusalText(refused, plugin), fix: refusalFix(refused, plugin), ...(res.reply ? { reply: res.reply } : {}) };
+    if (failedVerdict) {
+      record = failedVerdict.result;
+      later = refusal.text;
+    } else record = refusal;
   } else if (latest && latest.state !== "testing") {
     if (latest.state === "passed") return `<div class="result ok" role="status"><p class="v">${ICON.ok}<span><strong>${esc(shortName(r))} passed.</strong> Tasks can use it.</span>${hide}</p></div>`;
     record = latest.result;
+    later = latest.later?.text;
   }
   if (!record) return "";
   const credits = plugin.connect.guide.credits;
@@ -361,7 +373,7 @@ function resultHtml(r: OfferRow, input: ModelsTableInput): string {
   const links = (record.links ?? []).filter((l) => l.href !== credits?.href).map((l) => newTab(l, "ext")).join(" · ");
   const det = [record.reply ? `<p>${replyText(plugin, record.reply)}</p>` : "", record.fix ? `<p>${esc(record.fix)}</p>` : "", links ? `<p>${links}</p>` : ""].join("");
   const cls = record.reason === "no_credits" ? "warn" : "bad";
-  return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(record.text)}</strong></span>${hide}</p>${used}${acts ? `<div class="acts">${acts}</div>` : ""}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
+  return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(record.text)}</strong></span>${hide}</p>${later ? `<p class="later">${esc(laterNote(later))}</p>` : ""}${used}${acts ? `<div class="acts">${acts}</div>` : ""}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
 }
 
 function capEditor(r: OfferRow, input: ModelsTableInput): string {
@@ -416,7 +428,8 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   else if (r.cap && !failed) {
     meta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped · <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span>`;
   } else if (failed && !resultHere) {
-    meta = `<span class="meta why">${esc(failed.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button></span>`;
+    const later = failed.later ? ` · <span class="later">${esc(laterNote(failed.later.text))}</span>` : "";
+    meta = `<span class="meta why">${esc(failed.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button>${later}</span>`;
   } else meta = plainMeta;
   let extra = "";
   if (view.cap === r.model && r.router) extra = capEditor(r, input);

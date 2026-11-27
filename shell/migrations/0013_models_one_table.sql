@@ -45,7 +45,11 @@ CREATE TABLE model_latest_tests (
 -- src/models/test-model.ts isVerdict, and is not carried: busy, no credit,
 -- no key (not_set_up), the budget spent, not connected, the app's own setup
 -- missing, and no reply with no reply from the provider (no credential, or
--- "The test could not run."), or no reason at all.
+-- "The test could not run."), or no reason at all. A no_reply row with no
+-- reply is skipped whatever caused it: the old rows cannot tell a credential
+-- failure from a provider that did not answer the test call (the old code
+-- stored no note), so such a model keeps its add-time pass and its routes,
+-- the cautious reading.
 INSERT INTO model_latest_tests (user_id, provider, model, state, result, tested_at)
 SELECT user_id, provider, model, state, result, tested_at FROM (
   SELECT user_id, provider, model, state, result, tested_at,

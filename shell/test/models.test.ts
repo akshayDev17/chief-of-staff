@@ -207,6 +207,36 @@ describe("Test all models", () => {
     expect((await planRetest(env.DB, plugins(), userId, "openrouter")).models.map((m) => m.model)).toEqual(["test-luna", "test-mini", "test-sonnet"]);
   });
 
+  it("keeps a failed verdict on its row, with a newer refusal as a short note, and tags only usable models", async () => {
+    await recordTest(userId, "test-luna", "failed");
+    await recordTest(userId, "test-mini");
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    // test-sonnet has no verdict yet.
+    plugin.replies.push(refused(429), refused(429), refused(429));
+    await runQueuedTests(env.DB, plugins(), NOW);
+    expect(await usable()).toEqual(["test-mini"]);
+    const rowOf = (html: string, model: string) => html.match(new RegExp(`<li class="row"[^>]*data-id="${model}"[\\s\\S]*?</li>`))![0];
+    const { rows, strip } = modelParts(await tableInput());
+    const luna = rowOf(rows, "test-luna");
+    expect(luna).toContain('data-state="fails"');
+    expect(luna).toContain(`<span class="pill bad">Doesn't work</span>`);
+    expect(luna).toMatch(/<span class="meta why">No such model\. · <button[^>]*>Details<\/button> · <span class="later">Latest test couldn&#39;t run: [^<]+<\/span><\/span>/);
+    expect(luna).toContain("openrouter replied: 404");
+    expect(luna).not.toContain('<span class="pill">Busy</span>');
+    // Still usable: the outcome tag.
+    expect(rowOf(rows, "test-mini")).toMatch(/data-state="works"[\s\S]*<span class="pill">Busy<\/span>/);
+    // No verdict: no tag, the reason line only.
+    const sonnet = rowOf(rows, "test-sonnet");
+    expect(sonnet).toContain('data-state="pending"');
+    expect(sonnet).not.toContain('class="pill');
+    expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num bad">1<\/span>/);
+    // The result under the row: the verdict first, then the newer outcome.
+    const under = rowOf(modelParts(await tableInput({ view: { results: [{ model: "test-luna" }] } })).rows, "test-luna");
+    expect(under).toMatch(/<strong>No such model\.<\/strong>[\s\S]*?<p class="later">Latest test couldn&#39;t run: /);
+    const carried = rowOf(modelParts(await tableInput({ view: { results: [{ model: "test-luna", reason: "budget_spent" }] } })).rows, "test-luna");
+    expect(carried).toMatch(/<strong>No such model\.<\/strong><\/span>[\s\S]*?<p class="later">Latest test couldn&#39;t run: this month&#39;s budget is spent\.<\/p>/);
+  });
+
   it("keeps a usable model usable when the user disconnects or the budget runs out while Test all is queued", async () => {
     plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.02 }, { model: "test-luna" }));
     await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
