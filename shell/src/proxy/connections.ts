@@ -28,7 +28,8 @@ export async function writeConnection(
     .prepare(
       `INSERT INTO provider_connections (user_id, provider, fields, plugin_version, connected_at) VALUES (?1, ?2, ?3, ?4, ?5)
        ON CONFLICT (user_id, provider) DO UPDATE SET fields = excluded.fields, plugin_version = excluded.plugin_version,
-         connected_at = excluded.connected_at`,
+         connected_at = CASE WHEN json_extract(provider_connections.fields, '$.key_hash') = json_extract(excluded.fields, '$.key_hash')
+           THEN provider_connections.connected_at ELSE excluded.connected_at END`,
     )
     .bind(userId, plugin.provider, JSON.stringify(fields), plugin.version, now.toISOString())
     .run();
@@ -42,7 +43,8 @@ export async function readConnection(db: D1Database, userId: string, provider: s
   return row ? (JSON.parse(row.fields) as ConnectionFields) : undefined;
 }
 
-// When the record was last written by the Connect method.
+// When the current key was connected: a Connect with a different key moves
+// it; one with the very same key (the same key_hash) keeps it.
 export async function connectedAt(db: D1Database, userId: string, provider: string): Promise<Date | undefined> {
   const row = await db
     .prepare("SELECT connected_at FROM provider_connections WHERE user_id = ? AND provider = ?")

@@ -11,7 +11,7 @@ import { ESTIMATE_INPUT_TOKENS, NOTHING_FAILED, planRetest, planTestAll, PER_TIC
 import { classify, TEST_MAX_TOKENS } from "../src/providers/openrouter";
 import { formatCost, modelParts, nextStep, type ModelsTableInput } from "../src/providers/models-table";
 import { setBudget, suggestionCandidates } from "../src/proxy/budgets";
-import { writeConnection } from "../src/proxy/connections";
+import { connectedAt, writeConnection } from "../src/proxy/connections";
 import { writeSnapshot } from "../src/prices/store";
 import { ok, recordTest, refused, row, seedPrices, TEST_CATALOG, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
@@ -753,19 +753,36 @@ describe("tests made on an earlier key", () => {
     const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
     const extract = html.match(/<li class="task" id="task-extract"[\s\S]*?<\/form><\/li>/)![0];
     expect(extract).toMatch(
-      /<span data-about="main">test-luna was tested only on an earlier OpenRouter key\. No model now: its calls are refused\.<\/span><\/p><span class="t-act" data-about="main"><a class="btn small[^"]*" href="\/chief-of-staff\/models\/setup\/providers\?provider=openrouter#m-test-luna">Test it again<\/a>/,
+      /<span data-about="main">test-luna needs a test on your new OpenRouter key\. No model now: its calls are refused\.<\/span><\/p><span class="t-act" data-about="main"><a class="btn small[^"]*" href="\/chief-of-staff\/models\/setup\/providers\?provider=openrouter&amp;confirm=test-all#ta">Test all models<\/a>/,
     );
     // The proxy: the call goes to the fallback, and a task with none is refused.
     expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
     expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
     const before = plugin.calls.length;
-    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "no_model", task: "extract" });
+    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toEqual({
+      kind: "no_model",
+      task: "extract",
+      detail: "no usable model for this task: its model needs a test on the new key; run Test all models on Models › Setup › Providers and models (/chief-of-staff/models/setup/providers)",
+    });
     expect(plugin.calls.length).toBe(before);
     // A Test on its row, on the current key, puts it back.
     plugin.replies.push(ok({ input: 1, output: 1 }, { model: "test-luna" }));
     await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
     expect(await usable()).toEqual(["test-luna", "test-mini"]);
     expect(await routeTask(env.DB, userId, "extract")).toMatchObject({ main: { model: "test-luna" } });
+  });
+
+  it("keeps the tests and connected_at when Connect brings back the very same key, and moves them on for a different key", async () => {
+    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
+    const first = await connectedAt(env.DB, userId, "openrouter");
+    await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, RECONNECTED);
+    expect(await connectedAt(env.DB, userId, "openrouter")).toEqual(first);
+    expect(await usable()).toEqual(["test-luna", "test-mini"]);
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).not.toHaveProperty("earlierKey");
+    await reconnect();
+    expect(await connectedAt(env.DB, userId, "openrouter")).toEqual(RECONNECTED);
+    expect(await usable()).toEqual([]);
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ earlierKey: true });
   });
 
   it("shows an earlier key's results as Not tested yet with a grey note, counts none of them, and offers Test all next", async () => {

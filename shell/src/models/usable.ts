@@ -20,7 +20,7 @@
 // latest test: tasks keep their models while a run goes on.
 //
 // A test counts only for the key that ran it: one made before the
-// provider's current connection (connected_at, written on each Connect, which
+// provider's current connection (connected_at, moved by each Connect that
 // makes a new key) was made on an earlier key, so its model is not usable
 // and its row reads Not tested yet until a test on the current key. A key
 // whose account has no credit fails calls that the earlier key's passed.

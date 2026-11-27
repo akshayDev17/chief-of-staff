@@ -50,7 +50,7 @@
 // named in its ledger row (and, for a fallback on another provider, a failed
 // credential or a spent budget at the main model's provider too).
 
-import { TASK_MODELS_PATH } from "../paths";
+import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 import { currentSnapshot, readCurrentCatalog, readSnapshotRows } from "../prices/store";
 import { modelTier, strengthChip, tierFromInputPrice, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
@@ -401,13 +401,16 @@ export async function callTask(
 ): Promise<ProxyOutcome | NoModel> {
   const route = await routeTask(db, call.userId, call.task);
   if (!route) {
-    const chosen = (await readChoice(db, call.userId, call.task)) !== null;
+    const choice = await readChoice(db, call.userId, call.task);
+    const [why] = choice ? await readNotUsable(db, call.userId, [{ provider: choice.main_provider, model: choice.main_model }]) : [];
     return {
       kind: "no_model",
       task: call.task,
-      detail: chosen
-        ? "no usable model for this task: test its model again on Models › Setup › Providers and models, or choose another on Model for each task"
-        : `no model chosen for this task: choose one for it on Models › Setup › Model for each task (${TASK_MODELS_PATH})`,
+      detail: !choice
+        ? `no model chosen for this task: choose one for it on Models › Setup › Model for each task (${TASK_MODELS_PATH})`
+        : why === "earlier_key"
+          ? `no usable model for this task: its model needs a test on the new key; run Test all models on Models › Setup › Providers and models (${PROVIDERS_PATH})`
+          : "no usable model for this task: test its model again on Models › Setup › Providers and models, or choose another on Model for each task",
     };
   }
   const { userId, task, site, company, runId } = call;
