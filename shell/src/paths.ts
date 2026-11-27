@@ -1,4 +1,4 @@
-// Where the app lives: every page, API path and issuer document is under one
+// Where the app lives: every page and API path is under one
 // path on akshayprabhakant.com, set up by the portfolio-app tool (README
 // "Cloudflare Access"). The Worker route is `akshayprabhakant.com/chief-of-staff*`
 // (wrangler.jsonc), which also matches sibling paths such as

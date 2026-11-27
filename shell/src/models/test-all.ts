@@ -35,8 +35,8 @@ import { TEST_MAX_TOKENS } from "../providers/openrouter";
 import { readCurrentCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
 import { readConnection } from "../proxy/connections";
-import type { PluginRegistry } from "../proxy/plugin";
-import { blockedReason, listOffer, refusalText, saveUserModel, testModel, type AddOutcome, type AddRefusal, type OfferRow, type TestResult, type UserModel } from "./add";
+import type { Link, PluginRegistry } from "../proxy/plugin";
+import { blockedReason, listOffer, refusalFix, refusalText, saveUserModel, testModel, type AddOutcome, type AddRefusal, type OfferRow, type TestResult, type UserModel } from "./add";
 
 export const TEST_ALL_TASK = "test_all_models";
 export const RUN_GAP_MINUTES = 10;
@@ -57,9 +57,9 @@ export interface TestAllPlan {
 export interface ModelTestRow {
   model: string;
   state: "queued" | "running" | "passed" | "failed";
-  // The plain reason and the provider's own words, for a failure; the passed
-  // test call, for a pass.
-  result?: { reason?: AddRefusal; text: string; reply?: { status: number; errorName?: string; message?: string }; test?: TestResult };
+  // The plain reason, the provider's own words, and the fix with the pages to
+  // open, for a failure; the passed test call, for a pass.
+  result?: { reason?: AddRefusal; text: string; reply?: { status: number; errorName?: string; message?: string }; fix?: string; links?: Link[]; test?: TestResult };
   costUsd?: number;
   testedAt?: string;
 }
@@ -180,10 +180,21 @@ export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, no
       if (!plugin) throw new Error("no plug-in");
       const location = plugin.connect.locations(t.model)[0] ?? "global";
       const outcome = await testModel(db, plugin, plugins, { userId: t.user_id, model: t.model, location, otherIds, now, task: TEST_ALL_TASK });
-      row =
-        outcome.kind === "added"
-          ? { state: "passed", result: { text: "Works now.", test: outcome.model.test }, costUsd: outcome.model.test?.costUsd }
-          : { state: "failed", result: { reason: outcome.reason, text: refusalText(outcome, plugin), reply: outcome.reply && { status: outcome.reply.status, errorName: outcome.reply.errorName, message: outcome.reply.message } } };
+      if (outcome.kind === "added") {
+        row = { state: "passed", result: { text: "Works now.", test: outcome.model.test }, costUsd: outcome.model.test?.costUsd };
+      } else {
+        const fix = refusalFix(outcome, plugin);
+        row = {
+          state: "failed",
+          result: {
+            reason: outcome.reason,
+            text: refusalText(outcome, plugin),
+            reply: outcome.reply && { status: outcome.reply.status, errorName: outcome.reply.errorName, message: outcome.reply.message },
+            ...(fix ? { fix } : {}),
+            ...(outcome.links?.length ? { links: outcome.links } : {}),
+          },
+        };
+      }
     } catch (error) {
       console.warn(`test all models: a test failed to run: ${error instanceof Error ? error.name : "error"}`);
       row = { state: "failed", result: { reason: "no_reply", text: "The test could not run." } };

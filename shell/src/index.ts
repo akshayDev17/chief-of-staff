@@ -3,7 +3,6 @@ import { refreshPrices } from "./prices/refresh";
 import { currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
 import { accessDenied, readAccessIdentity } from "./access";
 import { readAppOrigin } from "./app-config";
-import { handleIssuerRequest, PUBLIC_ISSUER_PATHS } from "./issuer";
 import { runQueuedTests } from "./models/test-all";
 import { runDueChecks } from "./providers/check";
 import { readProviderPlugins, type ProvidersEnv } from "./providers/index";
@@ -15,12 +14,10 @@ import { ADD_MODEL_PATH, BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE
 import { userFromAccess } from "./users";
 
 // Variables and secrets the Worker reads besides Access's: APP_ORIGIN (in
-// wrangler.jsonc "vars"), VAULT_KEY (secret: the vault key, which seals the
-// key OpenRouter issues each user; src/providers/secrets.ts) and ISSUER_KEYS
-// (secret: the app's own OpenID Connect issuer key, src/issuer.ts, kept for
-// the coming Connect Anthropic build). See src/providers/README.md.
+// wrangler.jsonc "vars") and VAULT_KEY (secret: the vault key, which seals
+// the key OpenRouter issues each user; src/providers/secrets.ts). See
+// src/providers/README.md.
 export interface Env extends ProvidersEnv {
-  ISSUER_KEYS?: string;
   // Cloudflare Access team domain, `<team>.cloudflareaccess.com` (as the
   // portfolio-app tool writes it) or `https://<team>.cloudflareaccess.com`.
   ACCESS_TEAM_DOMAIN?: string;
@@ -48,12 +45,7 @@ export default {
     // `/chief-of-staff.html`; they are the origin's, passed on untouched (a
     // Worker's subrequest to its own zone goes to the origin, not back here).
     if (!isAppPath(url.pathname)) return fetch(request);
-    // The issuer's two public documents are the only paths served without
-    // the owner's sign-in: a provider that trusts the issuer fetches them
-    // (kept for the coming Connect Anthropic build).
-    if (request.method === "GET" && PUBLIC_ISSUER_PATHS.includes(url.pathname)) {
-      return (await handleIssuerRequest(url.pathname, env))!;
-    }
+    // No path under the prefix is served without the owner's sign-in.
     const claims = await readAccessIdentity(request, env);
     if (!claims) return accessDenied();
     if (url.pathname === HEALTH_PATH && request.method === "GET") {

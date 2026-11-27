@@ -19,8 +19,8 @@ name: Release shell
 # also writes there (ACCESS_TEAM_DOMAIN as the bare host
 # `<team>.cloudflareaccess.com`; the Worker also accepts it with https://).
 # No model provider needs a variable (OpenRouter's PKCE needs no client
-# secret, and its callback is built from APP_ORIGIN); the Worker's secrets
-# (VAULT_KEY, ISSUER_KEYS) are set with `wrangler secret put` and kept by
+# secret, and its callback is built from APP_ORIGIN); the Worker's one secret
+# (VAULT_KEY) is set with `wrangler secret put` and kept by
 # every release. A deploy replaces the Worker's variables, so a value set only
 # in the Cloudflare dashboard does not survive the next release.
 

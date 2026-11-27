@@ -31,7 +31,7 @@ import { PROVIDERS_PATH } from "../paths";
 import { blockedReason, refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
 import { CONCURRENCY, RUN_GAP_MINUTES, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { TEST_MAX_TOKENS } from "./openrouter";
-import type { ProviderPlugin } from "../proxy/plugin";
+import type { Link, ProviderPlugin } from "../proxy/plugin";
 
 export type TestsFilter = "all" | "works" | "fails";
 
@@ -101,6 +101,9 @@ function replyLine(plugin: ProviderPlugin, status: number, parts: Array<string |
   return `<p class="tc-reply">${esc(plugin.connect.guide.short)} replied: ${shown.join(" · ")}</p>`;
 }
 
+const linkButtons = (links: Link[] | undefined): string =>
+  (links ?? []).map((l) => `<a class="btn small secondary" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join("");
+
 function outcomeBox(input: ModelsSectionInput): string {
   const { plugin } = input;
   const o = input.outcome;
@@ -119,9 +122,7 @@ ${replyLine(plugin, t.status, [o.model.model, named, t.text ? `“${t.text}”` 
     : o.note
       ? `<p class="tc-reply">${esc(o.note)}</p>`
       : "";
-  const links = (o.links ?? [])
-    .map((l) => `<a class="btn small secondary" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`)
-    .join("");
+  const links = linkButtons(o.links);
   const help =
     input.viewer === "friend"
       ? `<form method="post" action="${action(plugin.provider, "model-help")}"><input type="hidden" name="model" value="${esc(o.model)}"><input type="hidden" name="reason" value="${esc(o.reason)}"><button type="submit" class="btn small help-btn">Ask Admin for help</button></form>`
@@ -184,7 +185,9 @@ function resultsList(input: ModelsSectionInput, run: TestAllRun): string {
     .map((t) => {
       const ok = t.state === "passed";
       const reply = t.result?.reply ? ` <span class="tc-reply">${esc([t.result.reply.status, t.result.reply.errorName, t.result.reply.message ? `“${t.result.reply.message}”` : ""].filter(Boolean).join(" · "))}</span>` : "";
-      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : "doesn't work now"}</span>${ok ? addButton(input, t.model) : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}`}</li>`;
+      const fix = t.result?.fix ? ` <span class="small tc-fix">${esc(t.result.fix)}</span>` : "";
+      const links = t.result?.links?.length ? ` <span class="row">${linkButtons(t.result.links)}</span>` : "";
+      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : "doesn't work now"}</span>${ok ? addButton(input, t.model) : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}${fix}${links}`}</li>`;
     })
     .join("");
   const when = run.finishedAt ? `Tested ${readOn(run.startedAt)}` : `Started ${readOn(run.startedAt)}`;

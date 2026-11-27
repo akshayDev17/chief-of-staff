@@ -117,58 +117,31 @@ Each result is three lines, shown only to the user who made the call: the
 plain reason, OpenRouter's own reply, the fix. "Ask Admin for help" (friends
 only) records the item's name and the plain reason, never the reply.
 
-## The issuer (`src/issuer.ts`)
+## No issuer
 
-The Worker is its own OpenID Connect issuer at
-`<APP_ORIGIN>/chief-of-staff/oidc`, with its discovery document at
-`/chief-of-staff/oidc/.well-known/openid-configuration` and its key set at
-`/chief-of-staff/oidc/jwks.json`. No model provider reads it today: it is
-kept, with its public paths and signing key, for the coming "Connect
-Anthropic" build (Claude Platform OAuth with linked billing), which
-authenticates with it through workload identity federation (the owner,
-2026-11-27). Those two paths are the only ones served without the owner's
-sign-in: the Worker exempts exactly them from its Access check, and the
-owner's `portfolio-app` tool makes a second Access application on exactly
-those two paths with a Bypass policy (README "Cloudflare Access"). Tokens are
-RS256 and live 5 minutes.
-
-### Rotating the issuer key
-
-The key lives in one place, the Worker secret `ISSUER_KEYS`
-(`{"signing": "<kid>", "keys": [<JWK>, ...]}`): every key in it is published,
-and only `signing` signs. Old and new public keys are published together
-until the old one can no longer be in use. Make the first key with
-`node scripts/issuer-keys.mjs keys <dir>` (outside the repository), then run
-each step on the owner's machine:
-
-1. `node scripts/issuer-keys.mjs rotate <dir>/issuer-keys.json publish`, then
-   `npx wrangler secret put ISSUER_KEYS < <dir>/issuer-keys.json`. A new key
-   is published beside the old one, which still signs.
-2. A day later, when every relying party has fetched the new key set: the
-   same with `sign`. The new key signs; both stay published.
-3. A day later, when every token signed with the old key has expired: the
-   same with `retire`. Only the new key is published.
-
-The tests run a whole rotation (`test/issuer.test.ts`), and
-`make issuer-keys-check` runs the script itself.
+The app had its own OpenID Connect issuer for the removed providers' workload
+identity federation, then kept it the same day for a planned Connect
+Anthropic. The owner parked Connect Anthropic (2026-11-27: "ok, so lets not
+do the anthropic one just yet, lets get the openrouter one working at
+least"), so nothing used it, and it was removed with its two public paths,
+its `ISSUER_KEYS` secret and its key script. No path under `/chief-of-staff`
+is served without the owner's sign-in.
 
 ## What the owner sets up
 
 | Name | Kind | What |
 | --- | --- | --- |
-| `APP_ORIGIN` | variable | `https://<host>`, no path: OpenRouter's consent page returns under `<APP_ORIGIN>/chief-of-staff`, and the issuer lives there. Set in `shell/wrangler.jsonc` `"vars"`, so every release ships it |
+| `APP_ORIGIN` | variable | `https://<host>`, no path: OpenRouter's consent page returns under `<APP_ORIGIN>/chief-of-staff`. Set in `shell/wrangler.jsonc` `"vars"`, so every release ships it |
 | `VAULT_KEY` | secret | the vault key: 32 random bytes, base64 (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \| npx wrangler secret put VAULT_KEY`). It unwraps every user's vault key: never rotate it casually. Until it is set, Connect OpenRouter says the app's own side is missing `VAULT_KEY` |
-| `ISSUER_KEYS` | secret | the issuer's keys (above) |
 
 No GitHub variable and no client secret is needed: PKCE has no client
 secret, the callback is built from `APP_ORIGIN`, and the app's name is fixed
-in code. The secrets are stored with `npx wrangler secret put`, which a
+in code. The one secret is stored with `npx wrangler secret put`, which a
 release keeps.
 
 ## Release units (design-v3 1.4, ADR-017)
 
 - **The plug-in** ships in the Worker and rolls back with it; its version
   label (`openrouter-2026-11-27`) is on every ledger row it writes.
-- **The issuer key** has its own rotation cycle (above).
 - **The vault key** is set once; rotating it means re-sealing every vault
   item, a data migration (`src/data-migrations.ts`), never a casual change.

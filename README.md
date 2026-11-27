@@ -22,8 +22,7 @@ file and version, so a component's CI job sees only its own changes:
   user's own OpenRouter account, which goes straight into that user's vault
   (see `shell/src/providers/README.md`), with OpenRouter's model list on its
   Connect screen, and the model for each task (see `shell/src/models/README.md`).
-  The app's own OpenID Connect issuer stays, used by no model provider today
-  and kept for the planned Connect Anthropic. D1 migrations are in `shell/migrations/`. Managed with
+  D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
 - `testdata/persona/`: Morgan Sample, a made-up test persona with invented
@@ -55,8 +54,8 @@ every component directory that exists and skip one that does not yet exist.
 
 ### Cloudflare Access
 
-The app lives at `https://akshayprabhakant.com/chief-of-staff`: every page,
-API path and issuer document is under that one path (`shell/src/paths.ts`,
+The app lives at `https://akshayprabhakant.com/chief-of-staff`: every page and
+API path is under that one path (`shell/src/paths.ts`,
 `BASE_PATH`), and `/chief-of-staff` itself is the app's home. The Worker's
 one route is `akshayprabhakant.com/chief-of-staff*` (`shell/wrangler.jsonc`),
 the only pattern that also matches `/chief-of-staff?<query>`. It matches
@@ -73,10 +72,10 @@ design-v3 section 10.3). Two parts:
   akshayprabhakant.com; this repository makes none. Its plan for this app:
   one application with the shared one-address sign-in policy on
   `akshayprabhakant.com/chief-of-staff` and
-  `akshayprabhakant.com/chief-of-staff/*`, and a second one with a Bypass
-  policy on exactly the issuer's two documents,
-  `/chief-of-staff/oidc/.well-known/openid-configuration` and
-  `/chief-of-staff/oidc/jwks.json`. The tool also puts the deploy secrets
+  `akshayprabhakant.com/chief-of-staff/*`. The second application the plan
+  had, a Bypass policy on the app's former OpenID Connect issuer documents
+  (`/chief-of-staff/oidc/...`), is no longer needed: the issuer was removed
+  on 2026-11-27, and the owner may take it out of the tool's plan. The tool also puts the deploy secrets
   in the repository's GitHub environment `production` (below). So the
   deploy token needs no Access permission, and no address of the owner's is
   in this repository or its secrets.
@@ -87,13 +86,12 @@ design-v3 section 10.3). Two parts:
   `<team domain>/cdn-cgi/access/certs` (cached; refetched on an unknown key
   id, at most every 30 seconds), and checks `iss`, `aud`, `exp` and `nbf`.
   Anything else, including a Worker without its configuration, gets a bare
-  403. The one exception is the app's OpenID Connect issuer: `GET` on
-  exactly `/chief-of-staff/oidc/.well-known/openid-configuration` and
-  `/chief-of-staff/oidc/jwks.json` is served without a token, because the
-  parties that trust the issuer fetch them. No model provider reads them
-  today (Bedrock, Vertex AI and Foundry did, until they were removed on
-  2026-11-27); the issuer is kept for the planned Connect Anthropic, which
-  authenticates with it through workload identity federation.
+  403. No path under the prefix is served without the owner's sign-in. The
+  app's own OpenID Connect issuer, whose two documents were once served
+  without a token for Bedrock, Vertex AI and Foundry, was removed with them
+  on 2026-11-27: it was kept that day for a planned Connect Anthropic, then
+  removed when the owner parked it ("ok, so lets not do the anthropic one
+  just yet, lets get the openrouter one working at least").
   Configuration is two Worker variables set at deploy from the `production`
   environment: `ACCESS_TEAM_DOMAIN` (`<team>.cloudflareaccess.com`, the bare host the
   tool writes, or the same with `https://`)
@@ -148,9 +146,9 @@ PKCE needs no client secret, the callback is built from `APP_ORIGIN`, and the
 app's name is fixed in code. The seven variables the removed Bedrock, Foundry
 and Vertex AI plug-ins read are no longer read.
 
-**The Worker's secrets** are stored with `npx wrangler secret put` in
+**The Worker's one secret** is stored with `npx wrangler secret put` in
 `shell/`, never in the repository or the `production` environment, and a
-release keeps them:
+release keeps it:
 
 - `VAULT_KEY`, the vault key (32 random bytes, base64), which wraps every
   user's own vault key. Set it once, before anyone uses Connect OpenRouter:
@@ -162,12 +160,8 @@ release keeps them:
   Without it, Connect OpenRouter says the app's own side is not set up
   (missing VAULT_KEY). Never rotate it casually: it unwraps every user's
   vault key.
-- `ISSUER_KEYS`, the app's OpenID Connect issuer's signing key, kept for the
-  planned Connect Anthropic. It is made and rotated with
-  `node scripts/issuer-keys.mjs keys|rotate` in `shell/`
-  (`shell/src/providers/README.md`).
-
-`ENTRA_CERT_KEY` is no longer read.
+`ISSUER_KEYS` (the removed issuer's key) and `ENTRA_CERT_KEY` are no longer
+read; the owner may delete them with `npx wrangler secret delete`.
 
 After the release deploys, Admin · Price table fills at the next 06:00 UTC
 refresh, or at once with Refresh model list on the Connect OpenRouter screen.

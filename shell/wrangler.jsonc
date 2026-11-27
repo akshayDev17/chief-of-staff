@@ -13,7 +13,7 @@
   "workers_dev": false,
   // The app's public origin (https://host, no path; src/app-config.ts
   // readAppOrigin): OpenRouter's consent page returns to
-  // <APP_ORIGIN>/chief-of-staff, and the issuer lives there too. Not secret,
+  // <APP_ORIGIN>/chief-of-staff. Not secret,
   // so it ships with every release; the release's --var values are added
   // alongside it.
   "vars": { "APP_ORIGIN": "https://akshayprabhakant.com" },
@@ -42,9 +42,8 @@
   // Every minute: the provider checks whose next try is due (T16), and the
   // queued tests of Test all models.
   "triggers": { "crons": ["0 6 * * *", "* * * * *"] }
-  // The secrets are never written here: VAULT_KEY (32 random bytes, base64;
-  // src/vault.ts, src/providers/secrets.ts), which seals the key OpenRouter
-  // issues each user, and ISSUER_KEYS (src/issuer.ts), both stored with
-  // `npx wrangler secret put` (README "Releasing the shell"), which a release
-  // keeps.
+  // The one secret is never written here: VAULT_KEY (32 random bytes,
+  // base64; src/vault.ts, src/providers/secrets.ts), which seals the key
+  // OpenRouter issues each user, stored with `npx wrangler secret put`
+  // (README "Releasing the shell"), which a release keeps.
 }

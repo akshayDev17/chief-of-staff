@@ -8,7 +8,7 @@
 # value the Worker reads comes from the GitHub environment `production`:
 # ACCESS_TEAM_DOMAIN and ACCESS_AUD (the release stops earlier without them).
 # Nothing is defaulted here. APP_ORIGIN ships in wrangler.jsonc "vars"; the
-# secrets (VAULT_KEY, ISSUER_KEYS) stay. The variables the removed Bedrock,
+# secret (VAULT_KEY) stays. The variables the removed Bedrock,
 # Foundry and Vertex AI plug-ins read are no longer passed, so a release
 # clears them from the Worker. `make release-deploy-check` runs this with a
 # stand-in for npx.

@@ -4,7 +4,7 @@ import { addModel, FREE_NOTE, listOffer, namesPickedModel, readUserModels, saveU
 import { renderPickerPage, handleTaskModels } from "../src/models/picker-page";
 import { acceptProposals, callTask, changeTask, proposeRoute, readTaskRoutes, routeTask, taskById, type Offered } from "../src/models/tasks";
 import { addTestedModel, ESTIMATE_INPUT_TOKENS, planTestAll, PER_TICK, readTestAll, runQueuedTests, startTestAll } from "../src/models/test-all";
-import { TEST_MAX_TOKENS } from "../src/providers/openrouter";
+import { classify, TEST_MAX_TOKENS } from "../src/providers/openrouter";
 import { modelsSection } from "../src/providers/models-panel";
 import { formatCost } from "../src/providers/page";
 import { setBudget } from "../src/proxy/budgets";
@@ -102,6 +102,22 @@ describe("Test all models", () => {
     expect(await readUserModels(env.DB, userId)).toEqual([]);
     const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM model_calls WHERE task = 'test_all_models'").first<{ n: number }>())!;
     expect(n).toBe(3);
+  });
+
+  it("shows a key-limit refusal's fix and the key's own page on OpenRouter in the results", async () => {
+    plugin.connect.classify = classify;
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    const limit = { status: 403, body: { error: { code: 403, message: "Key limit exceeded" } }, error: { name: "HTTP 403", message: "Key limit exceeded" } };
+    plugin.replies.push(limit, limit, limit);
+    await runQueuedTests(env.DB, plugins(), NOW);
+    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
+    expect(run.tests[0]!.result).toMatchObject({ reason: "no_credits", fix: expect.stringContaining("reset period"), links: [{ href: "https://openrouter.ai/settings/keys" }, { href: `https://openrouter.ai/keys/${"a".repeat(64)}` }] });
+    const html = modelsSection({
+      plugin, viewer: "owner", rows: await listOffer(env.DB, plugins(), userId, "openrouter"), plan: await planTestAll(env.DB, plugins(), userId, "openrouter", NOW),
+      run, confirmTestAll: false, testsFilter: "fails", formatCost, now: NOW,
+    });
+    expect(html).toContain("give it a reset period");
+    expect(html).toContain(`href="https://openrouter.ai/keys/${"a".repeat(64)}"`);
   });
 
   it("adds a model that passed with its passed test call and no new call, and refuses any other", async () => {
