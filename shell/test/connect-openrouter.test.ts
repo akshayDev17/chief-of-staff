@@ -160,7 +160,7 @@ describe("Connect OpenRouter", () => {
     const free = MODELS.data.find((m) => m.id.endsWith(":free"))!.id;
     expect(rowOf(html, free)).toContain('<span class="pill free">Free</span>');
     expect(luna).not.toContain("pill free");
-    expect(html).toContain("Every model OpenRouter lists is here but the ones no test can pass: 1 “:batch” variants");
+    expect(html).toContain("Every model OpenRouter lists is here but the ones no test can pass: 1 “:batch” variant (they answer no chat call)");
   });
 
   it("shows the OpenRouter account line, read live with the key from the vault", async () => {
