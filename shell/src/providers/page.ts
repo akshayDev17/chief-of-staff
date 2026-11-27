@@ -198,12 +198,12 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   // stored and the check is waiting for the grant.
   const status =
     check?.state === "passed" || check?.state === "switching_on" ? "Connected" : check?.state === "revoked" ? "Removed on the provider's side" : "Connecting";
-  const disconnect = `<p style="margin-top:8px"><strong>${status}</strong> <span class="pill ok">no key held</span> · <a class="btn small ghost" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>
+  const disconnect = `<p style="margin-top:8px"><strong>${status}</strong> <span class="pill ok">no key held</span> · <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>
 <p class="small muted">To revoke it on the provider’s side: ${esc(g.revoke)}</p>`;
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
 <p class="small">Its models stop answering for you at once. To remove the grant on the provider’s side too: ${esc(g.revoke)}</p>
-<div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect")}</div></div></div>`
+<div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
   const budget = `<p class="small"><strong>Monthly budget:</strong> ${panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet"} · <a href="${BUDGETS_PATH}">Budgets</a></p>`;
   const template = check?.templateVersion ? `<p class="small muted">Stack template version ${esc(check.templateVersion)}.</p>` : "";
@@ -214,7 +214,7 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const grantHelp = plugin.connect.grantHelp && check?.state !== "passed" ? plugin.connect.grantHelp({ userId: input.userId, connection }) : "";
   const models =
     (check?.state === "passed" || input.outcome) && panel.models
-      ? modelsSection({ plugin, viewer: input.viewer, rows: panel.models.rows, outcome: input.outcome, accountCheck: panel.models.accountCheck, catalogReadAt: panel.models.catalogReadAt, formatCost })
+      ? modelsSection({ plugin, viewer: input.viewer, rows: panel.models.rows, outcome: input.outcome, accountCheck: panel.models.accountCheck, catalogReadAt: panel.models.catalogReadAt, formatCost, now: input.now })
       : "";
   return `${head}${disconnect}${grantHelp}${dialog}${regionLine(panel, input.changeRegion)}${budget}${resultBox(panel, input.viewer)}${template}${note}${models}`;
 }
@@ -277,24 +277,35 @@ document.querySelectorAll("form[data-reload]").forEach(function (f) {
 }
 
 const CSS = `
-:root { --danger: #9b2c2c; --danger-soft: #fbe4e4; --accent-soft: #e2ecf6; }
+:root { --danger: #9b2c2c; --danger-soft: #fbe4e4; --accent-soft: #e2ecf6; --danger-btn: #b91c1c; --danger-btn-hover: #991b1b; }
 @media (prefers-color-scheme: dark) { :root { --danger: #f3a6a6; --danger-soft: #3a1f1f; --accent-soft: #1d2a38; } }
 .mono, .cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .cmd { font-size: .8rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
-.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; max-width: 100%; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; max-width: 100%; }
 .seg > a { padding: 4px 11px; color: var(--text); text-decoration: none; white-space: nowrap; }
+.seg > a + a { border-left: 1px solid var(--line); }
+.seg > a:hover { background: var(--accent-soft); }
+.seg > a.on, .seg > a.on + a { border-left-color: var(--accent); }
 .seg > a.on { background: var(--accent); color: var(--card); }
 .seg > a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 759px) {
-  .seg { border: 0; border-radius: 0; gap: 6px; overflow: visible; }
-  .seg > a { border: 1px solid var(--line); border-radius: 999px; }
+  .seg { display: flex; flex-direction: column; border-radius: 12px; width: 100%; }
+  .seg > a { padding: 8px 12px; white-space: normal; }
+  .seg > a + a, .seg > a.on, .seg > a.on + a { border-left: 0; border-top: 1px solid var(--line); }
+  .seg > a.on, .seg > a.on + a { border-top-color: var(--accent); }
+  .seg > a:first-child { border-top: 0; }
 }
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
 .pill.accent { background: var(--accent-soft); color: var(--accent); }
 .btn.small { font-size: .85rem; min-height: 28px; padding: 3px 9px; }
 .btn.ghost { background: transparent; color: var(--text); border-color: var(--line); }
 .btn[aria-disabled] { opacity: .55; cursor: default; }
+.btn.refresh:not(:disabled):hover { filter: brightness(.85); }
+.btn.refresh:disabled { opacity: .55; cursor: not-allowed; }
+.btn.danger { background: var(--danger-btn); border-color: var(--danger-btn); color: #fff; }
+.btn.danger:hover { background: var(--danger-btn-hover); border-color: var(--danger-btn-hover); }
+.btn.danger:focus-visible { outline-color: var(--danger-btn); }
 .help-btn { border-color: var(--line); background: var(--card); color: var(--text); }
 .tc { border: 1px solid var(--ok); border-radius: 10px; padding: 10px 12px; margin-top: 8px; background: var(--ok-soft); }
 .tc-bad { border-color: var(--danger); background: var(--danger-soft); }
