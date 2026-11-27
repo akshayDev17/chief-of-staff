@@ -137,7 +137,7 @@ button suddenly getting enabled".
   `addModel`). Test all models stays a separate action with its estimate and
   confirm.
 - The provider is **usable** once one of the user's models has passed its
-  test call ("Usable: 2 models passed"; before that, "Not usable yet").
+  test call; until one passes, the page prompts "Not usable yet".
 - A test call that gets a 401 records the connection as `revoked` (removed on
   OpenRouter's side), for T49's urgent alert, and the page offers Connect
   OpenRouter again.

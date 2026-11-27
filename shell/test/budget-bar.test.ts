@@ -179,14 +179,14 @@ describe("the bar on the Models pages", () => {
     expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
   });
 
-  it("is not on Providers, which names the budget under Key and budget", async () => {
+  it("is not on Providers, which names the monthly budget", async () => {
     await setBudget(env.DB, userId, "openrouter", 31, "accepted", NOW);
     const response = await handleProviders(new Request(`${ORIGIN}/chief-of-staff/models/setup/providers`), {
       db: env.DB, plugins: { openrouter: testPlugin() }, readPlugins: async () => ({ openrouter: testPlugin() }), secrets: testSecrets(),
       userId, viewer: "friend", appOrigin: ORIGIN, now: NOW, fetcher,
     });
     const html = await response.text();
-    expect(html).toMatch(/<li>Monthly budget here: \$31 · <a href="[^"]+">Budgets<\/a><\/li>/);
+    expect(html).toMatch(/<p class="small">Monthly budget here: \$31 · <a href="[^"]+">Budgets<\/a><\/p>/);
     expect(html).not.toContain("data-budget-bar");
     expect(fetcher.sent.map((s) => s.url)).not.toContain("https://openrouter.ai/api/v1/key");
   });

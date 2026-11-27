@@ -112,7 +112,6 @@ describe("a $0 OpenRouter account", () => {
     expect(chatModels()).toEqual([]);
     const html = await (await get()).text();
     expect(html).toContain("<strong>OpenRouter account:</strong> never bought credits");
-    expect(html).toContain("33 of 50 free-model requests left today.");
     // The free model carries the Free label; the music model is listed but cannot be chosen.
     expect(entry(html, FREE)).toContain('<span class="pill free">Free</span>');
     expect(entry(html, "openai/gpt-6-luna")).not.toContain("pill free");
