@@ -277,6 +277,9 @@ document.querySelectorAll("form[data-listbox]").forEach(function (form) {
   options.forEach(function (o, i) {
     o.addEventListener("click", function () { move(i); choose(i); });
   });
+  form.addEventListener("submit", function (e) {
+    if (!input.value) { e.preventDefault(); open(active); }
+  });
   document.addEventListener("click", function (e) { if (!list.hidden && !form.contains(e.target)) close(false); });
 });
 `;

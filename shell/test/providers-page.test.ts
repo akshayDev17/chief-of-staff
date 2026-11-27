@@ -212,6 +212,17 @@ describe("Models › Setup › Providers", () => {
     expect(result).toContain('<li role="option" id="opt-bedrock-Nova-2-0-Lite" data-model="Nova 2.0 Lite" aria-selected="false" class="added">');
   });
 
+  it("answers a choice with no model, as Enter in Foundry's deployment field would send, with a plain ask and adds nothing", async () => {
+    const plugins = world();
+    await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
+    const empty = await post(plugins, "/bedrock/choose", { model: "", deployment: "my-deployment" });
+    expect(empty.status).toBe(400);
+    const page = await text(empty);
+    expect(page).toContain('<div class="banner warn" role="alert">Choose a model first.</div>');
+    expect(page).not.toContain("is not on Amazon Bedrock&#39;s list.");
+    expect(page).not.toContain('class="added"');
+  });
+
   it("shows the monthly budget once set", async () => {
     const plugins = world();
     await post(plugins, "/bedrock/connect", { accountId: "123456789012" });

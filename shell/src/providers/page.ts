@@ -429,6 +429,7 @@ export async function handleProviders(
       if (provider === "bedrock") await deleteAccountCheck(db, userId);
       return back(provider);
     case "choose": {
+      if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
       const deployment = form.has("deployment") ? field("deployment") : undefined;
       const outcome = await addModel(db, plugins, { userId, provider, model: field("model"), deployment, now });
       return page({ outcome, selected: provider }, outcome.kind === "added" ? 200 : 400);
