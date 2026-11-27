@@ -21,6 +21,7 @@ import { monthSpend, writeLedgerRow, type LedgerRow } from "../src/proxy/ledger"
 import { ENV, generateKey, serveCerts, signToken } from "./access-fixture";
 import { fakeFetch, ISSUED_KEY, keyReply } from "./fake-sources";
 import { element, runScript, type Sent } from "./script-dom";
+import live from "./fixtures/usage-gap-live.json";
 import { seedPrices, TEST_CATALOG, testPlugin, testSecrets, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:41:00Z");
@@ -128,7 +129,7 @@ describe("the page", () => {
     expect(html).toContain("The app's own count this month, which stops calls at the budget: $1.72.");
     expect(html).toContain('href="/chief-of-staff/models/setup/budgets">Change the budget</a>');
     expect(html.match(/<tfoot><tr><th scope="row">This month<span class="u-sub u-phone">4 calls<\/span><\/th><td class="num wide">4<\/td><td class="num wide">3,500<\/td><td class="num wide">300<\/td><td class="num">\$1\.72<\/td><\/tr><\/tfoot>/g)).toHaveLength(2);
-    expect(html).toContain("From 1 November, at OpenRouter; starts again on 1 December.");
+    expect(html).toContain("The app's own count since 1 November, the figure that stops calls at your budget. It starts again on 1 December.");
     expect(html).not.toContain(ISSUED_KEY);
     expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
     expect(html).not.toContain("data-next");
@@ -330,18 +331,85 @@ describe("when OpenRouter's figure and the app's count differ", () => {
     await reconnectedOn(LATER);
     await call({ costUsd: 0.4, at: new Date("2026-11-25T10:00:00Z") });
     const { html } = await page(keyFetch(0.1));
-    expect(html).toContain("<p class=\"small\">OpenRouter's figure for your current key, $0.10, and the app's count, $0.40, differ. The app's count, $0.40, is what stops calls at your budget.</p>");
+    expect(html).toContain("<p class=\"small\">OpenRouter's figure for your current key, $0.10, and the app's count, $0.40, differ.</p>");
+    expect(html).toContain("<li>The app's count, $0.40, is what stops calls at your budget.</li>");
     expect(html).toContain("The app cannot tell what the rest of the difference is.");
     expect(html).not.toContain("earlier key.");
   });
 
-  it("says nothing when they agree, or when OpenRouter's figure could not be read", async () => {
+  it("heads the card with the app's count, against the budget, when OpenRouter's figure is the larger", async () => {
+    await reconnectedOn(LATER);
+    await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
+    const { html } = await page(keyFetch(0.9));
+    expect(html).toContain('<span class="big">$0.20</span><span class="of">/ $30 (under 1%)</span>');
+    expect(html).toContain("OpenRouter's figure for your current key, $0.90, and the app's count, $0.20, differ.");
+  });
+
+  it("says nothing when they agree", async () => {
     expect(spendGap(0.35, { usage: { monthlyUsd: 0.351 } as never, readAt: NOW.toISOString() }, 0)).toBeUndefined();
     expect(spendGap(0.35, { unread: "OpenRouter did not answer" }, 0.35)).toBeUndefined();
-    expect(spendGap(0.35, undefined, 0.35)).toBeUndefined();
     await reconnectedOn(LATER);
     await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
     expect((await page(keyFetch(0.2))).html).not.toContain('<div class="gap">');
+  });
+
+  it("says, in one line, when OpenRouter's figure could not be read, and why", async () => {
+    await reconnectedOn(LATER);
+    await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
+    const { html } = await page(fakeFetch({ currentKey: () => new Response("upstream down", { status: 503 }) }));
+    expect(html).toContain('<div class="gap"><p class="small">The app could not read OpenRouter\'s figure for your current key just now, so it cannot check its count against it: OpenRouter refused the request (status 503).</p></div>');
+    expect(html).not.toContain("Why the two figures differ");
+  });
+
+  it("says so on a $0 key with no budget set too, from the same read Providers makes", async () => {
+    await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: HASH }, LATER);
+    await testSecrets().put(userId, "openrouter", "key", ISSUED_KEY, LATER);
+    await call({ costUsd: 0.35, at: new Date("2026-11-19T10:00:00Z") });
+    const { html, fetcher } = await page(keyFetch(0));
+    expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
+    expect(html).toContain("OpenRouter shows $0.00 for your current key; all $0.35 was spent this month on an earlier key.");
+    expect(html).toContain('<span class="of">no budget set</span>');
+  });
+});
+
+// The owner's month on the live site (fixtures/usage-gap-live.json): every
+// call made before the current key, no budget set, and OpenRouter's figure
+// for the current key $0, the figure Providers shows as "key spent $0". The
+// page read that figure only once a budget was set, so it showed $0.35 "at
+// OpenRouter" and no line on why OpenRouter's figure was $0.
+describe("the owner's live month: no budget, every call on an earlier key", () => {
+  const NOW_LIVE = new Date(live.now);
+  async function seedLive() {
+    await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: HASH }, new Date(live.connectedAt));
+    await testSecrets().put(userId, "openrouter", "key", ISSUED_KEY, new Date(live.connectedAt));
+    for (const [at, task, model, status, input, cached, write, write1h, output, cost, source] of live.rows as [string, string, string, number, number, number, number, number, number, number, "reported" | "list_price"][]) {
+      await call({ at: new Date(at), task, model, status, inputTokens: input, cachedInputTokens: cached, cacheWriteTokens: write, cacheWrite1hTokens: write1h, outputTokens: output, costUsd: cost, costSource: source });
+    }
+  }
+  const livePage = async () => {
+    const fetcher = fakeFetch({ currentKey: () => keyReply(live.keyReply) });
+    const response = await handleUsage({ db: env.DB, userId, now: NOW_LIVE, secrets: testSecrets(), fetcher });
+    return { html: await response.text(), fetcher };
+  };
+
+  it("reads OpenRouter's figure for the current key, as Providers does, and says all of the month was on an earlier key", async () => {
+    await seedLive();
+    const usage = await readMonthUsage(env.DB, userId, NOW_LIVE, new Date(live.connectedAt));
+    expect(usage.total.calls).toBe(423);
+    expect(usage.total.costUsd).toBeCloseTo(0.349393, 6);
+    expect(usage.beforeKeyUsd).toBeCloseTo(usage.total.costUsd, 10);
+    const { html, fetcher } = await livePage();
+    expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
+    expect(html).toContain("OpenRouter shows $0.00 for your current key; all $0.35 was spent this month on an earlier key.");
+    expect(html).toContain("made when you connected on 27 November at 15:03 UTC");
+  });
+
+  it("labels the headline as the app's own count, never as OpenRouter's", async () => {
+    await seedLive();
+    const { html } = await livePage();
+    expect(html).toContain('<span class="big">$0.35</span><span class="of">no budget set</span>');
+    expect(html).not.toContain("at OpenRouter;");
+    expect(html).toContain("The app's own count since 1 November, the figure that stops calls at your budget. It starts again on 1 December.");
   });
 });
 
@@ -358,13 +426,14 @@ describe("with nothing to show yet, the one next action", () => {
     expect(fetcher.sent).toHaveLength(0);
   });
 
-  it("is Set a budget, once connected, and OpenRouter is not asked for a figure", async () => {
+  it("is Set a budget, once connected, with OpenRouter's figure for the key still read", async () => {
     await connect();
-    const { html, fetcher } = await page();
+    const { html, fetcher } = await page(fakeFetch({ currentKey: () => keyReply({ usage_monthly: 0 }) }));
     expect(next(html)).toEqual([[BUDGETS_PATH, "Set a budget"]]);
     expect(html).toContain("Model calls stay stopped until you set a monthly budget.");
     expect(html).not.toContain('<div class="bb" data-budget-bar>');
-    expect(fetcher.sent).toHaveLength(0);
+    expect(html).not.toContain('<div class="gap">');
+    expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
   });
 
   it("is Test a model, with a budget and no call this month, in each table's frame", async () => {

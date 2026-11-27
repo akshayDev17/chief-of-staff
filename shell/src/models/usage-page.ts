@@ -7,9 +7,11 @@
 //   GET /chief-of-staff/models/usage
 //
 // Every figure on the page comes from one read of the ledger: the month's
-// total is the app's own count the bar shows, and each table's foot is that
-// same total. OpenRouter's own figure for the key is read live, server side,
-// only once a budget is set, as on Budgets.
+// total is the app's own count, the figure that stops calls at the budget,
+// and the headline says so; each table's foot is that same total.
+// OpenRouter's own figure for the current key is read live, server side, on
+// every visit, with or without a budget, from the same key and the same
+// GET /api/v1/key that Providers' account line reads.
 //
 // Each model is named as OpenRouter's live list names it, its ID beside it;
 // a model no longer in the list is shown by its ID. The app holds no list of
@@ -34,7 +36,8 @@
 // one line under the figures says why, from what the app knows: calls this
 // month made before the current key (usage.ts beforeKeyUsd) are not in that
 // key's figure. When those do not account for the difference, the line says
-// only that the two differ and which one stops calls.
+// only that the two differ. When OpenRouter's figure cannot be read while
+// OpenRouter is connected, the line says that, and why, instead.
 //
 // With nothing to show yet, the page says what is missing and puts its one
 // next action where the figures will appear: Connect OpenRouter, then Set a
@@ -47,7 +50,7 @@ import type { OpenRouterCatalog } from "../prices/openrouter";
 import { readCurrentCatalog } from "../prices/store";
 import { OPENROUTER_ACTIVITY_URL } from "../providers/openrouter";
 import type { SecretStore } from "../providers/secrets";
-import { BAR_CSS, BAR_JS, barParts, budgetText, money, readKeyFigure, renderBudgetBar, type KeyFigure } from "../proxy/budget-bar";
+import { BAR_CSS, BAR_JS, budgetText, money, readKeyFigure, renderBudgetBar, type KeyFigure } from "../proxy/budget-bar";
 import { readBudget } from "../proxy/budgets";
 import { connectedAt, connectedProviders, readConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
@@ -89,8 +92,8 @@ export interface UsagePageInput {
   now: Date;
   connected: boolean;
   budgetUsd?: number;
-  // OpenRouter's own figure for the key, read once the budget is set.
-  key?: KeyFigure;
+  // OpenRouter's own figure for the current key, or why it could not be read.
+  key: KeyFigure;
   connection?: ConnectionFields;
   // When the current key was made: the connection's connected_at.
   keySince?: string;
@@ -216,32 +219,45 @@ function gapNote(gap: SpendGap, keySince: string | undefined): string {
     ...(gap.explained ? [] : [`The app cannot tell what the rest of the difference is. Compare the calls on <a href="${OPENROUTER_ACTIVITY_URL}" target="_blank" rel="noopener noreferrer">OpenRouter's Activity page</a>.`]),
     stops,
   ];
-  return `<div class="gap"><p class="small">${line}${gap.explained ? "" : ` ${stops}`}</p>
+  return `<div class="gap"><p class="small">${line}</p>
 <details class="more"><summary>Why the two figures differ</summary><ul class="small">${facts.map((f) => `<li>${f}</li>`).join("")}</ul></details></div>`;
+}
+
+// The line on OpenRouter's figure for the current key: why it differs from
+// the app's count, or, while connected, why it could not be read; nothing
+// when the two agree, or when there is no key to read (the Connect banner
+// says so).
+function keyNote(input: UsagePageInput): string {
+  const { key } = input;
+  if ("unread" in key) {
+    return input.connected ? `<div class="gap"><p class="small">The app could not read OpenRouter's figure for your current key just now, so it cannot check its count against it: ${esc(key.unread)}.</p></div>` : "";
+  }
+  const gap = spendGap(input.usage.total.costUsd, key, input.usage.beforeKeyUsd);
+  return gap ? gapNote(gap, input.keySince) : "";
 }
 
 function spendCard(input: UsagePageInput, step: NextStep): string {
   const ledgerUsd = input.usage.total.costUsd;
-  const resets = `From ${dayMonth(input.usage.since)}, at OpenRouter; starts again on ${dayMonth(nextMonthStart(input.now).toISOString())}.`;
-  if (input.budgetUsd === undefined || !input.key) {
+  const counted = `The app's own count since ${dayMonth(input.usage.since)}, the figure that stops calls at your budget. It starts again on ${dayMonth(nextMonthStart(input.now).toISOString())}.`;
+  const note = keyNote(input);
+  if (input.budgetUsd === undefined) {
     // A budget is set per connected provider, so before Connect there is
     // nothing to set it on: Connect, above, comes first.
     const set = input.connected ? `<a class="btn${step === "budget" ? "" : " secondary"}" href="${BUDGETS_PATH}" data-next>Set a budget</a>` : "";
     return `<section class="card lead" aria-labelledby="spend-h"><h2 id="spend-h">Model spend this month</h2>
 <p class="fig"><span class="big">${money(ledgerUsd)}</span><span class="of">no budget set</span></p>
-<p class="small muted">${resets}</p>
+<p class="small muted">${counted}</p>
+${note}
 <div class="unset"><p>${input.connected ? "Model calls stay stopped until you set a monthly budget." : "Once OpenRouter is connected, set a monthly budget for it."}</p>${set}</div>
 </section>`;
   }
-  const p = barParts(input.budgetUsd, ledgerUsd, input.key);
-  const pct = (p.spent / input.budgetUsd) * 100;
-  const pctText = p.spent > 0 && pct < 1 ? "under 1%" : `${Math.round(pct)}%`;
+  const pct = (ledgerUsd / input.budgetUsd) * 100;
+  const pctText = ledgerUsd > 0 && pct < 1 ? "under 1%" : `${Math.round(pct)}%`;
   const bar = renderBudgetBar({ budgetUsd: input.budgetUsd, ledgerUsd, key: input.key, connection: input.connection });
-  const gap = spendGap(ledgerUsd, input.key, input.usage.beforeKeyUsd);
   return `<section class="card lead" aria-labelledby="spend-h"><h2 id="spend-h">Model spend this month</h2>
-<p class="fig"><span class="big">${money(p.spent)}</span><span class="of">/ ${budgetText(input.budgetUsd)} (${pctText})</span></p>
-<p class="small muted">${resets}</p>
-${gap ? gapNote(gap, input.keySince) : ""}
+<p class="fig"><span class="big">${money(ledgerUsd)}</span><span class="of">/ ${budgetText(input.budgetUsd)} (${pctText})</span></p>
+<p class="small muted">${counted}</p>
+${note}
 ${bar}
 </section>`;
 }
@@ -423,7 +439,8 @@ export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
     now,
     connected: providers.includes("openrouter"),
     budgetUsd: budget?.monthlyUsd,
-    ...(budget ? { key: await readKeyFigure(deps.secrets, userId, now, deps.fetcher) } : {}),
+    // Read whatever the budget: without a key in the vault it asks nothing.
+    key: await readKeyFigure(deps.secrets, userId, now, deps.fetcher),
     connection,
     ...(keySince ? { keySince: keySince.toISOString() } : {}),
     usage,
