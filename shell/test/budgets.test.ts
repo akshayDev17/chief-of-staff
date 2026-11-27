@@ -211,6 +211,16 @@ describe("setting, changing and clearing the budget", () => {
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 61, setHow: "accepted" });
   });
 
+  it("names only the day a budget was set, never a provenance the figures beside it could contradict", async () => {
+    // Accepted at 10 a day ($61), shown at 5 a day, where the suggestion is $31.
+    await postInPlace({ do: "accept", per_day: "10" });
+    const html = await page("?per_day=5");
+    expect(html).toContain('<span class="num big">$61</span>');
+    expect(html).toContain('Suggested: about <span data-sugg>$31</span> a month');
+    expect(html).toMatch(/<p class="meta">Set \d{1,2} [A-Z][a-z]{2} \d{4}\.<\/p>/);
+    expect(html).not.toContain("from the suggestion");
+  });
+
   it("sets, without the script, by post-redirect-get, the confirmation shown once", async () => {
     const r = await post({ do: "accept", per_day: "5" });
     expect(r.status).toBe(303);

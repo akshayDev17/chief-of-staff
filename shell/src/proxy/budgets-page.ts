@@ -183,7 +183,6 @@ ${stopLines(state)}
 
 function setPanel(state: BudgetsState, budget: Budget): string {
   const { basis, view } = state;
-  const how = budget.setHow === "accepted" ? "from the suggestion" : "as you typed it";
   const bar = renderBudgetBar({ budgetUsd: budget.monthlyUsd, ledgerUsd: state.spentThisMonth, key: state.key ?? { unread: "OpenRouter's figure was not read" }, budgetHref: "#amount", connection: state.connection });
   const clear = view.confirmClear
     ? `<div class="confirm" role="alertdialog" aria-labelledby="clear-q"><p id="clear-q"><strong>Clear the budget?</strong> Model calls stop until you set one again.</p><div class="acts"><form method="post" action="${BUDGETS_PATH}" data-fetch>${perDayField(view)}<button type="submit" class="btn small danger-o" name="do" value="clear" data-k="clear-yes">Clear budget</button></form><a class="link" href="${esc(viewHref({ applicationsADay: view.applicationsADay }))}" data-view data-k="clear-no" data-autofocus>Cancel</a></div></div>`
@@ -198,7 +197,7 @@ ${basisLines(basis)}
   return `<div class="sugg">
 <p class="label">Your budget</p>
 <p class="fig"><span class="num big">${budgetText(budget.monthlyUsd)}</span> <span class="unit">a month</span></p>
-<p class="meta">Set ${day(budget.setAt)} ${how}.</p>
+<p class="meta">Set ${day(budget.setAt)}.</p>
 ${bar}
 </div>
 <div class="set">
