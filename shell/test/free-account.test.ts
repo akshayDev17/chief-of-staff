@@ -97,6 +97,30 @@ describe("a $0 OpenRouter account", () => {
     expect(html).toContain("https://openrouter.ai/settings/privacy");
   });
 
+  it("reads OpenRouter's list again on the next view when the stored one predates the free and text-only rules", async () => {
+    await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
+    // The list as the previous Worker stored it: no version, the music model
+    // callable, and no model marked free.
+    const stored = (await env.DB.prepare("SELECT snapshot_id, catalog FROM openrouter_catalogs ORDER BY snapshot_id DESC LIMIT 1").first<{ snapshot_id: number; catalog: string }>())!;
+    const old = JSON.parse(stored.catalog) as { version?: number; models: Array<{ id: string; blocked?: string; free?: true }> };
+    delete old.version;
+    for (const m of old.models) {
+      delete m.free;
+      if (m.id === MUSIC) delete m.blocked;
+    }
+    await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = ? WHERE snapshot_id = ?").bind(JSON.stringify(old), stored.snapshot_id).run();
+    expect(await readCurrentCatalog(env.DB)).toBeUndefined();
+    fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
+    const html = await (await get()).text();
+    expect(fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models")).toHaveLength(1);
+    expect(entry(html, FREE)).toContain('<span class="pill free">Free</span>');
+    expect(html).toContain(`data-model="${MUSIC}" aria-selected="false" aria-disabled="true"`);
+    expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)!.blocked).toBeDefined();
+    // A current list is not read again.
+    await get();
+    expect(fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models")).toHaveLength(1);
+  });
+
   it("passes the free model when it is chosen, and says a paid one needs credit, with Add credits first", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     const free = await post("/openrouter/choose", { model: FREE });

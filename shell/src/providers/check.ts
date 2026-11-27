@@ -3,7 +3,6 @@
 //
 //   connectProvider(...)   "Connect <Provider>": the provider's consent page to open
 //   finishConsent(...)     back from that page: the key into the vault, the record, the account's model list
-//   markRevoked(...)       a model's test call found the key removed on the provider's side
 //   disconnectProvider()   the key, the record and the state go
 //
 // No test call runs by itself (the owner, 2026-11-27: "the post connect
@@ -193,15 +192,6 @@ export async function finishConsent(
   // Refresh model list reads it again.
   await refreshAccountList(db, plugins, input.userId, input.provider, input.now);
   return { connected: true };
-}
-
-// A model's test call found the key deleted or disabled on the provider's
-// side (401): the connection is recorded as removed there, for T49's alert,
-// and the page offers Connect again.
-export async function markRevoked(db: D1Database, userId: string, provider: Provider, now: Date): Promise<void> {
-  const check = await readCheck(db, userId, provider);
-  if (check?.state === "revoked") return;
-  await saveCheck(db, userId, { provider, state: "revoked", passedAt: check?.passedAt, revokedAt: now.toISOString(), consentState: check?.consentState });
 }
 
 // Disconnect: the key leaves the vault, and the record and its state go; the

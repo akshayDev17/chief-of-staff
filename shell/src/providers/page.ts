@@ -85,6 +85,9 @@ export interface ProvidersPageInput {
   said?: string;
   // The result of choosing a model, shown under the model list.
   outcome?: AddOutcome;
+  // The GET address that shows a Test all models run's progress: the page's
+  // own, or for a page a form's POST returned, the run's results.
+  progressHref: string;
   now: Date;
 }
 
@@ -209,10 +212,12 @@ export function renderProvidersPage(input: ProvidersPageInput): string {
           .join("")}</span></nav>`
       : `<h3 style="margin:10px 0 0">Connect ${esc(selected.plugin.connect.guide.name)}${isConnected(selected.connection, selected.check) ? ' <span aria-label="connected">✓</span>' : ""}</h3>`;
   // While a Test all models run goes on, the page shows its progress: a
-  // script reloads it, but never while a model is being chosen
-  // (models-panel.ts MODELS_JS); without scripts, a refresh every 20 seconds.
+  // script loads input.progressHref again, never a form sent again, and
+  // never while a model is being chosen (models-panel.ts MODELS_JS); without
+  // scripts, a refresh to that address every 20 seconds.
   const running = Boolean(selected.models?.run && !selected.models.run.finishedAt);
-  const refresh = running ? `<noscript><meta http-equiv="refresh" content="20"></noscript>` : "";
+  const progress = esc(input.progressHref);
+  const refresh = running ? `<noscript><meta http-equiv="refresh" content="20; url=${progress}"></noscript>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -222,7 +227,7 @@ ${refresh}
 <title>Models · Providers · Chief of staff</title>
 <style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${TIER_VARS}${MODELS_CSS}</style>
 </head>
-<body${running ? ' data-reload-every="20"' : ""}>
+<body${running ? ` data-reload-every="20" data-reload-to="${progress}"` : ""}>
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
@@ -336,6 +341,7 @@ async function pageInput(
     };
   }
   const filter = url.searchParams.get("tests");
+  const testsFilter: TestsFilter = filter === "works" || filter === "fails" ? filter : "all";
   return {
     viewer,
     userId,
@@ -343,10 +349,11 @@ async function pageInput(
     selected,
     confirmDisconnect: url.searchParams.get("disconnect") === "1",
     confirmTestAll: url.searchParams.get("test-all") === "confirm",
-    testsFilter: filter === "works" || filter === "fails" ? filter : "all",
+    testsFilter,
     problem: extra.problem,
     said: extra.said,
     outcome: extra.outcome,
+    progressHref: url.pathname === PROVIDERS_PATH ? `${url.pathname}${url.search}` : `${providerHref(selected, `&tests=${testsFilter}`)}#${selected}-test-all`,
     now,
   };
 }
@@ -390,7 +397,8 @@ export async function handleProviders(
     html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
   const back = (provider: string, extra = "", anchor = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}${anchor}`, 303);
   // The price table and the provider's model list, read now when there is
-  // none yet or it is over a minute old.
+  // none yet (one stored under older rules counts as none, prices/store.ts)
+  // or, when forced, it is over a minute old.
   const refreshCatalog = async (force: boolean): Promise<void> => {
     const snapshot = await currentSnapshot(db);
     const catalog = await readCurrentCatalog(db);
@@ -400,7 +408,11 @@ export async function handleProviders(
     plugins = await input.readPlugins();
   };
 
-  if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });
+  if (!verb) {
+    if (request.method !== "GET") return new Response(null, { status: 405 });
+    await refreshCatalog(false);
+    return page();
+  }
   if (!isProvider(providerPart ?? "") || !plugins[providerPart as Provider]) return new Response(null, { status: 404 });
   const provider = providerPart as Provider;
 

@@ -1,7 +1,7 @@
 // The price table in D1: dated snapshots kept beside each other. The current
 // table is the newest snapshot not rolled back.
 
-import type { OpenRouterCatalog } from "./openrouter";
+import { CATALOG_VERSION, type OpenRouterCatalog } from "./openrouter";
 import { ROLL_BACK_REFUSED, ROLL_BACK_STATEMENTS } from "./rollback";
 import type { PriceRow, SourceResult } from "./types";
 
@@ -101,10 +101,12 @@ const toRow = (r: RowRecord): PriceRow => ({
   dateRead: r.date_read, stale: r.stale === 1, disagreement: r.disagreement === 1,
 });
 
-// OpenRouter's model list stored with a snapshot, if one was.
+// OpenRouter's model list stored with a snapshot, if one was. One stored
+// under older rules than parseModels' own reads as missing.
 export async function readStoredCatalog(db: D1Database, snapshotId: number): Promise<OpenRouterCatalog | undefined> {
   const r = await db.prepare("SELECT catalog FROM openrouter_catalogs WHERE snapshot_id = ?").bind(snapshotId).first<{ catalog: string }>();
-  return r ? (JSON.parse(r.catalog) as OpenRouterCatalog) : undefined;
+  const catalog = r ? (JSON.parse(r.catalog) as Partial<OpenRouterCatalog>) : undefined;
+  return catalog?.version === CATALOG_VERSION ? (catalog as OpenRouterCatalog) : undefined;
 }
 
 // The current snapshot's OpenRouter model list, if it has one.

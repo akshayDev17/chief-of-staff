@@ -16,6 +16,7 @@ import { vaultSecrets } from "../src/providers/secrets";
 import { setBudget } from "../src/proxy/budgets";
 import { readConnection } from "../src/proxy/connections";
 import { fakeFetch, ISSUED_KEY, keyReply, type Overrides } from "./fake-sources";
+import { listboxPage, pageScripts } from "./script-dom";
 import { dumpEveryTable, userFor, VAULT_KEY } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
@@ -187,6 +188,40 @@ describe("Connect OpenRouter", () => {
     // Connecting again makes it connected.
     await connect();
     expect(await readCheck(env.DB, userId, "openrouter")).toMatchObject({ state: "passed" });
+  });
+
+  it("shows a connection from before 2026-11-27 with no passed test as removed after a 401 test call, with Connect OpenRouter again", async () => {
+    await connect();
+    // As stored by the old Connect, whose own test call failed: no passed_at.
+    await env.DB.prepare("UPDATE provider_checks SET state = 'failed', passed_at = NULL WHERE user_id = ?").bind(userId).run();
+    expect(await (await get()).text()).toContain("<strong>Connected</strong>");
+    fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 401, message: "User not found." } }, { status: 401 }) });
+    await post("/openrouter/choose", { model: "openai/gpt-6-luna" });
+    expect(await readCheck(env.DB, userId, "openrouter")).toMatchObject({ state: "revoked", revokedAt: NOW.toISOString() });
+    const html = await (await get()).text();
+    expect(html).toContain("Removed on OpenRouter's side");
+    expect(html).toContain('action="/chief-of-staff/models/setup/providers/openrouter/connect"');
+  });
+
+  it("while Test all models runs, the page a chosen model's test returns loads the run's results with a GET, never the POST again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      await connect();
+      expect((await post("/openrouter/test-all")).status).toBe(303);
+      const chosen = await post("/openrouter/choose", { model: "openai/gpt-6-luna" });
+      const html = await chosen.text();
+      const body = html.match(/<body data-reload-every="(\d+)" data-reload-to="([^"]+)">/)!;
+      const p = listboxPage(pageScripts(html), [], { href: `${BASE}/openrouter/choose`, body: { "data-reload-every": body[1]!, "data-reload-to": body[2]!.replaceAll("&amp;", "&") } });
+      vi.advanceTimersByTime(20_000);
+      expect(p.sent).toHaveLength(1);
+      const [how, to] = p.sent[0]!.split(" ");
+      expect(how).toBe("replace");
+      const results = await handle(new Request(to!));
+      expect(results.status).toBe(200);
+      expect(await results.text()).toContain('id="openrouter-test-all"');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Disconnect deletes the key from the vault, the record and the check, and says how to delete it on OpenRouter", async () => {

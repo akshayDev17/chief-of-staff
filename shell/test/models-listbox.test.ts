@@ -1,72 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MODELS_JS } from "../src/providers/models-panel";
+import { listboxPage } from "./script-dom";
 
 // Runs the page's own listbox script against a small stand-in for the
-// browser's DOM: just the elements and calls the script uses. The stand-in
-// form records every submit, and the stand-in location every navigation, so
-// a test can check that choosing a model sends nothing.
-type Listener = (e: { key?: string; target?: unknown; preventDefault: () => void }) => void;
-
-function element(attrs: Record<string, string> = {}) {
-  const listeners: Record<string, Listener[]> = {};
-  const classes = new Set<string>();
-  return {
-    attrs: { ...attrs },
-    hidden: true,
-    disabled: false,
-    name: "",
-    value: "",
-    textContent: "",
-    id: attrs.id ?? "",
-    focused: 0,
-    classList: { add: (c: string) => classes.add(c), remove: (c: string) => classes.delete(c), has: (c: string) => classes.has(c) },
-    getAttribute(n: string) { return this.attrs[n] ?? null; },
-    setAttribute(n: string, v: string) { this.attrs[n] = v; },
-    removeAttribute(n: string) { delete this.attrs[n]; },
-    addEventListener(type: string, fn: Listener) { (listeners[type] ??= []).push(fn); },
-    focus() { this.focused++; },
-    scrollIntoView() {},
-    fire(type: string, key?: string) {
-      let prevented = false;
-      for (const fn of listeners[type] ?? []) fn({ key, target: this, preventDefault: () => { prevented = true; } });
-      return prevented;
-    },
-  };
-}
-
+// browser's DOM (script-dom.ts), which records every submit, navigation and
+// request, so a test can check that choosing a model sends nothing.
+const PROVIDERS = "https://cos.example.com/chief-of-staff/models/setup/providers";
+const page = (models: string[], hash = "") => listboxPage(MODELS_JS, models, { href: `${PROVIDERS}${hash}` });
 // The page with a value already in the hidden field, as a reload restores it.
-const pageWith = (models: string[], value: string) => page(models, "", value);
-
-function page(models: string[], hash = "", restoredValue = "") {
-  const options = models.map((m, i) => element({ id: `opt-${i}`, "data-model": m, "aria-selected": "false" }));
-  const button = element();
-  const list = Object.assign(element(), { querySelectorAll: () => options });
-  const input = Object.assign(element(), { value: restoredValue });
-  const test = Object.assign(element(), { disabled: true, textContent: "Test" });
-  const section = element({ id: "test" });
-  const submitted: string[] = [];
-  const navigated: string[] = [];
-  const parts: Record<string, unknown> = { ".lb-btn": button, "[role=listbox]": list, "[data-model-input]": input, "[data-test-button]": test };
-  const form = Object.assign(element(), {
-    querySelector: (s: string) => parts[s] ?? null,
-    contains: () => true,
-    submit: () => { submitted.push(input.value); },
-  });
-  const document = Object.assign(element(), {
-    querySelectorAll: (s: string) => (s === "form[data-listbox]" ? [form] : s === "[data-model-input]" ? [input] : []),
-    querySelector: () => null,
-    getElementById: (id: string) => (id === "test" ? section : null),
-  });
-  const loaded: Array<() => void> = [];
-  const window = { addEventListener: (type: string, fn: () => void) => { if (type === "load") loaded.push(fn); } };
-  const location = {
-    hash,
-    reload: () => navigated.push("reload"),
-    assign: (u: string) => navigated.push(u),
-  };
-  new Function("document", "location", "window", MODELS_JS)(document, location, window);
-  return { button, list, input, test, options, section, form, submitted, navigated, load: () => loaded.forEach((fn) => fn()) };
-}
+const pageWith = (models: string[], value: string) => listboxPage(MODELS_JS, models, { restoredValue: value });
 
 const MODELS = ["Claude Haiku 4.5", "Claude Opus 4.7", "Claude Sonnet 5.5", "Nova 2.0 Lite"];
 
@@ -78,8 +20,7 @@ describe("choosing a model", () => {
     expect(p.button.textContent).toBe("");
     p.button.fire("click");
     p.options[2]!.fire("click");
-    expect(p.submitted).toEqual([]);
-    expect(p.navigated).toEqual([]);
+    expect(p.sent).toEqual([]);
     expect(p.input.value).toBe("Claude Sonnet 5.5");
     expect(p.button.textContent).toBe("Claude Sonnet 5.5");
     expect(p.test.disabled).toBe(false);
@@ -90,7 +31,7 @@ describe("choosing a model", () => {
     p.button.fire("click");
     p.options[0]!.fire("click");
     expect(p.test.textContent).toBe("Test with Claude Haiku 4.5?");
-    expect(p.submitted).toEqual([]);
+    expect(p.sent).toEqual([]);
   });
 
   it("lets the Test button send the form, and only once a model is chosen", () => {
@@ -151,7 +92,7 @@ describe("the model listbox's keyboard", () => {
     p.list.fire("keydown", "Enter");
     expect(p.input.value).toBe("Claude Sonnet 5.5");
     expect(p.input.name).toBe("model");
-    expect(p.submitted).toEqual([]);
+    expect(p.sent).toEqual([]);
   });
 
   it("still chooses the highlighted model with a space once no name is being typed", () => {
@@ -164,6 +105,39 @@ describe("the model listbox's keyboard", () => {
     now += 701;
     p.list.fire("keydown", " ");
     expect(p.input.value).toBe("Nova 2.0 Lite");
-    expect(p.submitted).toEqual([]);
+    expect(p.sent).toEqual([]);
+  });
+});
+
+describe("the progress reload while Test all models runs", () => {
+  afterEach(() => vi.useRealTimers());
+  const RESULTS = "/chief-of-staff/models/setup/providers?provider=openrouter&tests=all#openrouter-test-all";
+  const running = (href: string, reloadTo = RESULTS) => listboxPage(MODELS_JS, MODELS, { href, body: { "data-reload-every": "20", "data-reload-to": reloadTo } });
+
+  it("loads the run's GET address from a page a form's POST returned, never sending the form again", () => {
+    vi.useFakeTimers();
+    const p = running(`${PROVIDERS}/openrouter/choose#test`);
+    vi.advanceTimersByTime(19_999);
+    expect(p.sent).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(p.sent).toEqual([`replace https://cos.example.com${RESULTS}`]);
+  });
+
+  it("reloads a page that is already at its GET address", () => {
+    vi.useFakeTimers();
+    const p = running(`https://cos.example.com${RESULTS}`);
+    vi.advanceTimersByTime(20_000);
+    expect(p.sent).toEqual(["reload"]);
+  });
+
+  it("waits while a model is chosen or the list is open", () => {
+    vi.useFakeTimers();
+    const chosen = running(`${PROVIDERS}/openrouter/add-tested`);
+    chosen.button.fire("click");
+    vi.advanceTimersByTime(20_000);
+    expect(chosen.sent).toEqual([]);
+    chosen.options[1]!.fire("click");
+    vi.advanceTimersByTime(60_000);
+    expect(chosen.sent).toEqual([]);
   });
 });

@@ -6,7 +6,7 @@ import { env } from "cloudflare:test";
 import { ConnectProblem, ProviderRefusal, type ConnectionFields, type ProviderPlugin, type ProviderReply, type Usage } from "../src/proxy/plugin";
 import { vaultSecrets, type SecretStore } from "../src/providers/secrets";
 import { writeSnapshot } from "../src/prices/store";
-import type { OpenRouterCatalog } from "../src/prices/openrouter";
+import { CATALOG_VERSION, type OpenRouterCatalog } from "../src/prices/openrouter";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
 
@@ -94,6 +94,7 @@ export const row = (model: string, tokenKind: PriceRow["tokenKind"], usdPerMTok:
 // long-prompt 1-hour cache write; test-luna and test-mini list only input and
 // output.
 export const TEST_CATALOG: OpenRouterCatalog = {
+  version: CATALOG_VERSION,
   readAt: "2026-11-27T06:00:00.000Z",
   models: [
     { id: "openrouter/auto", name: "Auto router", blocked: "OpenRouter prices it by the model it picks for each call, so the budget stop has no price", tools: false },

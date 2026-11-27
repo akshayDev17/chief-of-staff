@@ -316,8 +316,9 @@ export const TIER_VARS = `
 // Choosing only fills the form: the Test button sends it. Arriving at
 // #test (back from the consent page, or after a test) highlights the
 // section and puts focus on the dropdown. While a Test all models run goes
-// on, the page reloads every 20 seconds to show its progress, but never
-// while a model is chosen or the list is open.
+// on, the page loads its GET address (data-reload-to) every 20 seconds to
+// show its progress, so a page a form's POST returned is never sent again,
+// and never while a model is chosen or the list is open.
 export const MODELS_JS = `
 document.querySelectorAll("button[data-enable-at]").forEach(function (b) {
   setTimeout(function () { b.disabled = false; }, Number(b.getAttribute("data-enable-at")) - Date.now());
@@ -411,12 +412,13 @@ document.querySelectorAll("form[data-listbox]").forEach(function (form) {
   }
 });
 document.querySelectorAll("[data-reload-every]").forEach(function (el) {
-  var seconds = Number(el.getAttribute("data-reload-every"));
+  var seconds = Number(el.getAttribute("data-reload-every")), to = new URL(el.getAttribute("data-reload-to"), location.href);
   function tick() {
     var busy = Array.prototype.some.call(document.querySelectorAll("[data-model-input]"), function (i) { return i.value; })
       || document.querySelector("[role=listbox]:not([hidden])");
     if (busy) { setTimeout(tick, seconds * 1000); return; }
-    location.reload();
+    // Only a change of address loads the page again; at it already, reload.
+    if (to.pathname + to.search === location.pathname + location.search) location.reload(); else location.replace(to.href);
   }
   setTimeout(tick, seconds * 1000);
 });

@@ -29,7 +29,7 @@
 import { readCurrentCatalog, currentSnapshot, readSnapshotRows } from "../prices/store";
 import { modelTier, type Tier } from "../prices/tiers";
 import { isProvider, type PriceRow, type Provider, type SourceId } from "../prices/types";
-import { markRevoked, reasonText } from "../providers/check";
+import { reasonText } from "../providers/check";
 import { readConnection } from "../proxy/connections";
 import type { Link, PlainReason, PluginRegistry, ProviderPlugin, Usage } from "../proxy/plugin";
 import { sendTestCall } from "../proxy/proxy";
@@ -286,8 +286,6 @@ export async function testModel(
   if (outcome.failure) {
     const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
-    // The key was deleted or disabled on the provider's side.
-    if (failure.step === "call" && plain.reason === "not_set_up" && connection) await markRevoked(db, userId, provider, now);
     return refuse(plain.reason, {
       reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,
       fix: plain.fix,

@@ -71,12 +71,18 @@ export interface OpenRouterModel {
   expires?: string;
   // The smallest prompt length at which a higher price applies, when any.
   longPromptFrom?: number;
-  // Free by isTrulyFreeTextModel. A catalog stored before this field reads
-  // every model as paid until the next refresh.
+  // Free by isTrulyFreeTextModel.
   free?: true;
 }
 
+// The rules parseModels applies, raised whenever they change: a catalog
+// stored under older rules reads as missing (store.ts), so it is read from
+// OpenRouter again. 2: free by isTrulyFreeTextModel, and a model that also
+// gives audio, images or video is blocked (2026-11-27).
+export const CATALOG_VERSION = 2;
+
 export interface OpenRouterCatalog {
+  version: number;
   readAt: string;
   models: OpenRouterModel[];
 }
@@ -231,7 +237,7 @@ export function parseModels(body: unknown, now: Date): { rows: PriceRow[]; catal
   }
   if (!rows.length) throw new Error("the models API listed no model the app can call");
   models.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { rows, catalog: { readAt: now.toISOString(), models }, leftOut };
+  return { rows, catalog: { version: CATALOG_VERSION, readAt: now.toISOString(), models }, leftOut };
 }
 
 export async function readOpenRouter(fetcher: typeof fetch, now: Date): Promise<{ read: SourceRead; catalog?: OpenRouterCatalog }> {
