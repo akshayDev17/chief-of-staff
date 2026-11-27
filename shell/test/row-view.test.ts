@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { listOfferRow, type ShownLatest } from "./result-copy-helpers";
 import type { ShownTest } from "../src/models/test-all";
-import { refusalFix, refusalText, type Refused, type TestRefusal } from "../src/models/test-model";
+import { MODEL_HELP_REASONS, refusalFix, refusalText, type Refused, type TestRefusal } from "../src/models/test-model";
 import type { TestRecord } from "../src/models/usable";
 import { parseModels } from "../src/prices/openrouter";
 import { esc } from "../src/prices/page";
@@ -88,7 +88,8 @@ function expected(c: Case) {
   const leadActions = failed ? [] : refusal && ACTIONS[refusal.reason!] ? [ACTIONS[refusal.reason!]!] : [];
   const noteActions = note && ACTIONS[refusal!.reason!] ? [ACTIONS[refusal!.reason!]!] : [];
   const passed = !lead && c.verdict === "passed" && c.row !== "testing";
-  const askAdmin = lead ? (refusal ?? FAILED).reason : undefined;
+  const askable = (reason: TestRefusal | undefined) => (reason && MODEL_HELP_REASONS.has(reason) ? reason : undefined);
+  const askAdmin = lead ? (askable(refusal?.reason) ?? (failed ? askable(FAILED.reason) : undefined)) : undefined;
   return { state, tag, lead, note, leadActions, noteActions, passed, askAdmin };
 }
 
@@ -133,6 +134,8 @@ describe("a model's row and its result", () => {
       const friend = render(c, "friend", true);
       const asked = friend.match(/name="reason" value="([^"]*)"><button[^>]*>Ask Admin for help/)?.[1];
       expect(asked, name).toBe(e.askAdmin);
+      // The server's model-help form takes every reason a button sends.
+      if (asked !== undefined) expect(MODEL_HELP_REASONS.has(asked), name).toBe(true);
     }
   });
 

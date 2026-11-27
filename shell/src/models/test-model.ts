@@ -94,6 +94,12 @@ export type TestRefusal =
   | "wrong_model"
   | "budget_spent";
 
+// The refusals a friend can ask Admin about, by the sentence they saw.
+export const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<TestRefusal>([
+  "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
+  "wrong_model", "budget_spent", "cannot_call", "no_price", "no_cap", "cap_refused",
+]);
+
 export const FREE_NOTE = "free: rate-limited, and the provider may log prompts";
 export const NOT_FREE_NOTE = "not free: OpenRouter lists other fees for it";
 

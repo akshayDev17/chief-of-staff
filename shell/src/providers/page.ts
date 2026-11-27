@@ -48,7 +48,7 @@ import { parsePriceCap, savePriceCap } from "../models/price-caps";
 import { modelsSubtabs, nextAction, SETUP_TABS } from "../models/setup-tabs";
 import { readTaskRoutes } from "../models/tasks";
 import { planRetest, planTestAll, readTestAll, shownTests, startRetest, startTestAll } from "../models/test-all";
-import { isVerdict, listOffer, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
+import { isVerdict, listOffer, MODEL_HELP_REASONS, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
 import { readLatestTests, readUsableModels } from "../models/usable";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { isCurrentCatalog } from "../prices/openrouter";
@@ -58,7 +58,7 @@ import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
 import { readConnection } from "../proxy/connections";
-import type { AccountInfo, ConnectionFields, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
+import type { AccountInfo, ConnectionFields, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 
 import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, type Check } from "./check";
 import { formatCost, ICON, isRunning, MAX_RESULTS, modelParts, nextStep, parseView, rowAnchor, viewQuery, type ModelsTableInput, type Step, type View, type Viewer } from "./models-table";
@@ -301,12 +301,6 @@ export async function readPageState(
 }
 
 const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|disconnect|help|model-help|test|check-account|cap|refresh|test-all|retest))?$`);
-
-// The refusals a friend can ask Admin about, by the sentence they saw.
-const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<TestRefusal | PlainReason>([
-  "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
-  "wrong_model", "budget_spent", "cannot_call", "no_price", "no_cap", "cap_refused",
-]);
 
 // Refresh model list may read again a minute after the last read.
 export const REFRESH_GAP_MS = 60_000;

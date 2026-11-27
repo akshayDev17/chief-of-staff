@@ -35,7 +35,7 @@ import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { esc } from "../prices/page";
 import type { Dropped } from "../prices/openrouter";
 import { DEFAULT_CAP } from "../models/price-caps";
-import { blockedReason, blockKind, refusalFix, refusalText, type OfferRow, type Refused, type TestRefusal } from "../models/test-model";
+import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type OfferRow, type Refused, type TestRefusal } from "../models/test-model";
 import { isCurrentRun, type RetestPlan, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import type { TestRecord } from "../models/usable";
 import type { Link, ProviderPlugin } from "../proxy/plugin";
@@ -237,7 +237,8 @@ export interface Shown {
 // its tag; `lead`, the failure its reason line and its result lead with;
 // `note`, a newer refusal under a failed verdict, after it; `passed`, a
 // result that says it passed; `askAdmin`, the reason a friend's Ask Admin
-// sends: the refusal just hit, else the lead's.
+// sends: the refusal just hit, else the lead's, and only a reason the
+// model-help form takes (MODEL_HELP_REASONS).
 export interface RowView {
   state: RowState;
   tag?: RowTag;
@@ -250,6 +251,7 @@ export interface RowView {
 const actionsFor = (r: TestRecord): RowAction[] =>
   r.reason === "no_credits" ? ["credits"] : r.reason === "busy" ? ["test-again"] : r.reason === "budget_spent" ? ["budgets"] : [];
 const shownOf = (result: TestRecord): Shown => ({ result, actions: actionsFor(result) });
+const askable = (reason: TestRefusal | undefined): TestRefusal | undefined => (reason && MODEL_HELP_REASONS.has(reason) ? reason : undefined);
 
 // A failed verdict leads, as "Doesn't work", with a newer refusal as its
 // note; otherwise the refusal leads. An outcome tag (Needs credit, Busy,
@@ -261,13 +263,13 @@ export function describeRow(f: RowFacts): RowView {
   const refusal = f.testing && f.refusal?.from === "run" ? undefined : f.refusal;
   if (failed) {
     const note = refusal ? { ...shownOf(refusal.result), from: refusal.from } : undefined;
-    return { state, tag: "doesnt-work", lead: shownOf(failed), ...(note ? { note } : {}), passed: false, askAdmin: (note ?? shownOf(failed)).result.reason };
+    return { state, tag: "doesnt-work", lead: shownOf(failed), ...(note ? { note } : {}), passed: false, askAdmin: askable(note?.result.reason) ?? askable(failed.reason) };
   }
   if (refusal) {
     const usable = !f.blocked && !f.testing && f.verdict?.state === "passed";
     const reason = refusal.result.reason;
     const tag: RowTag | undefined = usable ? (reason === "no_credits" ? "needs-credit" : reason === "busy" ? "busy" : "couldnt-test") : undefined;
-    return { state, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, askAdmin: reason };
+    return { state, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, askAdmin: askable(reason) };
   }
   return { state, passed: !f.testing && f.verdict?.state === "passed" };
 }

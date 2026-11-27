@@ -214,6 +214,8 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
 .result.warn .v svg { color: var(--pill-warning-ink); }
 .result .hide { margin-left: auto; font-size: 13px; }
 .result .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.result .later { display: grid; gap: 8px; }
+.result .later > p { color: var(--muted); }
 .result details p { margin-top: 6px; font-size: var(--fs-small); color: var(--muted); overflow-wrap: anywhere; }
 .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
