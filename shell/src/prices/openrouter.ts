@@ -76,13 +76,14 @@ export interface OpenRouterModel {
 }
 
 // The rules parseModels applies, raised whenever they change: a catalog
-// stored under older rules reads as missing (store.ts), so it is read from
-// OpenRouter again. 2: free by isTrulyFreeTextModel, and a model that also
-// gives audio, images or video is blocked (2026-11-27).
+// stored under older rules (with no version before 2) is stale, and the
+// Providers page reads OpenRouter's list again (providers/page.ts). Until
+// then every screen keeps using it. 2: free by isTrulyFreeTextModel, and a
+// model that also gives audio, images or video is blocked (2026-11-27).
 export const CATALOG_VERSION = 2;
 
 export interface OpenRouterCatalog {
-  version: number;
+  version?: number;
   readAt: string;
   models: OpenRouterModel[];
 }

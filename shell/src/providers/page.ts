@@ -38,6 +38,7 @@ import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPla
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { nextAction, setupTabsLine } from "../models/setup-tabs";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
+import { CATALOG_VERSION } from "../prices/openrouter";
 import { refreshPrices } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
@@ -397,13 +398,13 @@ export async function handleProviders(
     html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
   const back = (provider: string, extra = "", anchor = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}${anchor}`, 303);
   // The price table and the provider's model list, read now when there is
-  // none yet (one stored under older rules counts as none, prices/store.ts)
-  // or, when forced, it is over a minute old.
+  // none yet, the stored one predates parseModels' rules, or when forced; at
+  // most once a minute, a failed read included.
   const refreshCatalog = async (force: boolean): Promise<void> => {
     const snapshot = await currentSnapshot(db);
     const catalog = await readCurrentCatalog(db);
-    if (!force && catalog) return;
-    if (snapshot && catalog && now.getTime() - Date.parse(snapshot.takenAt) < REFRESH_GAP_MS) return;
+    if (!force && catalog?.version === CATALOG_VERSION) return;
+    if (snapshot && now.getTime() - Date.parse(snapshot.takenAt) < REFRESH_GAP_MS) return;
     await refreshPrices({ db, fetcher: input.fetcher ?? fetch, now });
     plugins = await input.readPlugins();
   };

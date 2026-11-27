@@ -47,11 +47,11 @@ let userId: string;
 let fetcher: ReturnType<typeof fakeFetch>;
 
 const plugins = async () => providerPlugins(ENV, vaultSecrets(env.DB, ENV), await readCurrentCatalog(env.DB), fetcher);
-const handle = async (request: Request) =>
-  handleProviders(request, { db: env.DB, plugins: await plugins(), readPlugins: plugins, secrets: vaultSecrets(env.DB, ENV), userId, viewer: "owner", appOrigin: ORIGIN, now: NOW, fetcher });
+const handle = async (request: Request, now = NOW) =>
+  handleProviders(request, { db: env.DB, plugins: await plugins(), readPlugins: plugins, secrets: vaultSecrets(env.DB, ENV), userId, viewer: "owner", appOrigin: ORIGIN, now, fetcher });
 const post = (path: string, fields: Record<string, string> = {}) =>
   handle(new Request(`${BASE}${path}`, { method: "POST", body: new URLSearchParams(fields), headers: { origin: ORIGIN } }));
-const get = (path = "") => handle(new Request(`${BASE}${path}`));
+const get = (path = "", now = NOW) => handle(new Request(`${BASE}${path}`), now);
 const tasks = async (path = "", fields?: Record<string, string>) =>
   handleTaskModels(
     fields ? new Request(`${TASKS_URL}${path}`, { method: "POST", body: new URLSearchParams(fields), headers: { origin: ORIGIN } }) : new Request(`${TASKS_URL}${path}`),
@@ -69,6 +69,22 @@ const entry = (html: string, id: string): string => {
   const at = html.indexOf(`data-model="${id}"`);
   return at < 0 ? "" : html.slice(at, html.indexOf("</li>", at));
 };
+
+const modelListReads = () => fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models").length;
+
+// The current list as the previous Worker stored it: no version, the music
+// model callable, and no model marked free.
+async function storeOldCatalog(): Promise<{ models: Array<{ id: string; blocked?: string; free?: true }> }> {
+  const stored = (await env.DB.prepare("SELECT snapshot_id, catalog FROM openrouter_catalogs ORDER BY snapshot_id DESC LIMIT 1").first<{ snapshot_id: number; catalog: string }>())!;
+  const old = JSON.parse(stored.catalog) as { version?: number; models: Array<{ id: string; blocked?: string; free?: true }> };
+  delete old.version;
+  for (const m of old.models) {
+    delete m.free;
+    if (m.id === MUSIC) delete m.blocked;
+  }
+  await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = ? WHERE snapshot_id = ?").bind(JSON.stringify(old), stored.snapshot_id).run();
+  return old;
+}
 
 const chatModels = () => fetcher.sent.filter((s) => s.url.endsWith("/chat/completions")).map((s) => (s.body as { model: string }).model);
 
@@ -97,28 +113,44 @@ describe("a $0 OpenRouter account", () => {
     expect(html).toContain("https://openrouter.ai/settings/privacy");
   });
 
-  it("reads OpenRouter's list again on the next view when the stored one predates the free and text-only rules", async () => {
+  it("keeps using a stored list that predates the free and text-only rules on every screen, and Providers reads OpenRouter's again once", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
-    // The list as the previous Worker stored it: no version, the music model
-    // callable, and no model marked free.
-    const stored = (await env.DB.prepare("SELECT snapshot_id, catalog FROM openrouter_catalogs ORDER BY snapshot_id DESC LIMIT 1").first<{ snapshot_id: number; catalog: string }>())!;
-    const old = JSON.parse(stored.catalog) as { version?: number; models: Array<{ id: string; blocked?: string; free?: true }> };
-    delete old.version;
-    for (const m of old.models) {
-      delete m.free;
-      if (m.id === MUSIC) delete m.blocked;
-    }
-    await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = ? WHERE snapshot_id = ?").bind(JSON.stringify(old), stored.snapshot_id).run();
-    expect(await readCurrentCatalog(env.DB)).toBeUndefined();
+    await post("/openrouter/choose", { model: FREE });
+    await storeOldCatalog();
+    // Model for each task still reads the old list, and still offers the passed model.
+    expect((await readCurrentCatalog(env.DB))!.version).toBeUndefined();
+    const picker = await tasks();
+    expect(picker.status).toBe(200);
+    expect(await picker.text()).toContain(FREE);
     fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     const html = await (await get()).text();
-    expect(fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models")).toHaveLength(1);
+    expect(modelListReads()).toBe(1);
     expect(entry(html, FREE)).toContain('<span class="pill free">Free</span>');
     expect(html).toContain(`data-model="${MUSIC}" aria-selected="false" aria-disabled="true"`);
     expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)!.blocked).toBeDefined();
     // A current list is not read again.
-    await get();
-    expect(fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models")).toHaveLength(1);
+    await get("", new Date(NOW.getTime() + 120_000));
+    expect(modelListReads()).toBe(1);
+  });
+
+  it("tries a failing OpenRouter at most once a minute for a list that predates the rules, and keeps the stored list", async () => {
+    await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
+    const before = await storeOldCatalog();
+    fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY, models: () => new Response("down", { status: 503 }) });
+    const first = await get();
+    expect(first.status).toBe(200);
+    // The model list still shows, from the stored list.
+    expect(entry(await first.text(), FREE)).not.toBe("");
+    expect(modelListReads()).toBe(1);
+    expect((await readCurrentCatalog(env.DB))!.models).toEqual(before.models);
+    const alerts = async () => (await env.DB.prepare("SELECT count(*) AS n FROM price_alerts WHERE kind = 'refresh_failed'").first<{ n: number }>())!.n;
+    const alerted = await alerts();
+    for (const seconds of [1, 20, 59]) expect((await get("", new Date(NOW.getTime() + seconds * 1000))).status).toBe(200);
+    expect(modelListReads()).toBe(1);
+    expect(await alerts()).toBe(alerted);
+    await get("", new Date(NOW.getTime() + 61_000));
+    expect(modelListReads()).toBe(2);
+    expect((await readCurrentCatalog(env.DB))!.models).toEqual(before.models);
   });
 
   it("passes the free model when it is chosen, and says a paid one needs credit, with Add credits first", async () => {
