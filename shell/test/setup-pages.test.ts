@@ -29,7 +29,8 @@ let userId: string;
 beforeEach(async () => {
   await seedPrices();
   userId = (await userFor("owner-sub")).id;
-  await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
+  // Connected before the tests recordTest makes (09:00), so they ran on this key.
+  await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: "a".repeat(64) }, new Date("2026-11-27T08:00:00Z"));
   for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
 });
 

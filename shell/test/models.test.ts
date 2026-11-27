@@ -7,16 +7,18 @@ import { renderPickerPage, handleTaskModels, type PickerPageInput } from "../src
 import { readModelNames, readToTest } from "../src/models/picker-data";
 import { acceptProposals, callTask, changeTasks, offeredFor, proposeRoute, readTaskRoutes, routeTask, taskById, TASKS, type Offered } from "../src/models/tasks";
 import { TASK_MODELS_PATH } from "../src/paths";
-import { ESTIMATE_INPUT_TOKENS, planRetest, planTestAll, PER_TICK, readTestAll, runQueuedTests, shownTests, startRetest, startTestAll } from "../src/models/test-all";
+import { ESTIMATE_INPUT_TOKENS, NOTHING_FAILED, planRetest, planTestAll, PER_TICK, readTestAll, runQueuedTests, shownTests, startRetest, startTestAll } from "../src/models/test-all";
 import { classify, TEST_MAX_TOKENS } from "../src/providers/openrouter";
-import { formatCost, modelParts, type ModelsTableInput } from "../src/providers/models-table";
-import { setBudget } from "../src/proxy/budgets";
+import { formatCost, modelParts, nextStep, type ModelsTableInput } from "../src/providers/models-table";
+import { setBudget, suggestionCandidates } from "../src/proxy/budgets";
 import { writeConnection } from "../src/proxy/connections";
 import { writeSnapshot } from "../src/prices/store";
 import { ok, recordTest, refused, row, seedPrices, TEST_CATALOG, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
 const ORIGIN = "https://cos.example.com";
+// The current key: made before every test these record (recordTest's 09:00 among them).
+const CONNECTED = new Date("2026-11-27T08:00:00Z");
 let plugin: TestPlugin;
 let userId: string;
 const plugins = () => ({ openrouter: plugin });
@@ -25,7 +27,7 @@ beforeEach(async () => {
   await seedPrices();
   plugin = testPlugin("openrouter", { routers: ["openrouter/auto"] });
   userId = (await userFor("owner-sub")).id;
-  await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
+  await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, CONNECTED);
 });
 
 const usable = async () => (await readUsableModels(env.DB, userId)).map((m) => m.model);
@@ -206,8 +208,9 @@ describe("Test all models", () => {
     // None of them is a verdict, so none reads Doesn't work.
     expect(rows).not.toContain("Doesn't work");
     expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num good">3<\/span>/);
-    // Retest failed covers every row the run failed, verdict or not.
-    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).models.map((m) => m.model)).toEqual(["test-luna", "test-mini", "test-sonnet"]);
+    // Retest failed tests the Doesn't work models only: none here.
+    expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num ">0<\/span>/);
+    expect(await planRetest(env.DB, plugins(), userId, "openrouter")).toMatchObject({ models: [], wait: NOTHING_FAILED });
   });
 
   it("keeps a failed verdict on its row, with a newer refusal as a short note, and tags only usable models", async () => {
@@ -303,28 +306,44 @@ describe("Test all models", () => {
     expect(rows).toContain(`href="https://openrouter.ai/keys/${"a".repeat(64)}"`);
   });
 
-  it("retests the failures in the same run, keeps the passes, and skips one that passed since", async () => {
+  it("counts the same models in Doesn't work and Retest failed (N), and retests exactly those in the same run", async () => {
     await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(429), refused(429));
+    // The live shape: verdict failures and refusals that say nothing about the
+    // model, side by side. test-mini fails (a verdict), test-sonnet is busy.
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(400), refused(429));
     await runQueuedTests(env.DB, plugins(), NOW);
     const later = new Date("2026-11-27T10:03:00Z");
-    // test-sonnet passes on its own row before the retest.
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-sonnet", now: later });
+    // test-luna, passed in the run, then fails on its own row.
+    plugin.replies.push(refused(400));
+    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: later });
     const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
-    expect(plan.models.map((m) => m.model)).toEqual(["test-mini"]);
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 1, skipped: 0 });
+    expect(plan.models.map((m) => m.model)).toEqual(["test-luna", "test-mini"]);
+    const { strip, rail } = modelParts(await tableInput());
+    expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num bad">2<\/span>/);
+    expect(rail).toContain('Retest failed <span class="num">(2)</span>');
+    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 2, skipped: 0 });
     const reopened = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(reopened.finishedAt).toBeUndefined();
-    expect(reopened.retestCount).toBe(1);
-    expect(reopened.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "queued"], ["test-sonnet", "failed"]]);
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-mini" }));
+    expect(reopened.retestCount).toBe(2);
+    expect(reopened.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "queued"], ["test-mini", "queued"], ["test-sonnet", "failed"]]);
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-mini" }));
     await runQueuedTests(env.DB, plugins(), later);
     const done = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(done.finishedAt).toBe(later.toISOString());
-    expect(done.tests.find((t) => t.model === "test-mini")?.state).toBe("passed");
-    expect(await usable()).toEqual(["test-luna", "test-mini", "test-sonnet"]);
-    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).wait).toBe("Nothing failed in the last run.");
+    expect(await usable()).toEqual(["test-luna", "test-mini"]);
+    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).wait).toBe(NOTHING_FAILED);
+  });
+
+  it("adds a model that failed only on its own row to the run it retests", async () => {
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-mini" }), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
+    await runQueuedTests(env.DB, plugins(), NOW);
+    await env.DB.prepare("DELETE FROM model_tests WHERE model = 'test-sonnet'").run();
+    const later = new Date("2026-11-27T10:03:00Z");
+    plugin.replies.push(refused(400));
+    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-sonnet", now: later });
+    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 1, skipped: 0 });
+    expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "passed"], ["test-sonnet", "queued"]]);
   });
 
   it("offers no Retest failed on a run made on an older model list", async () => {
@@ -705,5 +724,85 @@ describe("the model for each task", () => {
     );
     expect([help.status, await help.json()]).toEqual([200, { said: "Sent to Admin: this item's name and its reason only." }]);
     expect((await saved()).map((r) => r.task)).toEqual(["extract", "linkedin_message", "match"]);
+  });
+});
+
+// A test counts only for the key that ran it (models/usable.ts onEarlierKey).
+// The live shape: a Test all run on an earlier key whose account had credit,
+// then Connect again with a key whose account has none.
+describe("tests made on an earlier key", () => {
+  const RECONNECTED = new Date("2026-11-27T09:30:00Z");
+  const reconnect = () => writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "b".repeat(64) }, RECONNECTED);
+
+  it("leaves a model that passed only on an earlier key out of the usable set, the tasks, the budget basis and the proxy", async () => {
+    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
+    await changeTasks(env.DB, userId, [{ task: "match", main: "openrouter|test-luna", fallback: "openrouter|test-mini" }, { task: "extract", main: "openrouter|test-luna", fallback: "" }], NOW);
+    expect(await usable()).toEqual(["test-luna", "test-mini"]);
+    await reconnect();
+    expect(await usable()).toEqual([]);
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ state: "passed", earlierKey: true });
+    // test-mini passes on the current key; test-luna has not been tested on it.
+    await recordTest(userId, "test-mini", "passed", "2026-11-27T09:45:00.000Z");
+    expect(await usable()).toEqual(["test-mini"]);
+    const basis = await suggestionCandidates(env.DB, userId);
+    expect({ from: basis.from, models: basis.models.map((m) => m.model) }).toEqual({ from: "tasks", models: ["test-mini"] });
+    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    const match = routes.find((r) => r.task.id === "match")!;
+    expect(match).toMatchObject({ stopped: { main: { model: "test-luna" }, fallback: { model: "test-mini" }, why: "earlier_key" } });
+    expect(routes.find((r) => r.task.id === "extract")).toMatchObject({ stopped: { main: { model: "test-luna" }, why: "earlier_key" } });
+    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
+    const extract = html.match(/<li class="task" id="task-extract"[\s\S]*?<\/form><\/li>/)![0];
+    expect(extract).toMatch(
+      /<span data-about="main">test-luna was tested only on an earlier OpenRouter key\. No model now: its calls are refused\.<\/span><\/p><span class="t-act" data-about="main"><a class="btn small[^"]*" href="\/chief-of-staff\/models\/setup\/providers\?provider=openrouter#m-test-luna">Test it again<\/a>/,
+    );
+    // The proxy: the call goes to the fallback, and a task with none is refused.
+    expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
+    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
+    const before = plugin.calls.length;
+    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "no_model", task: "extract" });
+    expect(plugin.calls.length).toBe(before);
+    // A Test on its row, on the current key, puts it back.
+    plugin.replies.push(ok({ input: 1, output: 1 }, { model: "test-luna" }));
+    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
+    expect(await usable()).toEqual(["test-luna", "test-mini"]);
+    expect(await routeTask(env.DB, userId, "extract")).toMatchObject({ main: { model: "test-luna" } });
+  });
+
+  it("shows an earlier key's results as Not tested yet with a grey note, counts none of them, and offers Test all next", async () => {
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    await env.DB.prepare("UPDATE model_test_runs SET started_at = '2026-11-27T09:00:00.000Z'").run();
+    // test-luna passes, test-mini fails (a verdict), test-sonnet is busy.
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(400), refused(429));
+    await runQueuedTests(env.DB, plugins(), new Date("2026-11-27T09:05:00Z"));
+    await reconnect();
+    const input = await tableInput();
+    expect(input.run).toMatchObject({ earlierKey: true });
+    const { rows, strip, rail } = modelParts({ ...input, now: NOW });
+    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="pending"[^>]*><span class="nm"><span class="t" data-hl>Test Luna<\/span><\/span><span class="meta"><span class="ek">Passed on an earlier key<\/span> · /);
+    expect(rows).toMatch(/data-id="test-mini"[^>]*data-state="pending"[^>]*><span class="nm"><span class="t" data-hl>Test Mini<\/span><\/span><span class="meta"><span class="ek">Failed on an earlier key<\/span> · /);
+    // The busy refusal on the earlier key shows nowhere.
+    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="pending"[^>]*><span class="nm"><span class="t" data-hl>Test Sonnet<\/span><\/span><span class="meta"><span data-hl>/);
+    expect(rows).not.toContain("Doesn't work");
+    expect(rows).not.toContain("Busy");
+    expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num ">0<\/span>[\s\S]*?data-filter="fails"[\s\S]*?<span class="v num ">0<\/span>[\s\S]*?data-filter="pending"[\s\S]*?<span class="v num ">3<\/span>/);
+    expect(input.retest).toMatchObject({ models: [], wait: NOTHING_FAILED });
+    expect(rail).toContain("Tested 09:00 UTC on an earlier key");
+    expect(nextStep({ connected: true, view: {}, run: input.run, catalogCurrent: true, plan: input.plan })).toBe("test-all");
+    // Model for each task counts them as not tested yet too.
+    expect(await readToTest(env.DB, plugins(), userId)).toEqual({ provider: "openrouter", connected: true, untested: { Smallest: 2, Strongest: 1 } });
+  });
+
+  it("keeps the earlier key's note under a refusal on the current key, as on Nova Micro answering Needs credit", async () => {
+    await recordTest(userId, "test-luna");
+    await reconnect();
+    plugin.replies.push(refused(402));
+    const outcome = await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
+    expect(outcome).toMatchObject({ kind: "refused", reason: "no_credits" });
+    const { rows, strip } = modelParts(await tableInput({ view: { results: [{ model: "test-luna", reason: "no_credits" }] } }));
+    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="pending"/);
+    expect(rows).not.toContain('<span class="pill warn">Needs credit</span>');
+    expect(rows).toMatch(/<div class="later"><p><span class="ek">Passed on an earlier key<\/span>\. Tasks can use it once it passes on this key\.<\/p><\/div>/);
+    expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num ">0<\/span>/);
+    expect(await usable()).toEqual([]);
   });
 });

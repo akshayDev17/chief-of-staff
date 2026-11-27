@@ -8,8 +8,9 @@
 //   startTestAll(db, plugins, userId, provider, now)                 queues one test per model
 //   runQueuedTests(db, plugins, now)                                 the every-minute cron, a few at a time
 //   readTestAll(db, userId, provider) -> TestAllRun | undefined      the latest run and its results
-//   planRetest / startRetest                                         Retest failed: the run's failures again, in the same run
+//   planRetest / startRetest                                         Retest failed: the Doesn't work models again, in the same run
 //   shownTests(run, latest) -> Map<model, ShownTest>                  what each model's row shows, and its verdict
+//   rowState(blocked, shown) / failedModels(rows, shown)             the strip's one rule, and its Doesn't work models
 //
 // Each test is the model's own test call (models/test-model.ts testModel)
 // through the proxy, which prices it and writes its ledger row under the task
@@ -31,11 +32,18 @@
 // one-line prompt; a second run costs what the first measured. The real total
 // is the sum of the run's ledger rows: the cost OpenRouter reported for each call.
 //
-// Retest failed reruns a finished run's failures, verdicts or not, that can
-// still be tested and have not passed since, in the same run (its rows go back to queued and
-// the run reopens), so the results keep the models that passed in the full
-// run. A run made on an older model list (catalog version) offers no Retest
-// failed.
+// Retest failed reruns exactly the models the strip counts as Doesn't work
+// (failedModels: the latest test, on the current key, failed, and the model
+// can still be tested), in the latest finished run (their rows go back to
+// queued, or join it, and the run reopens), so the results keep the models
+// that passed in the full run. A refusal that says nothing about the model
+// (busy, no credit) is no failure: its row reads Works or Not tested yet, and
+// Test on the row or Test all tests it again. A run made on an older model
+// list (catalog version) offers no Retest failed.
+//
+// A test made before the provider's current connection ran on an earlier key
+// (models/usable.ts onEarlierKey): the run's result shows on no row, and the
+// latest test only as a note on a row that reads Not tested yet.
 //
 // Limits: one run at a time per user and provider (a unique index holds it
 // even when two starts race), a new one at most every RUN_GAP_MINUTES, and
@@ -51,10 +59,10 @@ import { CATALOG_VERSION, isCurrentCatalog } from "../prices/openrouter";
 import { TEST_TASK } from "../proxy/proxy";
 import { readCurrentCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
-import { readConnection } from "../proxy/connections";
 import type { PluginRegistry, ProviderPlugin } from "../proxy/plugin";
-import { blockedReason, isVerdict, listOffer, testModel, testRecord, type OfferRow } from "./test-model";
-import { latestTestWrite, readLatestTests, type LatestTest, type TestRecord } from "./usable";
+import { connectedAt, readConnection } from "../proxy/connections";
+import { blockedReason, blockKind, isVerdict, listOffer, testModel, testRecord, type OfferRow } from "./test-model";
+import { latestTestWrite, onEarlierKey, readLatestTests, type LatestTest, type TestRecord } from "./usable";
 
 export const TEST_ALL_TASK = "test_all_models";
 export const RUN_GAP_MINUTES = 10;
@@ -81,6 +89,8 @@ export interface ModelTestRow {
   result?: TestRecord;
   costUsd?: number;
   testedAt?: string;
+  // Tested before the provider's current connection: on an earlier key.
+  earlierKey?: true;
 }
 
 export interface TestAllRun {
@@ -91,6 +101,8 @@ export interface TestAllRun {
   catalogVersion?: number;
   retestedAt?: string;
   retestCount?: number;
+  // Started before the provider's current connection: on an earlier key.
+  earlierKey?: true;
   modelCount: number;
   estimateUsd: number;
   tests: ModelTestRow[];
@@ -290,12 +302,14 @@ export async function readTestAll(db: D1Database, userId: string, provider: Prov
     .prepare("SELECT coalesce(sum(cost_usd), 0) AS usd FROM model_calls WHERE user_id = ? AND provider = ? AND task = ? AND at >= ?")
     .bind(userId, provider, TEST_ALL_TASK, run.started_at)
     .first<{ usd: number }>();
+  const keySince = (await connectedAt(db, userId, provider))?.toISOString();
   const tests: ModelTestRow[] = results.map((r) => ({
     model: r.model,
     state: r.state,
     result: r.result ? (JSON.parse(r.result) as ModelTestRow["result"]) : undefined,
     costUsd: r.cost_usd ?? undefined,
     testedAt: r.tested_at ?? undefined,
+    ...(r.tested_at && onEarlierKey(r.tested_at, keySince) ? { earlierKey: true as const } : {}),
   }));
   return {
     id: run.id,
@@ -303,6 +317,7 @@ export async function readTestAll(db: D1Database, userId: string, provider: Prov
     finishedAt: run.finished_at ?? undefined,
     ...(run.catalog_version !== null ? { catalogVersion: run.catalog_version } : {}),
     ...(run.retested_at ? { retestedAt: run.retested_at, retestCount: run.retest_count ?? 0 } : {}),
+    ...(onEarlierKey(run.started_at, keySince) ? { earlierKey: true as const } : {}),
     modelCount: run.model_count,
     estimateUsd: run.estimate_usd,
     tests,
@@ -311,9 +326,9 @@ export async function readTestAll(db: D1Database, userId: string, provider: Prov
   };
 }
 
-// Retest failed: the latest run's failures, verdicts or not, that can still
-// be tested and have not passed since, their estimate, and how many failures are no longer on
-// the model list. `wait` says why it cannot start now, if it cannot.
+// Retest failed: the models the strip counts as Doesn't work (failedModels),
+// their estimate, and how many failed models are no longer on the model
+// list. `wait` says why it cannot start now, if it cannot.
 export interface RetestPlan {
   models: TestAllPlan["models"];
   estimateUsd: number;
@@ -321,26 +336,30 @@ export interface RetestPlan {
   wait?: string;
 }
 
+export const NOTHING_FAILED = "No model's latest test failed.";
+
 export async function planRetest(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, offers?: OfferRow[]): Promise<RetestPlan> {
   const plugin = plugins[provider];
   if (!plugin) return { models: [], estimateUsd: 0, skipped: 0, wait: "That provider is not offered." };
   const run = await readTestAll(db, userId, provider);
   const latest = await readLatestTests(db, userId, provider);
-  const failed = new Set((run?.tests ?? []).filter((t) => t.state === "failed" && !passedSince(latest.get(t.model), t.testedAt)).map((t) => t.model));
   offers ??= await listOffer(db, plugins, userId, provider);
+  const failed = new Set(failedModels(offers, shownTests(run, latest)));
+  const listed = new Set(offers.map((r) => r.model));
+  const skipped = [...latest.values()].filter((l) => l.state === "failed" && !l.earlierKey && !listed.has(l.model)).length;
   const models = estimateTests(offers.filter((r) => failed.has(r.model)), plugin, await measuredTestCosts(db, userId, provider));
-  const plan = { models, estimateUsd: models.reduce((sum, m) => sum + m.estimateUsd, 0), skipped: failed.size - models.length };
+  const plan = { models, estimateUsd: models.reduce((sum, m) => sum + m.estimateUsd, 0), skipped };
   let wait: string | undefined;
   if (!run) wait = "Run Test all first.";
   else if (!run.finishedAt) wait = "Waits for the run to finish.";
   else if (!isCurrentRun(run) || !isCurrentCatalog(await readCurrentCatalog(db))) wait = "The last run used the old model list.";
-  else if (!failed.size) wait = "Nothing failed in the last run.";
-  else if (!models.length) wait = "None of the failures is on the model list now.";
+  else if (!models.length) wait = skipped ? "None of the failures is on the model list now." : NOTHING_FAILED;
   return wait ? { ...plan, wait } : plan;
 }
 
-// Queues the latest run's failures that can still be chosen again, in the
-// same run: their rows go back to queued and the run reopens for the cron.
+// Queues the Doesn't work models in the latest run: their rows go back to
+// queued, or join the run (a model that failed on its own row's Test), and
+// the run reopens for the cron.
 export async function startRetest(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date): Promise<{ problem: string } | { count: number; skipped: number }> {
   const plan = await planRetest(db, plugins, userId, provider);
   if (plan.wait) return { problem: plan.wait };
@@ -349,10 +368,11 @@ export async function startRetest(db: D1Database, plugins: PluginRegistry, userI
     await db.batch([
       db
         .prepare(
-          `UPDATE model_tests SET state = 'queued', result = NULL, cost_usd = NULL, tested_at = NULL, claimed_at = NULL
-           WHERE run_id = ?1 AND user_id = ?2 AND state = 'failed' AND model IN (SELECT value FROM json_each(?3))`,
+          `INSERT INTO model_tests (run_id, user_id, provider, model, state) SELECT ?1, ?2, ?3, j.value, 'queued' FROM json_each(?4) AS j WHERE true
+           ON CONFLICT (run_id, model) DO UPDATE SET state = 'queued', result = NULL, cost_usd = NULL, tested_at = NULL, claimed_at = NULL
+           WHERE model_tests.state IN ('passed', 'failed')`,
         )
-        .bind(run.id, userId, JSON.stringify(plan.models.map((m) => m.model))),
+        .bind(run.id, userId, provider, JSON.stringify(plan.models.map((m) => m.model))),
       db
         .prepare("UPDATE model_test_runs SET finished_at = NULL, retested_at = ?, retest_count = ?, estimate_usd = estimate_usd + ? WHERE id = ? AND user_id = ? AND finished_at IS NOT NULL")
         .bind(now.toISOString(), plan.models.length, plan.estimateUsd, run.id, userId),
@@ -367,10 +387,6 @@ export async function startRetest(db: D1Database, plugins: PluginRegistry, userI
 
 const isNewer = (a: string, b: string): boolean => Date.parse(a) > Date.parse(b);
 
-// The model's latest test passed after `at`.
-const passedSince = (latest: LatestTest | undefined, at: string | undefined): boolean =>
-  latest?.state === "passed" && (at === undefined || isNewer(latest.testedAt, at));
-
 // What a model's row shows: `state`, `testedAt` and `result` are the test it
 // reports, `testing` while the latest run still has it queued or running;
 // `verdict` is its latest test (models/usable.ts), which says whether tasks
@@ -379,21 +395,46 @@ const passedSince = (latest: LatestTest | undefined, at: string | undefined): bo
 // nothing about the model and so made no latest test (`notVerdict`). A
 // failed latest test stays the reported one, and such a newer refusal is
 // `later`. While the run tests a model, its latest test, and so whether
-// tasks can use it, stays as it was.
+// tasks can use it, stays as it was. A latest test made on an earlier key is
+// no verdict: `earlier` is how it went, and alone it is the `earlier` state;
+// a run's result on an earlier key shows nowhere.
 export type ShownTest =
   | { state: "testing" }
-  | ({ state: LatestTest["state"]; verdict?: LatestTest["state"]; notVerdict?: true; later?: TestRecord } & Pick<LatestTest, "testedAt" | "result">);
+  | ({ state: "earlier"; earlier: LatestTest["state"] } & Pick<LatestTest, "testedAt" | "result">)
+  | ({ state: LatestTest["state"]; verdict?: LatestTest["state"]; notVerdict?: true; later?: TestRecord; earlier?: LatestTest["state"] } & Pick<LatestTest, "testedAt" | "result">);
 
 export function shownTests(run: TestAllRun | undefined, latest: Map<string, LatestTest>): Map<string, ShownTest> {
   const out = new Map<string, ShownTest>();
-  for (const [model, t] of latest) out.set(model, { state: t.state, verdict: t.state, testedAt: t.testedAt, result: t.result });
+  for (const [model, t] of latest) {
+    out.set(model, t.earlierKey ? { state: "earlier", earlier: t.state, testedAt: t.testedAt, result: t.result } : { state: t.state, verdict: t.state, testedAt: t.testedAt, result: t.result });
+  }
   for (const t of run?.tests ?? []) {
-    const l = latest.get(t.model);
+    const found = latest.get(t.model);
+    const l = found?.earlierKey ? undefined : found;
+    const earlier = found?.earlierKey ? { earlier: found.state } : {};
     if ((t.state === "queued" || t.state === "running") && !run!.finishedAt) out.set(t.model, { state: "testing" });
-    else if (t.state === "failed" && t.result && t.testedAt && (!l || isNewer(t.testedAt, l.testedAt))) {
+    else if (t.state === "failed" && t.result && t.testedAt && !t.earlierKey && (!l || isNewer(t.testedAt, l.testedAt))) {
       if (l?.state === "failed") out.set(t.model, { state: "failed", verdict: "failed", testedAt: l.testedAt, result: l.result, later: t.result });
-      else out.set(t.model, { state: "failed", ...(l ? { verdict: l.state } : {}), notVerdict: true, testedAt: t.testedAt, result: t.result });
+      else out.set(t.model, { state: "failed", ...(l ? { verdict: l.state } : {}), notVerdict: true, testedAt: t.testedAt, result: t.result, ...earlier });
     }
   }
   return out;
 }
+
+export type RowState = "works" | "fails" | "pending" | "blocked";
+
+// The one rule for a row's place in the strip (Works, Doesn't work, Not
+// tested yet) and its filter: the model's latest test on the current key.
+// A blocked row (its account leaves it out, a router has no cap, the app
+// can't call it, it has no price) is in none.
+export function rowState(blocked: boolean, s: ShownTest | undefined): RowState {
+  if (blocked) return "blocked";
+  if (!s || s.state === "testing" || s.state === "earlier") return "pending";
+  if (s.notVerdict) return s.verdict === "passed" ? "works" : "pending";
+  return s.state === "passed" ? "works" : "fails";
+}
+
+// The models among `rows` the strip counts as Doesn't work, which Retest
+// failed tests again.
+export const failedModels = (rows: OfferRow[], shown: Map<string, ShownTest>): string[] =>
+  rows.filter((r) => rowState(Boolean(blockKind(r)), shown.get(r.model)) === "fails").map((r) => r.model);
