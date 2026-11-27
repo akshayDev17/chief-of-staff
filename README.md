@@ -19,8 +19,8 @@ file and version, so a component's CI job sees only its own changes:
   usage ledger, per-provider budgets and per-user vault (see
   `shell/src/proxy/README.md`), and "Connect <Provider>" for Bedrock, Foundry
   and Vertex AI with the app's own OpenID Connect issuer (see
-  `shell/src/providers/README.md`), and Add a model and the model for each
-  task (see `shell/src/models/README.md`). D1 migrations are in `shell/migrations/`. Managed with
+  `shell/src/providers/README.md`), with each provider's model list on its
+  Connect screen, and the model for each task (see `shell/src/models/README.md`). D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
 - `shell/bedrock-template/`: the CloudFormation template a user's "Connect
@@ -174,7 +174,8 @@ to the Worker:
 prints for the app's own AWS role has two statements: assume each user's
 model-caller role, and `bedrock:ListFoundationModels` and
 `bedrock:ListInferenceProfiles`, with which the daily price refresh reads
-which models Bedrock offers (Add a model lists them). A role made before
+which models Bedrock offers (the Bedrock Connect screen's model list shows
+them, and its Refresh model list reads them again on demand). A role made before
 2026-11-27 has only the first: in the AWS console open **IAM → Roles →**
 `chief-of-staff-app` **→ Permissions**, edit its policy and replace it with the one
 step 2 prints now. Until then the refresh raises a refresh-failed alert on

@@ -1,6 +1,7 @@
-// Add a model (design-v3 1.5, T17): the user picks a model from the app's
-// list of every chat model a connected provider sells at a listed price, and
-// the model's test call runs by itself. The model is added only when that
+// Choosing a model (design-v3 1.5, T17): on each provider's Connect screen
+// (providers/models-panel.ts), the user picks a model from the app's list of
+// every chat model a connected provider sells at a listed price, and the
+// model's test call runs once. The model is added only when that
 // call passes.
 //
 //   listOffer(db, plugins, userId, provider) -> OfferRow[]

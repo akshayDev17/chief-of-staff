@@ -29,6 +29,7 @@ import { AppNotConfigured, mintIdToken, readIssuer } from "../issuer";
 import type { ConnectionFields, ConnectMethod, Failure, Link, ProviderPlugin, Usage } from "../proxy/plugin";
 import { isLongPrompt, readBody, splitCacheWrites, TEST_MAX_TOKENS, TEST_PROMPT } from "./anthropic";
 import { assumeRole, assumeRoleWithWebIdentity, signV4, withoutHost, xmlText, type AwsCredentials } from "./aws";
+import { readAccountStates } from "./bedrock-account";
 import type { BedrockLocation, BedrockOffer, ModelOffer } from "./bedrock-catalog";
 
 export interface BedrockEnv {
@@ -50,7 +51,7 @@ export const AWS_AUDIENCE = "sts.amazonaws.com";
 export const AWS_SUBJECT = "chief-of-staff:bedrock";
 const SESSION_NAME = "chief-of-staff";
 
-// Which models Add a model offers, and at which IDs and locations, comes
+// Which models the model list offers, and at which IDs and locations, comes
 // from Bedrock's own model list, read daily by the app's own role and
 // matched to the price table's names (src/providers/bedrock-catalog.ts, T17):
 // every chat model Bedrock sells at a listed price, of every model family.
@@ -95,6 +96,22 @@ export function olderTemplate(version: string | undefined, than: string): boolea
   const [a, b] = [version, than].map((v) => v.split(".").map(Number));
   const i = a!.findIndex((n, k) => n !== b![k]);
   return i !== -1 && a![i]! < b![i]!;
+}
+
+// Anthropic's one-time use-case form gates the Claude models older than this
+// one (Bedrock's model access guide, read 2026-11-27); the guide's step and
+// each entry's "needs Anthropic's form" note both read it here.
+export const FORM_FREE_FROM = "Claude Opus 4.7";
+
+const claudeVersion = (model: string): number[] | undefined => {
+  const m = /^claude\b\D*(\d+)(?:\.(\d+))?/i.exec(model);
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : undefined;
+};
+
+export function needsAnthropicForm(model: string): boolean {
+  const version = claudeVersion(model);
+  const [major, minor] = claudeVersion(FORM_FREE_FROM)!;
+  return version !== undefined && (version[0]! < major! || (version[0] === major && version[1]! < minor!));
 }
 
 // The geography prefix of a cross-Region inference profile, from the region
@@ -227,10 +244,11 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one role, chief-of-staff-model-caller, which can call models and accept Bedrock models\' Marketplace terms on first use.',
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
-        "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on its first call, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        `The Connect test call always runs on Amazon Nova 2 Lite, which AWS sells itself, whatever models you choose. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on the first call to it, when you choose it, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than ${FORM_FREE_FROM}, AWS also asks its one-time use-case form.`,
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "Go back to the Chief of staff tab and finish the Connect step so the test call runs.",
-        `Connected before, and Providers shows “Stack template version 1.0.0”? Update the stack once so its role can accept those terms: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose <strong>Update</strong>, then <strong>Replace existing template</strong>${env.BEDROCK_TEMPLATE_URL ? ` with this Amazon S3 URL: ${env.BEDROCK_TEMPLATE_URL}` : ""}. Keep the parameters, tick the same acknowledgement and submit.`,
+        "Once it passes, choose your models in the list below it: each runs its own test call once. <strong>Refresh model list</strong> reads Bedrock's list again now and checks, in your own account, which models still need their terms accepted or Anthropic's form.",
+        `Connected before, and Providers shows “Stack template version 1.0.0” or “1.1.0”? Update the stack once so its role can accept those terms and read each model's state for Refresh model list: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose <strong>Update</strong>, then <strong>Replace existing template</strong>${env.BEDROCK_TEMPLATE_URL ? ` with this Amazon S3 URL: ${env.BEDROCK_TEMPLATE_URL}` : ""}. Keep the parameters, tick the same acknowledgement and submit.`,
       ],
       checkedOn: "2026-11-27",
       pages: [
@@ -368,6 +386,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         ?? /<OutputValue>([^<]*)<\/OutputValue>\s*<OutputKey>TemplateVersion<\/OutputKey>/.exec(xml)?.[1];
       return output?.trim() || xmlText(xml, "TemplateVersion");
     },
+    readAccountStates: (credential, modelIds) => readAccountStates(fetcher, credential as AwsCredentials, region, now(), modelIds),
   };
 
   return {

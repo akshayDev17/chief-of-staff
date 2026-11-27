@@ -1,8 +1,8 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Chief of staff: one role the app can assume, only with this account's external ID, that can call Amazon Bedrock models and accept Bedrock models' AWS Marketplace terms on first use. Delete this stack to remove the app's access.",
+  "Description": "Chief of staff: one role the app can assume, only with this account's external ID, that can call Amazon Bedrock models, accept Bedrock models' AWS Marketplace terms on first use, and read whether this account has each model's terms and Anthropic's use-case form. Delete this stack to remove the app's access.",
   "Metadata": {
-    "TemplateVersion": "1.1.0",
+    "TemplateVersion": "1.2.0",
     "MarketplaceProductIds": {
       "anthropic.claude-fable-5": "prod-h6swdfybvty7y",
       "anthropic.claude-fable-5-1": "prod-lt3y75wunrtv4",
@@ -51,7 +51,7 @@
       "Type": "AWS::IAM::Role",
       "Properties": {
         "RoleName": "chief-of-staff-model-caller",
-        "Description": "Lets the Chief of staff app call Amazon Bedrock models and accept Bedrock models' AWS Marketplace terms on first use, and nothing else.",
+        "Description": "Lets the Chief of staff app call Amazon Bedrock models, accept Bedrock models' AWS Marketplace terms on first use, and read each model's access state in this account, and nothing else.",
         "MaxSessionDuration": 3600,
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
@@ -125,6 +125,12 @@
                   "Resource": "*"
                 },
                 {
+                  "Sid": "ReadModelAccessState",
+                  "Effect": "Allow",
+                  "Action": ["bedrock:GetFoundationModelAvailability", "bedrock:GetUseCaseForModelAccess"],
+                  "Resource": "*"
+                },
+                {
                   "Sid": "ReadOwnStackVersion",
                   "Effect": "Allow",
                   "Action": "cloudformation:DescribeStacks",
@@ -144,7 +150,7 @@
     },
     "TemplateVersion": {
       "Description": "The version of this template, read by the app.",
-      "Value": "1.1.0"
+      "Value": "1.2.0"
     }
   }
 }

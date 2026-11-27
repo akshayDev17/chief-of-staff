@@ -98,7 +98,7 @@ describe("the task list", () => {
 describe("proposals", () => {
   it("with no passed model, offers nothing and says to add one", async () => {
     const html = await (await open()).text();
-    expect(html).toContain("Add a model first");
+    expect(html).toContain("Choose a model first");
     expect(await routeTask(env.DB, userId, "match")).toBeUndefined();
   });
 

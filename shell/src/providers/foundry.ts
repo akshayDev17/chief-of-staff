@@ -63,7 +63,7 @@
 // this ticket: its address and fields are checked live in M2 step 3 (T10).
 //
 // The deployment name is the user's: the guide asks them to keep the
-// suggested one, the model ID, which Add a model fills in; a user who named
+// suggested one, the model ID, which the model list suggests; a user who named
 // the deployment differently changes it there (T17).
 //
 // Pages read 2026-11-25 (ms.date in brackets):
@@ -200,7 +200,7 @@ export const isClaude = (model: string): boolean => /^claude\b/i.test(model.trim
 // default, the deployment uses the model name"). A price-table name is mapped
 // only where the page names exactly one ID plainly for the same model. A
 // model the table prices but this map leaves out is not offered yet: a
-// known shortfall against Add a model's list of every chat model Foundry
+// known shortfall against the model list of every chat model Foundry
 // sells at a listed price (T17, design-v3 1.5), not a rule, closed by a
 // follow-up fix once each ID is confirmed. Left out today: a
 // Fireworks or Baseten row, a retired or dated version, and a meter whose
@@ -290,7 +290,7 @@ const foundryModelId = (model: string): string => FOUNDRY_MODEL_IDS[model] ?? mo
 
 // The Claude models Foundry sells (through Azure Marketplace, priced by the
 // maintainers' reading of each listing, shell/prices/maintainer-read.json):
-// offered on Add a model, as "no price yet" until that reading is recorded.
+// offered in the model list, as "no price yet" until that reading is recorded.
 export const FOUNDRY_CLAUDE_MODELS: readonly string[] = Object.keys(FOUNDRY_MODEL_IDS).filter(isClaude);
 
 const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);

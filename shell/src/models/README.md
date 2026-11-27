@@ -1,28 +1,42 @@
-# Add a model (T17, design-v3 1.5)
+# Choosing a model (T17, design-v3 1.5)
 
-Models › Setup › Add a model (`GET /chief-of-staff/models/setup/add`, `page.ts`; logic in
-`add.ts`). One tab per connected provider; its table lists every chat model
+There is no separate Add a model page: each provider's model list is on its
+own Connect screen, below a passed Connect (Models › Setup › Providers,
+`src/providers/models-panel.ts`; logic in `add.ts`), and the old path
+`/chief-of-staff/models/setup/add` redirects there (the owner, 2026-11-27:
+"the dropdown was supposed to be shown in the connect screen itself"). One
+dropdown per provider lists every chat model
 the current price table sells there at a listed price, of every model family
 (the owner, 2026-11-24: "list every chat model each provider sells at a listed price, not just Claude, OpenAI and Gemini"), plus the models the
 plug-in knows that have no price yet (`connect.knownModels`, for example
 Foundry's Claude models before the maintainers' reading of a listing is
 recorded).
 
-Each row shows, with nothing to type:
+The dropdown is a custom listbox (a native `<select>` cannot colour its
+entries; the ARIA select-only combobox pattern, with keyboard, focus and a
+plain `<select>` for a browser without scripts). Each entry shows, with
+nothing to type:
 
 - the region the app calls the model at (the region the user chose on
   Providers where the model is offered there, else the plug-in's default);
 - its input and output list price at that region from the price table
   (`listPrices`, T11), with the source and the date read, and a note when the
   source failed and the last good price is kept;
-- its strength (the tier, `lookupTier`), worked out from that price.
+- its strength (the tier, `lookupTier`), worked out from that price, as a
+  coloured label (Smallest, Middle, Strongest) that also names it in words;
+- notes: added, no tool use, and on Bedrock what the last **Refresh model
+  list** read of the user's own account ("accept terms on first pick",
+  "needs Anthropic's form" on the Claude models older than Claude Opus 4.7,
+  `src/providers/bedrock-account.ts`). These notes
+  never block a choice: only a test call proves a model answers.
 
-Foundry calls a model by the user's deployment name: the row fills it in with
-the model's ID from Microsoft's catalog pages (`connect.deploymentName`,
-`FOUNDRY_MODEL_IDS`), and a user who named the deployment differently changes
-it. Friend screens say "Foundry's name for the model".
+Foundry calls a model by the user's deployment name: each entry names the
+suggested one, the model's ID from Microsoft's catalog pages
+(`connect.deploymentName`, `FOUNDRY_MODEL_IDS`), used when the deployment
+name field is left empty, and a user who named the deployment differently
+types it. Friend screens say "Foundry's name for the model".
 
-**Pick** runs the model's test call by itself through the proxy's one
+**Choosing** a model runs its test call once, right there, through the proxy's one
 pipeline (`sendTestCall`), which prices it and writes its ledger row (task
 `test_call`). The model is added (a `user_models` row, with the passed test
 call's reply, tokens and cost) only when the call passes. It is refused, with
@@ -58,7 +72,9 @@ offers (`connect.listed`) is left out, unless the user already added it.
 **Bedrock.** The list comes from Bedrock's own model list
 (`src/providers/bedrock-catalog.ts`), which the app's own AWS role reads once
 a day with the price table (ListFoundationModels and ListInferenceProfiles,
-the owner's AWS step) and which is stored with the price snapshot. Each AWS
+the owner's AWS step), and again on **Refresh model list** (once a minute per
+user, `src/providers/bedrock-account.ts`), and which is stored with the price
+snapshot. Each AWS
 price-list name is matched to a Bedrock model ID by a rule (the same name or
 ID as Bedrock's list gives, ignoring case) or by a reviewed entry in
 `src/providers/bedrock-models.json`; `test/bedrock-catalog.test.ts` checks

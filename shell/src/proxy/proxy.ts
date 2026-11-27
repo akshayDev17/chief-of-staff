@@ -55,7 +55,7 @@ export interface ModelChoice {
   model: string;
   // The region or deployment type, as the price table names it.
   location: string;
-  // Foundry only: the user's deployment name for the model (Add a model,
+  // Foundry only: the user's deployment name for the model (the model list,
   // T17); the plug-in's own default, the model ID, when absent.
   deployment?: string;
   // The Connect test call only: the plug-in's own ID for its test model at

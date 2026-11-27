@@ -35,7 +35,7 @@ from the vendors' own price sources, in D1 (`migrations/0000_create_price_table.
 - **Lookup** for the proxy (T12): `lookupPrice(db, { provider, model, location, tokenKind, longPrompt?, batch? })`
   returns `{ usdPerMTok, source, dateRead, stale }`, or `undefined` for "no price yet".
   `lookupTier(db, { provider, model })` returns the model's one tier at that
-  provider, for Add a model (T17), the per-task picker (T18) and the usage
+  provider, for each provider's model list (T17), the per-task picker (T18) and the usage
   ledger (T12).
 - **Tiers** come from the input price (`src/prices/tiers.ts`): Smallest under
   $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up. A model has one

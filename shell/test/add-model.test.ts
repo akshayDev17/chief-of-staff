@@ -1,8 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addModel, listOffer, namesPickedModel, readUserModels } from "../src/models/add";
-import { handleAddModel } from "../src/models/page";
-import { ADD_MODEL_PATH } from "../src/paths";
+import { PROVIDERS_PATH } from "../src/paths";
 import { pickedModels, setBudget } from "../src/proxy/budgets";
 import { foundryPlugin, usageFromChatCompletions } from "../src/providers/foundry";
 import { geminiModelId, usageFromGemini, vertexPlugin } from "../src/providers/vertex";
@@ -12,7 +11,7 @@ import { writeConnection } from "../src/proxy/connections";
 import type { PluginRegistry } from "../src/proxy/plugin";
 import { callModel } from "../src/proxy/proxy";
 import { runCheck } from "../src/providers/check";
-import type { Viewer } from "../src/providers/page";
+import { handleProviders, type Viewer } from "../src/providers/page";
 import { APP_ORIGIN, issuerKey, issuerKeys, scriptedFetch, type Sent } from "./issuer-fixture";
 import { ok, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
@@ -58,7 +57,15 @@ let userId: string;
 let plugin: TestPlugin;
 let plugins: PluginRegistry;
 
-const connect = (uid: string, p = plugin) => writeConnection(env.DB, uid, p, { account: "123456789012", region: "global" }, NOW);
+// A Connect whose test call passed: the model list shows below it.
+const passed = (uid: string, provider: Provider) =>
+  env.DB.prepare("INSERT OR REPLACE INTO provider_checks (user_id, provider, state, region, region_set_by, passed_at) VALUES (?, ?, 'passed', 'global', 'app', ?)")
+    .bind(uid, provider, NOW.toISOString())
+    .run();
+const connect = async (uid: string, p = plugin) => {
+  await writeConnection(env.DB, uid, p, { account: "123456789012", region: "global" }, NOW);
+  await passed(uid, p.provider);
+};
 
 beforeEach(async () => {
   await seed();
@@ -72,15 +79,23 @@ beforeEach(async () => {
 const ledger = async (uid: string) =>
   (await env.DB.prepare("SELECT task, model, status FROM model_calls WHERE user_id = ?").bind(uid).all<{ task: string; model: string; status: number }>()).results;
 
-const request = (path: string, init: RequestInit = {}) => new Request(`${APP_ORIGIN}${ADD_MODEL_PATH}${path}`, init);
-const open = (regs: PluginRegistry, path = "", uid = userId, viewer: Viewer = "owner") => handleAddModel(request(path), { db: env.DB, plugins: regs, userId: uid, viewer, now: NOW });
-const pick = (regs: PluginRegistry, provider: string, fields: Record<string, string>, uid = userId, viewer: Viewer = "owner", verb = "pick") =>
-  handleAddModel(
+// The model list lives on the provider's Connect screen.
+const request = (path: string, init: RequestInit = {}) => new Request(`${APP_ORIGIN}${PROVIDERS_PATH}${path}`, init);
+const open = (regs: PluginRegistry, path = "", uid = userId, viewer: Viewer = "owner") =>
+  handleProviders(request(path), { db: env.DB, plugins: regs, userId: uid, viewer, appOrigin: APP_ORIGIN, now: NOW });
+const pick = (regs: PluginRegistry, provider: string, fields: Record<string, string>, uid = userId, viewer: Viewer = "owner", verb = "choose") =>
+  handleProviders(
     request(`/${provider}/${verb}`, { method: "POST", body: new URLSearchParams(fields), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } }),
-    { db: env.DB, plugins: regs, userId: uid, viewer, now: NOW },
+    { db: env.DB, plugins: regs, userId: uid, viewer, appOrigin: APP_ORIGIN, now: NOW },
   );
+// One model's entry in the list.
+const entry = (page: string, model: string): string => {
+  const at = page.indexOf(`data-model="${model.replace(/&/g, "&amp;")}"`);
+  expect(at, model).toBeGreaterThan(-1);
+  return page.slice(at, page.indexOf("</li>", at));
+};
 
-describe("Add a model: the list", () => {
+describe("Choosing a model: the list", () => {
   it("lists every model the table prices at the provider, with its price, source, date read and the tier from that price, and nothing to type", async () => {
     const rows = await listOffer(env.DB, plugins, userId, "bedrock");
     expect(rows.map((r) => r.model)).toEqual(["test-haiku", "test-half-priced", "test-not-yet-priced", "test-sonnet"]);
@@ -89,9 +104,10 @@ describe("Add a model: the list", () => {
     expect(rows.find((r) => r.model === "test-haiku")!.tier).toBe("Smallest");
 
     const page = await (await open(plugins)).text();
-    expect(page).toContain("<strong>test-sonnet</strong>");
-    expect(page).toContain("$2.00 in · $10.00 out");
-    expect(page).toContain(">Middle<");
+    const sonnetEntry = entry(page, "test-sonnet");
+    expect(sonnetEntry).toContain('<span class="lb-name">test-sonnet</span><span class="tier tier-m">Middle</span>');
+    expect(sonnetEntry).toContain("$2.00 in · $10.00 out per million tokens");
+    expect(entry(page, "test-haiku")).toContain('<span class="tier tier-s">Smallest</span>');
     expect(page).toContain("AWS price-list files, offers AmazonBedrockFoundationModels and AmazonBedrock");
     expect(page).toContain("read 2026&#8209;11&#8209;24");
     expect(page).toContain("global, chosen by the app");
@@ -100,49 +116,52 @@ describe("Add a model: the list", () => {
     expect(page).not.toMatch(/design only|example row|placeholder/i);
   });
 
-  it("shows a model with no price as \"no price yet\", which cannot be picked", async () => {
+  it("shows a model with no price as \"no price yet\", which cannot be chosen", async () => {
     const page = await (await open(plugins)).text();
     for (const model of ["test-not-yet-priced", "test-half-priced"]) {
-      const at = page.indexOf(`<strong>${model}</strong>`);
-      const tr = page.slice(at, page.indexOf("</tr>", at));
-      expect(tr).toContain("no price yet");
-      expect(tr).toContain("Cannot be picked");
-      expect(tr).not.toContain('type="submit"');
+      const li = entry(page, model);
+      expect(li).toContain("no price yet");
+      expect(li).toContain('aria-disabled="true"');
+      // Nor offered by the list for a browser without scripts.
+      expect(page).not.toContain(`<option value="${model}">`);
     }
+    expect(entry(page, "test-sonnet")).not.toContain("aria-disabled");
+    expect(page).toContain('<option value="test-sonnet">test-sonnet · $2.00 in · $10.00 out · Middle</option>');
   });
 
-  it("asks a user with no provider connected to connect one first", async () => {
+  it("shows no model list until the provider is connected and its test call passed", async () => {
     const other = (await userFor("nobody")).id;
     const page = await (await open(plugins, "", other)).text();
-    expect(page).toContain("Connect a provider first");
-    expect(page).not.toContain("<table");
+    expect(page).toContain('name="account"');
+    expect(page).not.toContain('role="listbox"');
+    await writeConnection(env.DB, other, plugin, { account: "123456789012", region: "global" }, NOW);
+    expect(await (await open(plugins, "", other)).text()).not.toContain('role="listbox"');
+    await passed(other, "bedrock");
+    expect(await (await open(plugins, "", other)).text()).toContain('role="listbox"');
   });
 });
 
-describe("Add a model: what the plug-in knows of each model", () => {
+describe("Choosing a model: what the plug-in knows of each model", () => {
   it("says why each model it cannot call is not offered, in its own words", async () => {
     plugin.connect.canCall = (m) => m !== "test-haiku";
     plugin.connect.notCallableReason = (m) => `no ID for ${m}`;
     const page = await (await open(plugins)).text();
-    const at = page.indexOf("<strong>test-haiku</strong>");
-    expect(page.slice(at, page.indexOf("</tr>", at))).toContain("not offered yet: no ID for test-haiku");
+    expect(entry(page, "test-haiku")).toContain("not offered yet: no ID for test-haiku");
+    expect(entry(page, "test-haiku")).toContain('aria-disabled="true"');
     const refused = await pick(plugins, "bedrock", { model: "test-haiku" });
     expect(await refused.text()).toContain("test-haiku is not offered at Test bedrock yet: no ID for test-haiku.");
     expect(plugin.calls).toHaveLength(0);
   });
 
-  it("marks a model known to make no tool call, and it can still be picked", async () => {
+  it("marks a model known to make no tool call, and it can still be chosen", async () => {
     plugin.connect.noToolUse = (m) => (m === "test-haiku" ? "tested live on Test Haiku (test.haiku-1): no tool call" : undefined);
     const rows = await listOffer(env.DB, plugins, userId, "bedrock");
     expect(rows.find((r) => r.model === "test-haiku")).toMatchObject({ noToolUse: "tested live on Test Haiku (test.haiku-1): no tool call", callable: true });
     const page = await (await open(plugins)).text();
-    const at = page.indexOf("<strong>test-haiku</strong>");
-    const tr = page.slice(at, page.indexOf("</tr>", at));
-    expect(tr).toContain('<span class="pill warn" title="tested live on Test Haiku (test.haiku-1): no tool call">no tool use</span>');
-    expect(tr).toContain("tested live on Test Haiku (test.haiku-1): no tool call; for tasks that need no tools");
-    expect(tr).toContain('type="submit"');
-    const sonnet = page.indexOf("<strong>test-sonnet</strong>");
-    expect(page.slice(sonnet, page.indexOf("</tr>", sonnet))).not.toContain("no tool use");
+    const li = entry(page, "test-haiku");
+    expect(li).toContain("no tool use (tested live on Test Haiku (test.haiku-1): no tool call); for tasks that need no tools");
+    expect(li).not.toContain("aria-disabled");
+    expect(entry(page, "test-sonnet")).not.toContain("no tool use");
   });
 
   it("leaves out a model the provider no longer offers, unless the user added it", async () => {
@@ -154,13 +173,13 @@ describe("Add a model: what the plug-in knows of each model", () => {
   });
 });
 
-describe("Add a model: picking", () => {
+describe("Choosing a model: picking", () => {
   it("runs the test call by itself through the proxy and adds the model only when it passes", async () => {
     plugin.replies.push(ok({ input: 40, output: 2 }, { model: "test-sonnet-20261101", text: "OK" }));
     const response = await pick(plugins, "bedrock", { model: "test-sonnet" });
     expect(response.status).toBe(200);
     const page = await response.text();
-    expect(page).toContain("<strong>test-sonnet added.</strong> Its test call ran by itself and passed.");
+    expect(page).toContain("<strong>test-sonnet added.</strong> Its test call ran once and passed.");
     expect(page).toContain("bedrock replied: 200 OK · test-sonnet (global) · reply names test-sonnet-20261101 · “OK”");
     expect(page).toContain("40 input and 2 output tokens · $0.0001");
     expect(plugin.calls).toHaveLength(1);
@@ -170,7 +189,10 @@ describe("Add a model: picking", () => {
     expect(added).toMatchObject({ provider: "bedrock", model: "test-sonnet", location: "global", test: { status: 200, repliedModel: "test-sonnet-20261101", costUsd: 0.0001, usage: { input: 40, output: 2 } } });
     // The budget suggestion reads the same rows.
     expect((await pickedModels(env.DB, userId, "bedrock")).map((m) => m.model)).toEqual(["test-sonnet"]);
-    expect(await (await open(plugins)).text()).toMatch(/<span class="pill ok">added<\/span> <button type="submit" class="btn small">Test again<\/button>/);
+    const after = entry(await (await open(plugins)).text(), "test-sonnet");
+    expect(after).toContain('class="added"');
+    expect(after).toContain('<span class="pill ok">added</span>');
+    expect(after).toContain("added, test passed 2026-11-25");
   });
 
   it("refuses a reply naming a different model than the one picked, with a plain reason, and adds nothing", async () => {
@@ -212,7 +234,7 @@ describe("Add a model: picking", () => {
   });
 
   it("reads the stack's template version again before saying why a test call failed, so a stack just updated counts as updated", async () => {
-    await env.DB.prepare("INSERT INTO provider_checks (user_id, provider, state, passed_at, template_version) VALUES (?, 'bedrock', 'passed', ?, '1.0.0')").bind(userId, NOW.toISOString()).run();
+    await env.DB.prepare("INSERT OR REPLACE INTO provider_checks (user_id, provider, state, passed_at, template_version) VALUES (?, 'bedrock', 'passed', ?, '1.0.0')").bind(userId, NOW.toISOString()).run();
     plugin.connect.classify = (_f, _c, setupVersion) => ({ reason: "not_allowed_yet", fix: `classified on template ${setupVersion}`, links: [] });
     const stack = { version: "1.1.0" as string | Error };
     plugin.connect.readSetupVersion = async () => {
@@ -269,14 +291,14 @@ describe("Add a model: picking", () => {
   });
 });
 
-describe("Add a model: each user's own", () => {
+describe("Choosing a model: each user's own", () => {
   it("stores the added models per user: another user sees none of them and adds their own", async () => {
     await pick(plugins, "bedrock", { model: "test-sonnet" });
     const other = (await userFor("other-sub")).id;
     await connect(other);
     expect(await readUserModels(env.DB, other)).toEqual([]);
     expect((await listOffer(env.DB, plugins, other, "bedrock")).some((r) => r.added)).toBe(false);
-    expect(await (await open(plugins, "", other)).text()).not.toContain("pill ok");
+    expect(await (await open(plugins, "", other)).text()).not.toContain('<span class="pill ok">added</span>');
 
     await pick(plugins, "bedrock", { model: "test-haiku" }, other);
     expect((await readUserModels(env.DB, userId)).map((m) => m.model)).toEqual(["test-sonnet"]);
@@ -285,7 +307,7 @@ describe("Add a model: each user's own", () => {
     expect((await ledger(other)).map((r) => r.model)).toEqual(["test-haiku"]);
   });
 
-  it("keeps a model's first added date when it is tested again, so the daily check keeps calling the first model picked", async () => {
+  it("keeps a model's first added date when it is tested again, while the Connect check calls only the test model", async () => {
     await pick(plugins, "bedrock", { model: "test-haiku" });
     const later = new Date("2026-11-26T10:00:00Z");
     await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "test-sonnet", now: later });
@@ -296,20 +318,31 @@ describe("Add a model: each user's own", () => {
     expect(haiku.test?.at).toBe(latest.toISOString());
 
     await runCheck(env.DB, plugins, userId, "bedrock", latest);
-    expect(plugin.calls.at(-1)!.model).toBe("test-haiku");
+    expect(plugin.calls.at(-1)!.model).toBe(plugin.connect.testModel);
+  });
+
+  it("runs the Connect check on the test model at the deployment the user kept for it, never on an earlier-added model's", async () => {
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, deployment, added_at) VALUES (?, 'bedrock', 'test-haiku', 'global', 'my-haiku', ?)").bind(userId, NOW.toISOString()).run();
+    await runCheck(env.DB, plugins, userId, "bedrock", NOW);
+    expect(plugin.calls).toHaveLength(1);
+    expect(plugin.calls[0]).toMatchObject({ model: "test-sonnet", deployment: undefined });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, deployment, added_at) VALUES (?, 'bedrock', 'test-sonnet', 'global', 'my-sonnet', ?)").bind(userId, new Date("2026-11-26T10:00:00Z").toISOString()).run();
+    await runCheck(env.DB, plugins, userId, "bedrock", NOW);
+    expect(plugin.calls).toHaveLength(2);
+    expect(plugin.calls[1]).toMatchObject({ model: "test-sonnet", deployment: "my-sonnet" });
   });
 
   it("refuses a form posted from another site", async () => {
-    const response = await handleAddModel(
-      request("/bedrock/pick", { method: "POST", body: new URLSearchParams({ model: "test-sonnet" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" } }),
-      { db: env.DB, plugins, userId, viewer: "owner", now: NOW },
+    const response = await handleProviders(
+      request("/bedrock/choose", { method: "POST", body: new URLSearchParams({ model: "test-sonnet" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" } }),
+      { db: env.DB, plugins, userId, viewer: "owner", appOrigin: APP_ORIGIN, now: NOW },
     );
     expect(response.status).toBe(403);
     expect(plugin.calls).toHaveLength(0);
   });
 });
 
-describe("Add a model on Microsoft Foundry", () => {
+describe("Choosing a model on Microsoft Foundry", () => {
   let keyPem: string;
   let ISSUER_KEYS: string;
   const LABEL = ["PRIVATE", "KEY"].join(" ");
@@ -347,24 +380,26 @@ describe("Add a model on Microsoft Foundry", () => {
     return { plugins: { foundry: plugin } as PluginRegistry, sent, plugin };
   }
 
-  const connectFoundry = async (regs: PluginRegistry) => writeConnection(env.DB, userId, regs.foundry!, { tenantId: TENANT, endpoint: ENDPOINT }, NOW);
+  const connectFoundry = async (regs: PluginRegistry) => {
+    await writeConnection(env.DB, userId, regs.foundry!, { tenantId: TENANT, endpoint: ENDPOINT }, NOW);
+    await passed(userId, "foundry");
+  };
 
-  it("fills in the deployment name with the model ID, and lists Foundry's Claude models with no price yet", async () => {
+  it("suggests the model ID as the deployment name, and lists Foundry's Claude models with no price yet", async () => {
     const { plugins: regs } = foundry();
     await connectFoundry(regs);
     const page = await (await open(regs, "?provider=foundry")).text();
-    expect(page).toContain('<label class="small" for="dep-foundry-Claude-Sonnet-5-5">Deployment name</label>');
-    expect(page).toContain('name="deployment" value="claude-sonnet-5-5"');
-    expect(page).toContain('name="deployment" value="gpt-6-luna"');
+    expect(page).toContain('<label class="small" for="foundry-deployment">Deployment name <span class="muted">(leave empty for the suggested name, the model\'s ID)</span></label>');
+    expect(page).toContain('name="deployment" value=""');
+    expect(entry(page, "Claude Sonnet 5.5")).toContain("suggested deployment name claude-sonnet-5-5");
+    expect(entry(page, "GPT-6-luna")).toContain("suggested deployment name gpt-6-luna");
     // The catalog's own ID, dots kept.
-    expect(page).toContain('name="deployment" value="gpt-5.1"');
-    expect(page).toContain("Change it only if you named it differently at Foundry.");
-    const at = page.indexOf("<strong>Claude Haiku 5.5</strong>");
-    const tr = page.slice(at, page.indexOf("</tr>", at));
-    expect(tr).toContain("no price yet");
-    expect(tr).toContain("waiting for the maintainers&#39; reading of its listing");
-    expect(tr).toContain("Cannot be picked");
-    expect(page).toContain("Strongest");
+    expect(entry(page, "GPT 5.1")).toContain("suggested deployment name gpt-5.1");
+    const li = entry(page, "Claude Haiku 5.5");
+    expect(li).toContain("no price yet");
+    expect(li).toContain("waiting for the maintainers&#39; reading of its listing");
+    expect(li).toContain('aria-disabled="true"');
+    expect(page).toContain('<span class="tier tier-l">Strongest</span>');
   });
 
   it("adds Claude under the suggested name, and under a name the user changed it to", async () => {
@@ -412,16 +447,15 @@ describe("Add a model on Microsoft Foundry", () => {
     expect(await readUserModels(env.DB, userId)).toEqual([]);
   });
 
-  it("shows a model with no catalog ID in the app as \"cannot be picked\", and refuses it without calling Foundry", async () => {
+  it("shows a model with no catalog ID in the app as not choosable, and refuses it without calling Foundry", async () => {
     const { plugins: regs, sent } = foundry();
     await connectFoundry(regs);
     const page = await (await open(regs, "?provider=foundry")).text();
-    const at = page.indexOf("<strong>DeepSeek V3.2 (Fireworks)</strong>");
-    const tr = page.slice(at, page.indexOf("</tr>", at));
-    expect(tr).toContain("$0.56 in · $1.68 out");
-    expect(tr).toContain("Cannot be picked");
-    expect(tr).toContain("not offered yet: the app has no Foundry ID for it");
-    expect(tr).not.toContain('name="deployment"');
+    const li = entry(page, "DeepSeek V3.2 (Fireworks)");
+    expect(li).toContain("$0.56 in · $1.68 out");
+    expect(li).toContain('aria-disabled="true"');
+    expect(li).toContain("not offered yet: the app has no Foundry ID for it");
+    expect(li).not.toContain("deployment name");
     expect(await addModel(env.DB, regs, { userId, provider: "foundry", model: "DeepSeek V3.2 (Fireworks)", now: NOW })).toMatchObject({ kind: "refused", reason: "cannot_call" });
     expect(sent).toHaveLength(0);
   });
@@ -447,18 +481,19 @@ describe("Add a model on Microsoft Foundry", () => {
     const page = await (await pick(regs, "foundry", { model: "Claude Sonnet 5.5", deployment: "claude-sonet-5-5" }, userId, "friend")).text();
     expect(page).toContain("Foundry&#39;s name for the model");
     expect(page).toContain("<strong>That name or model ID doesn&#39;t exist here.</strong>");
-    expect(page).not.toContain("Deployment name");
-    expect(page).not.toContain("deployment name is filled in");
+    // The model list's own words (the Connect guide above it is Foundry's).
+    expect(page.slice(page.indexOf('<section class="models"'))).not.toMatch(/deployment name/i);
+    expect(page).toContain("suggested Foundry&#39;s name claude-sonnet-5-5");
     expect(page).toContain("Ask Admin for help");
-    const sent = await (await pick(regs, "foundry", { model: "Claude Sonnet 5.5", reason: "no_such_model" }, userId, "friend", "help")).text();
+    const sent = await (await pick(regs, "foundry", { model: "Claude Sonnet 5.5", reason: "no_such_model" }, userId, "friend", "model-help")).text();
     expect(sent).toContain("Sent to Admin: this item&#39;s name and its plain reason only.");
     const { results } = await env.DB.prepare("SELECT item, reason FROM help_requests WHERE user_id = ?").bind(userId).all();
-    expect(results).toEqual([{ item: "Add a model: Claude Sonnet 5.5", reason: "That name or model ID doesn't exist here." }]);
-    expect((await pick(regs, "foundry", { model: "Claude Sonnet 5.5", reason: "no_such_model" }, userId, "owner", "help")).status).toBe(403);
+    expect(results).toEqual([{ item: "Choose a model: Claude Sonnet 5.5", reason: "That name or model ID doesn't exist here." }]);
+    expect((await pick(regs, "foundry", { model: "Claude Sonnet 5.5", reason: "no_such_model" }, userId, "owner", "model-help")).status).toBe(403);
   });
 });
 
-describe("Add a model on Google Vertex AI: Gemini", () => {
+describe("Choosing a model on Google Vertex AI: Gemini", () => {
   it("calls Gemini's generateContent and checks the model its reply names", async () => {
     const ISSUER_KEYS = issuerKeys("k1", [await issuerKey("k1")]);
     let version = "gemini-3.5-flash-001";

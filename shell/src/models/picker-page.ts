@@ -13,7 +13,7 @@
 // accepted task whose proposal has changed). A proposed model of the other
 // strength, where the user has none of the task's own, says so. Any task can be
 // changed to any of the user's models, the Strongest included. A model known
-// to make no tool call (the plug-in's `noToolUse`, shown on Add a model too)
+// to make no tool call (the plug-in's `noToolUse`, shown in the model list too)
 // reads "no tool use" wherever it is named. Friend screens say "Admin" for
 // the owner and never "tier".
 //
@@ -22,7 +22,7 @@
 
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
-import { ADD_MODEL_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
@@ -87,12 +87,12 @@ export function renderPickerPage(input: PickerPageInput): string {
   const single = input.offered.length === 1;
   const providers = new Set(input.offered.map((m) => m.provider)).size;
   const intro = !input.offered.length
-    ? `<div class="banner warn">Add a model first: only your own models that passed their test call are offered here. <a href="${ADD_MODEL_PATH}">Add a model</a></div>`
+    ? `<div class="banner warn">Choose a model first: only your own models that passed their test call are offered here. Choose one below a provider's passed Connect. <a href="${PROVIDERS_PATH}">Providers and models</a></div>`
     : single
-      ? `<p>You have one model that passed, so every task uses it for now. Add a model of the suggested strength, or at another provider for a fallback, and the app proposes it here.</p>`
+      ? `<p>You have one model that passed, so every task uses it for now. Choose a model of the suggested strength, or at another provider for a fallback, and the app proposes it here.</p>`
       : providers > 1
         ? `<p>You have models at more than one provider, so each task gets a main model and a fallback on another provider, at the suggested strength for that task. You can change any of them.</p>`
-        : `<p>Your models are all at one provider, so each task gets a main model at the suggested strength and no fallback. Add a model at another provider for a fallback. You can change any of them.</p>`;
+        : `<p>Your models are all at one provider, so each task gets a main model at the suggested strength and no fallback. Choose a model at another provider for a fallback. You can change any of them.</p>`;
   const head = single
     ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
     : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another provider)</th><th></th>`;
@@ -131,7 +131,7 @@ ${body}
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers</a> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="${ADD_MODEL_PATH}">Add a model</a> · <strong>Model for each task</strong></p>
+<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers and models</a> · <a href="${BUDGETS_PATH}">Budgets</a> · <strong>Model for each task</strong></p>
 <h2>Model for each task</h2>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
