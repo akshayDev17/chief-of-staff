@@ -150,11 +150,10 @@ export function renderBudgetBar(input: BudgetBarInput): string {
     })
     .join("");
   const key = all.map((r) => `<li><span class="bb-sw bb-${r.id}" aria-hidden="true"></span>${esc(r.name)} ${money(r.usd)}</li>`).join("");
-  const head = p.over
-    ? `${money(p.spent)} of ${budgetText(input.budgetUsd)} · over by ${money(p.over)}`
-    : `${money(p.spent)} of ${budgetText(input.budgetUsd)} · ${money(p.left)} left`;
   const k = input.key;
   const ahead = "usage" in k ? beyond(p.reported, input.ledgerUsd) : 0;
+  const spentOf = `${money(p.spent)} of ${budgetText(input.budgetUsd)} ${ahead ? "by OpenRouter's figure" : "by the app's count"}`;
+  const head = p.over ? `${spentOf} · over by ${money(p.over)}` : `${spentOf} · ${money(p.left)} left`;
   const gap = ahead ? ` OpenRouter's figure is ${money(ahead)} more than the app's own count; the bar shows the larger.` : "";
   const source =
     "usage" in k

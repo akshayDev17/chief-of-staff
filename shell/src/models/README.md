@@ -124,10 +124,14 @@ signed-in user.
 `/chief-of-staff/models/usage` (`usage-page.ts`, figures in `usage.ts`) shows
 the month's OpenRouter spend, counted from 00:00 UTC on the 1st:
 
-- the month's figure against the budget, as the budget bar shows it: the same
-  bar as Models › Setup › Budgets (`src/proxy/budget-bar.ts`), with
-  OpenRouter's own figure for the key read live, server side, once a budget
-  is set;
+- the month's figure: the app's own count, labelled as the figure that stops
+  calls at the budget, and against the budget once one is set. With a budget
+  the card also shows the budget bar, the same bar as Models › Setup ›
+  Budgets (`src/proxy/budget-bar.ts`), headed by the larger of the two counts
+  with its source named ("by OpenRouter's figure" or "by the app's count").
+  OpenRouter's own figure for the current key is read live, server side, on
+  every visit, budget or not, from the same key and endpoint as Providers'
+  account line;
 - per model and per task: calls (and how many OpenRouter refused), input and
   output tokens, and cost. All three come from one read of the ledger
   (`model_calls`), so each table's foot is the bar's own count, the one the
@@ -152,8 +156,10 @@ When OpenRouter's figure for the current key and the app's count differ, one
 line under the figures says why, with the detail collapsed: each Connect makes
 a new key and records when (`connected_at`), so this month's calls from before
 then were made with an earlier key and are not in its figure. When those do
-not account for the difference, the line says only that the two differ and
-that the app's count is what stops calls.
+not account for the difference, the line says only that the two differ. When
+OpenRouter's figure cannot be read while OpenRouter is connected and no
+budget is set, the line says so, and why, instead; with a budget set, the
+bar's own source line says it.
 
 With nothing to show yet, the page highlights one next action, the first
 missing: Connect OpenRouter, then Set a budget, then Test a model. After a
