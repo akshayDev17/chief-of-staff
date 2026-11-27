@@ -61,7 +61,7 @@ function blocked(row: OfferRow, plugin: ProviderPlugin): string | undefined {
   if (!row.price) {
     return plugin.provider === "foundry" && /^claude\b/i.test(row.model)
       ? "no price yet: waiting for the maintainers' reading of its listing"
-      : `no price yet: not in ${SOURCES[plugin.priceSource[0]!].label} yet`;
+      : `no price yet: not in ${SOURCES[plugin.priceSource[0]!].label.split(",")[0]!} yet`;
   }
   if (!row.callable) return `not offered yet: ${plugin.connect.notCallableReason(row.model)}`;
   return undefined;
@@ -87,7 +87,7 @@ function option(row: OfferRow, input: ModelsSectionInput): string {
   const p = row.price;
   const where = p ? ` · ${esc(plugin.connect.locationLabel(row.location, row.model))}, chosen by ${row.locationSetBy === "user" ? "you" : "the app"}` : "";
   const price = p
-    ? `<span class="lb-price">${usd(p.input)} in · ${usd(p.output)} out per million tokens${where}</span><span class="lb-src small muted">${esc(SOURCES[p.source].label)}, read ${nbDate(p.dateRead)}</span>`
+    ? `<span class="lb-price">${usd(p.input)} in · ${usd(p.output)} out per million tokens${where}</span><span class="lb-src small muted" title="${esc(SOURCES[p.source].label)}">${esc(SOURCES[p.source].label.split(",")[0]!)}, read ${nbDate(p.dateRead)}</span>`
     : `<span class="lb-price"><span class="pill warn">no price yet</span></span>`;
   const tier = row.tier ? `<span class="tier ${tierClass[row.tier]}">${row.tier}</span>` : "";
   // With no price, the price line already says "no price yet".
