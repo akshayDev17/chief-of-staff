@@ -2,14 +2,14 @@
 // 2026-11-27: OpenRouter's public list "can include models this user's
 // settings would refuse"). Read with the user's own key from OpenRouter's
 // /models/user, which honours the account's provider preferences, privacy
-// settings and guardrails, by every Connect check (which picks its test model
-// from it) and on Refresh model list.
+// settings and guardrails, back from the provider's consent page
+// (providers/check.ts) and on Refresh model list.
 // The model list still shows every model OpenRouter lists; one the account
 // leaves out cannot be chosen, and says why.
 //
 //   readAccountList(db, userId, provider) -> AccountList | undefined
 //   refreshAccountList(db, plugins, userId, provider, now) -> AccountList | { problem }
-//   saveAccountList(db, userId, provider, ids, now)   what a Connect check read
+//   saveAccountList(db, userId, provider, ids, now)   what a read returned
 //   deleteAccountList(db, userId, provider)   on Disconnect
 
 import type { Provider } from "../prices/types";
