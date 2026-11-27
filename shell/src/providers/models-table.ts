@@ -371,8 +371,9 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   const name = shortName(r);
   const id = esc(r.model);
   const anchor = rowAnchor(r.model);
+  // A tag only where it says something: a passing row carries none (a status
+  // on hundreds of rows says nothing); the strip's Works cell finds them.
   let tags = "";
-  if (state === "works") tags += '<span class="pill ok">Works</span>';
   if (r.free) tags += '<span class="pill free">Free</span>';
   if (state === "fails") tags += failTag(shown && shown.state !== "testing" ? shown.result : undefined);
   const resultHere = view.results?.some((x) => x.model === r.model) ?? false;

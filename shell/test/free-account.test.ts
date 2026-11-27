@@ -187,7 +187,8 @@ describe("a $0 OpenRouter account", () => {
     for (const t of paid) expect(t).toMatchObject({ state: "failed", result: { reason: "no_credits", text: "Needs credit on OpenRouter." } });
     const page = await (await get()).text();
     expect(entry(page, paid[0]!.model)).toContain('<span class="pill warn">Needs credit</span>');
-    expect(entry(page, FREE)).toContain('<span class="pill ok">Works</span>');
+    expect(entry(page, FREE)).toContain('data-state="works"');
+    expect(entry(page, FREE)).not.toContain('class="pill ok"');
 
     // The free model passed, so it is usable: no Add.
     const picker = await (await tasks()).text();

@@ -183,7 +183,9 @@ describe("Connect OpenRouter", () => {
     expect(body.focus).toBe("t-openai/gpt-6-luna");
     const row = rowOf(body.main, "openai/gpt-6-luna");
     expect(row).toContain("<strong>GPT-6 Luna passed.</strong> Tasks can use it.");
-    expect(row).toContain('<span class="pill ok">Works</span>');
+    // A passing row carries no tag; the strip's Works cell finds it.
+    expect(row).toContain('data-state="works"');
+    expect(row).not.toMatch(/class="pill[^"]*">Works/);
     // The card is left as the page has it: the account is not read again.
     expect(body.main).toContain('data-part="provider" data-keep');
     expect(fetcher.sent.map((s) => new URL(s.url).pathname)).toEqual(["/api/v1/chat/completions"]);
