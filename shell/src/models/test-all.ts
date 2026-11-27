@@ -32,6 +32,7 @@
 // be taken again, so a run always finishes.
 
 import { TEST_MAX_TOKENS } from "../providers/openrouter";
+import { isCurrentCatalog } from "../prices/refresh";
 import { readCurrentCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
 import { readConnection } from "../proxy/connections";
@@ -158,8 +159,12 @@ async function pooled<T>(items: readonly T[], limit: number, job: (item: T) => P
 // The cron: the oldest queued tests (and stale claims), PER_TICK at most,
 // claimed in one statement, then called CONCURRENCY at once. A test that
 // throws is recorded as failed with no reply, so a run always finishes. Only
-// the tick holding a test's claim records its result. Returns how many ran.
+// the tick holding a test's claim records its result. Nothing is claimed
+// while the model list predates parseModels' rules, so no test runs on an old
+// list's verdicts; the cron reads it again first (index.ts). Returns how many ran.
 export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, now: Date): Promise<number> {
+  const stored = await readCurrentCatalog(db);
+  if (!isCurrentCatalog(stored)) return 0;
   const claimedAt = now.toISOString();
   const staleBefore = new Date(now.getTime() - CLAIM_MINUTES * 60_000).toISOString();
   const { results } = await db
@@ -172,7 +177,7 @@ export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, no
     .bind(claimedAt, staleBefore, PER_TICK)
     .all<{ run_id: number; user_id: string; provider: Provider; model: string }>();
   if (!results.length) return 0;
-  const catalog = (await readCurrentCatalog(db))?.models ?? [];
+  const catalog = stored!.models;
   const otherIds = catalog.map((m) => m.id);
   const free = new Set(catalog.filter((m) => m.free).map((m) => m.id));
   await pooled(results, CONCURRENCY, async (t) => {

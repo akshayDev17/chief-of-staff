@@ -38,8 +38,7 @@ import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPla
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { nextAction, setupTabsLine } from "../models/setup-tabs";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
-import { CATALOG_VERSION } from "../prices/openrouter";
-import { refreshPrices } from "../prices/refresh";
+import { REFRESH_GAP_MS, refreshStaleCatalog } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
@@ -369,9 +368,6 @@ const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<AddRefusal | PlainReason
   "wrong_model", "budget_spent", "cannot_call", "no_price", "not_passed",
 ]);
 
-// Refresh model list may read again a minute after the last read.
-export const REFRESH_GAP_MS = 60_000;
-
 export const isProvidersPath = (pathname: string): boolean => ROUTE.test(pathname);
 
 // Every route is scoped to the signed-in user.
@@ -397,16 +393,9 @@ export async function handleProviders(
   const page = async (extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
     html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
   const back = (provider: string, extra = "", anchor = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}${anchor}`, 303);
-  // The price table and the provider's model list, read now when there is
-  // none yet, the stored one predates parseModels' rules, or when forced; at
-  // most once a minute, a failed read included.
+  // The price table and the provider's model list (prices/refresh.ts).
   const refreshCatalog = async (force: boolean): Promise<void> => {
-    const snapshot = await currentSnapshot(db);
-    const catalog = await readCurrentCatalog(db);
-    if (!force && catalog?.version === CATALOG_VERSION) return;
-    if (snapshot && now.getTime() - Date.parse(snapshot.takenAt) < REFRESH_GAP_MS) return;
-    await refreshPrices({ db, fetcher: input.fetcher ?? fetch, now });
-    plugins = await input.readPlugins();
+    if (await refreshStaleCatalog({ db, fetcher: input.fetcher ?? fetch, now, force })) plugins = await input.readPlugins();
   };
 
   if (!verb) {

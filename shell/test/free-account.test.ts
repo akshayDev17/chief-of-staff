@@ -10,7 +10,8 @@
 // all models says the paid ones need credit; and a free model is usable for
 // every task in one step.
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import worker from "../src/index";
 import { handleTaskModels } from "../src/models/picker-page";
 import { routeTask, TASKS } from "../src/models/tasks";
 import { readTestAll, runQueuedTests } from "../src/models/test-all";
@@ -94,6 +95,14 @@ beforeEach(async () => {
   userId = (await userFor("owner-sub")).id;
 });
 
+afterEach(() => vi.restoreAllMocks());
+
+// The every-minute cron, with OpenRouter answered by `f`.
+const minuteCron = (at: Date, f: typeof fetch) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(f);
+  return worker.scheduled({ cron: "* * * * *", scheduledTime: at.getTime(), noRetry: () => {} } as ScheduledController, { ...ENV, DB: env.DB });
+};
+
 const FREE_TIER_KEY = () => keyReply({ is_free_tier: true, limit: 10, limit_remaining: 10, free_model_daily_requests: { used: 17, limit: 50, remaining: 33 } });
 
 describe("a $0 OpenRouter account", () => {
@@ -151,6 +160,36 @@ describe("a $0 OpenRouter account", () => {
     await get("", new Date(NOW.getTime() + 61_000));
     expect(modelListReads()).toBe(2);
     expect((await readCurrentCatalog(env.DB))!.models).toEqual(before.models);
+  });
+
+  it("runs no queued test on a list that predates the rules: the minute cron reads it again, once a minute, then never calls the music model", async () => {
+    await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
+    expect((await post("/openrouter/test-all")).status).toBe(303);
+    // A run queued before the deploy, on a list that let the music model through.
+    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
+    await env.DB.prepare("INSERT INTO model_tests (run_id, user_id, provider, model, state) VALUES (?, ?, 'openrouter', ?, 'queued')").bind(run.id, userId, MUSIC).run();
+    await storeOldCatalog();
+    const queued = async () => (await readTestAll(env.DB, userId, "openrouter"))!.tests.filter((t) => t.state === "queued").length;
+    const before = await queued();
+
+    fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY, models: () => new Response("down", { status: 503 }) });
+    await minuteCron(NOW, fetcher);
+    await minuteCron(new Date(NOW.getTime() + 30_000), fetcher);
+    expect(modelListReads()).toBe(1);
+    expect(chatModels()).toEqual([]);
+    expect(await queued()).toBe(before);
+    expect((await readCurrentCatalog(env.DB))!.version).toBeUndefined();
+
+    fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
+    for (let minute = 1; (await queued()) > 0 && minute < 30; minute++) await minuteCron(new Date(NOW.getTime() + minute * 61_000), fetcher);
+    expect(modelListReads()).toBe(1);
+    expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)!.blocked).toBeDefined();
+    const done = (await readTestAll(env.DB, userId, "openrouter"))!;
+    expect(done.done).toBe(done.tests.length);
+    expect(chatModels()).not.toContain(MUSIC);
+    expect(chatModels()).toContain(FREE);
+    expect(done.tests.find((t) => t.model === MUSIC)).toMatchObject({ state: "failed", result: { reason: "cannot_call" } });
+    expect(done.tests.find((t) => t.model === FREE)).toMatchObject({ state: "passed" });
   });
 
   it("passes the free model when it is chosen, and says a paid one needs credit, with Add credits first", async () => {

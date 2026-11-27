@@ -1,5 +1,5 @@
 import { parseSort, renderPriceTablePage } from "./prices/page";
-import { refreshPrices } from "./prices/refresh";
+import { refreshPrices, refreshStaleCatalog } from "./prices/refresh";
 import { currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
 import { accessDenied, readAccessIdentity } from "./access";
 import { readAppOrigin } from "./app-config";
@@ -27,7 +27,8 @@ export interface Env extends ProvidersEnv {
 
 // The Cron Triggers in wrangler.jsonc. Only handlers may be exported from this
 // module: workerd refuses any other named export of the entry point.
-// Every minute: the queued tests of Test all models.
+// Every minute: a model list that predates parseModels' rules read again
+// (prices/refresh.ts), then the queued tests of Test all models.
 const EVERY_MINUTE_CRON = "* * * * *";
 
 const json = (body: unknown, status = 200): Response =>
@@ -91,6 +92,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
+      await refreshStaleCatalog({ db: env.DB, fetcher: fetch, now });
       return handleTaskModels(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", now });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
@@ -110,6 +112,7 @@ export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === EVERY_MINUTE_CRON) {
+      await refreshStaleCatalog({ db: env.DB, fetcher: fetch, now });
       const plugins = await readProviderPlugins(env, env.DB);
       await runQueuedTests(env.DB, plugins, now);
       return;
