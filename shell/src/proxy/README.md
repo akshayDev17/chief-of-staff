@@ -39,7 +39,8 @@ no key in the vault) records the connection as revoked, for T49's alert
    current price table (one read of its rows, `modelPrices`), else it is
    refused (`no_price`).
 3. Enforces the provider's monthly budget: none set is refused (`no_budget`),
-   except for the Connect test call and Test all models (`sendTestCall`),
+   except for a model's test call (Test with <model>?) and Test all models
+   (`sendTestCall`),
    which run before budgets are set; the user's spend at that provider since
    00:00 UTC on the 1st reaching it is refused (`budget_spent`) until the 1st,
    with the date it resumes. The call that crosses the budget is the last one:
@@ -122,7 +123,7 @@ the bar labels it, with a link to OpenRouter's Activity page
 
 ## Connections and the vault
 
-`connections.ts` is the only code that writes (the Connect check,
+`connections.ts` is the only code that writes (the Connect step,
 `src/providers/check.ts`) or reads (the proxy) `provider_connections`, and it
 refuses any field the plug-in does not declare. `src/vault.ts` is the per-user
 vault for what is secret: each user's own AES-256-GCM key, stored wrapped by

@@ -206,7 +206,7 @@ export function renderPriceTablePage(input: PageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin · Price table · Chief of staff</title>
-<style>${PAGE_CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}</style>
 </head>
 <body>
 <main class="screen">
@@ -215,8 +215,8 @@ export function renderPriceTablePage(input: PageInput): string {
 ${refreshBanner(input.snapshot)}
 <form class="sort-by" method="get">
 <label class="small" for="price-sort">Sort by</label>
-<select id="price-sort" name="sort" onchange="this.form.submit()">${options}</select>
-<noscript><button type="submit">Sort</button></noscript>
+<select id="price-sort" name="sort">${options}</select>
+<button type="submit" class="btn">Sort</button>
 </form>
 <div class="tbl-wrap"><table class="stackable" id="price-tbl">
 <thead><tr>
@@ -293,6 +293,12 @@ export const CONTROLS_CSS = `
 .btn.secondary { background: var(--card); color: var(--accent); }
 .btn:focus-visible, input.f:focus-visible, select.f:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input.f, select.f { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); width: 100%; }
+.btn[aria-disabled] { opacity: .55; cursor: default; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+details.more { margin-top: 6px; }
+details.more > summary { cursor: pointer; color: var(--accent); font-size: .85rem; width: fit-content; }
+details.more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+details.more[open] > summary { margin-bottom: 4px; }
 .ok-line { color: var(--ok); font-weight: 500; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;

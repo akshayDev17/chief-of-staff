@@ -74,16 +74,31 @@ describe("Models › Setup › Budgets", () => {
     expect(html).toContain("<h3>OpenRouter</h3>");
     expect(html).toContain("about $31 a month");
     expect(html).toContain('<span class="pill warn">estimate</span> · checked on 2026&#8209;11&#8209;27');
-    expect(html).toContain("Basis: 5 applications a day, if this provider carried every task, at test-sonnet's list prices");
+    expect(html).toContain("Suggested from 5 applications a day.");
+    expect(html).toContain("<summary>How this is worked out</summary>");
+    expect(html).toContain("<li>At test-sonnet's list prices, from the app's price table.</li>");
     expect(html).toContain("Until it is set, this provider's models cannot be called.");
     expect(html).not.toContain("Google Vertex AI");
     expect(html).not.toMatch(/design only/i);
   });
 
+  it("keeps every visible sentence to 12 words or fewer, the basis under How this is worked out", async () => {
+    // Outside <details> and outside the budget bar's own labels (none here: no budget is set).
+    const visible = (await (await send("?per_day=5")).text())
+      .replace(/<(style|script|title)[\s\S]*?<\/\1>/g, " ")
+      .replace(/<details[\s\S]*?<\/details>/g, " ")
+      // A block element ends a line; an inline one (a link, a pill) does not.
+      .replace(/<\/?(?:p|h\d|li|ul|div|section|form|label|button|input|main|body)\b[^>]*>/g, "\n")
+      .replace(/<[^>]+>/g, " ");
+    const sentences = visible.split(/\n|(?<=[.:?!])\s/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+    for (const sentence of sentences) expect(sentence.split(" ").length, sentence).toBeLessThanOrEqual(12);
+    expect(visible).not.toContain("practice mode");
+  });
+
   it("works the suggestion at the volume asked for, 5 a day when none is", async () => {
     expect(await (await send("?per_day=10")).text()).toContain("about $61 a month");
-    expect(await (await send("")).text()).toContain("Basis: 5 applications a day");
-    expect(await (await send("?per_day=nope")).text()).toContain("Basis: 5 applications a day");
+    expect(await (await send("")).text()).toContain("Suggested from 5 applications a day.");
+    expect(await (await send("?per_day=nope")).text()).toContain("Suggested from 5 applications a day.");
   });
 
   it("sets the budget when the suggestion is accepted", async () => {

@@ -4,7 +4,6 @@ import { currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store"
 import { accessDenied, readAccessIdentity } from "./access";
 import { readAppOrigin } from "./app-config";
 import { runQueuedTests } from "./models/test-all";
-import { runDueChecks } from "./providers/check";
 import { readProviderPlugins, type ProvidersEnv } from "./providers/index";
 import { vaultSecrets } from "./providers/secrets";
 import { handleProviders, isProvidersPath } from "./providers/page";
@@ -28,8 +27,7 @@ export interface Env extends ProvidersEnv {
 
 // The Cron Triggers in wrangler.jsonc. Only handlers may be exported from this
 // module: workerd refuses any other named export of the entry point.
-// Every minute: the provider checks whose next try is due (T16), and the
-// queued tests of Test all models.
+// Every minute: the queued tests of Test all models.
 const EVERY_MINUTE_CRON = "* * * * *";
 
 const json = (body: unknown, status = 200): Response =>
@@ -61,7 +59,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleBudgets(request, env.DB, await readProviderPlugins(env, env.DB), user.id, now, { secrets: vaultSecrets(env.DB, env) });
+      return handleBudgets(request, env.DB, user.id, now, { secrets: vaultSecrets(env.DB, env) });
     }
     // Models › Setup › Providers, for the signed-in user. Access lets only
     // the owner in until invitations bring friends (T45), so every viewer
@@ -113,7 +111,6 @@ export default {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === EVERY_MINUTE_CRON) {
       const plugins = await readProviderPlugins(env, env.DB);
-      await runDueChecks(env.DB, plugins, now);
       await runQueuedTests(env.DB, plugins, now);
       return;
     }

@@ -32,6 +32,7 @@
 // be taken again, so a run always finishes.
 
 import { TEST_MAX_TOKENS } from "../providers/openrouter";
+import { isCurrentCatalog } from "../prices/openrouter";
 import { readCurrentCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
 import { readConnection } from "../proxy/connections";
@@ -96,6 +97,10 @@ async function latestRun(db: D1Database, userId: string, provider: Provider): Pr
   );
 }
 
+// While the stored model list predates parseModels' rules: no run starts,
+// and a queued one waits.
+export const FRESH_LIST_WAIT = "Waiting for a fresh model list: press Refresh model list.";
+
 // `offers`: the model list, when the caller has read it already.
 export async function planTestAll(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date, offers?: OfferRow[]): Promise<TestAllPlan> {
   const plugin = plugins[provider];
@@ -109,7 +114,8 @@ export async function planTestAll(db: D1Database, plugins: PluginRegistry, userI
   const estimateUsd = models.reduce((sum, m) => sum + m.estimateUsd, 0);
   const last = await latestRun(db, userId, provider);
   let wait: string | undefined;
-  if (!(await readConnection(db, userId, provider))) wait = `${plugin.connect.guide.name} is not connected.`;
+  if (!isCurrentCatalog(await readCurrentCatalog(db))) wait = FRESH_LIST_WAIT;
+  else if (!(await readConnection(db, userId, provider))) wait = `${plugin.connect.guide.name} is not connected.`;
   else if (!models.length) wait = "No model can be tested yet: the price table has none.";
   else if (last && !last.finished_at) wait = "A test of all models is running already.";
   else if (last && minutesAfter(last.started_at, RUN_GAP_MINUTES) > now) wait = `You can test all models again from ${hhmm(minutesAfter(last.started_at, RUN_GAP_MINUTES))}.`;
@@ -158,8 +164,13 @@ async function pooled<T>(items: readonly T[], limit: number, job: (item: T) => P
 // The cron: the oldest queued tests (and stale claims), PER_TICK at most,
 // claimed in one statement, then called CONCURRENCY at once. A test that
 // throws is recorded as failed with no reply, so a run always finishes. Only
-// the tick holding a test's claim records its result. Returns how many ran.
+// the tick holding a test's claim records its result. Nothing is claimed
+// while the model list predates parseModels' rules, so no test runs on an old
+// list's verdicts: the tests wait for the daily refresh or Refresh model
+// list (FRESH_LIST_WAIT). Returns how many ran.
 export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, now: Date): Promise<number> {
+  const stored = await readCurrentCatalog(db);
+  if (!isCurrentCatalog(stored)) return 0;
   const claimedAt = now.toISOString();
   const staleBefore = new Date(now.getTime() - CLAIM_MINUTES * 60_000).toISOString();
   const { results } = await db
@@ -172,14 +183,16 @@ export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, no
     .bind(claimedAt, staleBefore, PER_TICK)
     .all<{ run_id: number; user_id: string; provider: Provider; model: string }>();
   if (!results.length) return 0;
-  const otherIds = (await readCurrentCatalog(db))?.models.map((m) => m.id) ?? [];
+  const catalog = stored!.models;
+  const otherIds = catalog.map((m) => m.id);
+  const free = new Set(catalog.filter((m) => m.free).map((m) => m.id));
   await pooled(results, CONCURRENCY, async (t) => {
     const plugin = plugins[t.provider];
     let row: Omit<ModelTestRow, "model">;
     try {
       if (!plugin) throw new Error("no plug-in");
       const location = plugin.connect.locations(t.model)[0] ?? "global";
-      const outcome = await testModel(db, plugin, plugins, { userId: t.user_id, model: t.model, location, otherIds, now, task: TEST_ALL_TASK });
+      const outcome = await testModel(db, plugin, plugins, { userId: t.user_id, model: t.model, location, otherIds, now, task: TEST_ALL_TASK, free: free.has(t.model) });
       if (outcome.kind === "added") {
         row = { state: "passed", result: { text: "Works now.", test: outcome.model.test }, costUsd: outcome.model.test?.costUsd };
       } else {

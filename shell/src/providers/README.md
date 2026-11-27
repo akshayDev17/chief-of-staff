@@ -41,8 +41,10 @@ read 2026-11-27):
    The connection record holds only `method` (`oauth_pkce`) and `key_hash`,
    the key's SHA-256, which names the key's own page on OpenRouter
    (`https://openrouter.ai/keys/<hash>`, as OpenRouter's PKCE page builds it).
-4. The Connect test call runs by itself (below), and the account's own model
-   list is read with the new key (`src/models/account-list.ts`).
+4. No test call runs by itself (the owner, 2026-11-27). The account's own
+   model list is read with the new key (`src/models/account-list.ts`; it costs
+   nothing), and the user lands on the model test (`#test`), highlighted,
+   with focus on its dropdown (below).
 
 **Disconnect** deletes the key and the verifier from the vault, the record,
 the check and the account's model list; the models stop answering at once.
@@ -89,7 +91,7 @@ https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
 | Status | What the user sees |
 | --- | --- |
 | no key in the vault, 401 | the connection isn't set up yet, or was removed (Connect OpenRouter again) |
-| 402 | needs credit on OpenRouter: the account or this key has none left for this paid model (free models work without credit) |
+| 402 | needs credit on OpenRouter, with Add credits first; on a free model, OpenRouter asked for credit even for it |
 | 403 | OpenRouter refused this request for your account (moderation, a guardrail, privacy settings) |
 | "No endpoints found matching your data policy" (any status) | refused for your account: your OpenRouter privacy settings leave no provider for it, often a free model's; with a link to them |
 | 404 | that model ID doesn't exist here |
@@ -100,46 +102,61 @@ https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
 Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
 (read 2026-11-27).
 
-## The Connect check (`check.ts`)
+## After Connect (`check.ts`, `page.ts`, `models-panel.ts`)
 
-After Connect, the test call runs by itself. The app holds no model ID of its
-own (the owner, 2026-11-27: "not use a fixed hardcoded list of models but
-always query all models from the fucking provider"): each check reads the
-account's live list (`/api/v1/models/user`) with the user's own key, saves it
-as the account's list, and picks the test model from it by one stated rule
-(`test-model.ts`):
+The owner's flow (2026-11-27): "the post connect step, where authorization
+from openrouter succeeds, should be to scroll/highlight the testing section.
+the testing section should have a model dropdown list, non-hardcoded, and then
+when a user picks up a model, we should have a "test with <model name>?"
+button suddenly getting enabled".
 
-- a candidate takes and gives text, has a list price, is not served by
-  moderated endpoints only, has no retirement date, and the price table
-  prices it;
-- cheapest means the lowest input plus output price; a tie goes to the larger
-  context, then to the ID in alphabetical order;
-- the cheapest paid model, unless OpenRouter says the account has no credit
-  (`GET /api/v1/key`: `is_free_tier`, "Whether the user has paid for credits
-  before", or a key `limit_remaining` of 0), when it is the cheapest free
-  model ($0 in and out). OpenRouter gives an app no account balance
-  (`/api/v1/credits` needs a management key), so otherwise the cheapest paid
-  model is tried, and a 402 moves the test to the cheapest free one;
-- a refusal of the model's own (busy, gone, its providers' data policy) hands
-  the test to the next cheapest of its group, at most three calls a check.
+- Back from OpenRouter, the connection is **Connected** (the check row's state
+  `passed`, which since 2026-11-27 means only that OpenRouter authorized the
+  app). No model call is made. The page opens at `#test`, the model test,
+  highlighted, with focus on its dropdown.
+- The model test has one dropdown, OpenRouter's live list (every model it
+  lists; the app holds no model ID of its own), reading "Choose a model", and
+  a real `<button>`, disabled until a model is chosen, then reading
+  "Test with <model>?". Choosing sends no request and loads no page; only the
+  button does, and it runs that one model's test call (`models/add.ts`
+  `addModel`). Test all models stays a separate action with its estimate and
+  confirm.
+- The provider is **usable** once one of the user's models has passed its
+  test call ("Usable: 2 models passed"; before that, "Not usable yet").
+- A test call that gets a 401 records the connection as `revoked` (removed on
+  OpenRouter's side), for T49's urgent alert, and the page offers Connect
+  OpenRouter again.
 
-The result names the model and why ("Tested on <model>: cheapest free model,
-because your OpenRouter account has no credit"), and the free-model requests
-left today where the key reports them (`free_model_daily_requests`). When the
-account's list cannot be read, the check fails with that plain reason: there
-is no built-in list to fall back to. The test is never on a model the user
-chose. Its reply is capped at 16 tokens. It is a real call through the proxy
-(`sendTestCall`), priced and written to the ledger (task `test_call`); it
-needs the model's price (it waits, and is tried again every 15 minutes, until
-the price table has one) and no budget yet, and waits while one is set and
-spent. A connection whose test call had passed and that then gets a 401 is
-recorded as `revoked`, for T49's urgent alert. The cron (`* * * * *`) runs due
-checks only for providers a plug-in serves: rows left from Bedrock, Vertex AI
-or Foundry are never picked.
+**The account line** reads `GET /api/v1/key` live with the key from the
+vault, server side, on each view of the connected panel: whether the account
+has ever bought credits (`is_free_tier`), who owns the key
+(`organization_id`: the user's own account or an organization), the workspace
+it spends in (`workspace_id`), the key's own limit and what is left of it, and
+what the key has spent (`usage`, `usage_monthly`), with the free-model
+requests left today (https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key.md,
+read 2026-11-27). An account that never bought credits gets **Add credits**.
+OpenRouter's authorize page lets the user pick the workspace the key is made
+in (`workspace_id` preselects one, `required_workspace_id` locks it; the app
+sends neither) and change its limit
+(https://openrouter.ai/docs/guides/overview/auth/oauth), so a key made on an
+account or workspace without credits gets 402 on every paid model; the line
+shows which.
 
-Each result is three lines, shown only to the user who made the call: the
-plain reason, OpenRouter's own reply, the fix. "Ask Admin for help" (friends
-only) records the item's name and the plain reason, never the reply.
+**Free** has one meaning everywhere (`src/prices/openrouter.ts`
+`isTrulyFreeTextModel`): the model gives only text (`output_modalities`
+exactly `["text"]`) and every price OpenRouter lists for it is 0, not only
+`prompt` and `completion` but `request`, `image`, `audio`, `web_search`,
+`internal_reasoning`, the cache prices, `overrides` and any field the app
+does not know. A model that also gives audio, images or video is never
+offered or tested: Google's Lyria music models are listed at "0" a token,
+`output_modalities` ["text", "audio"], and are charged per clip or song.
+
+Visible copy is the action lines; every explanation sits in a collapsed
+"What this does" or "Details" (the owner, 2026-11-27: the old guide was far
+too long). Each result shows one plain line and its one action first, with
+OpenRouter's own reply, shown only to the user who made the call, collapsed.
+"Ask Admin for help" (friends only) records the item's name and the plain
+reason, never the reply.
 
 ## No issuer
 

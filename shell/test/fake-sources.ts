@@ -14,9 +14,10 @@ export interface Sent {
 
 export type Overrides = Partial<Record<"models" | "userModels" | "keys" | "chat" | "currentKey", (sent: Sent) => Response | Promise<Response>>>;
 
-// GET /api/v1/key's reply for the issued key: its figures this month.
+// GET /api/v1/key's reply for the issued key: its figures this month, on an
+// account that has bought credits.
 export const keyReply = (data: Record<string, unknown> = {}) =>
-  json({ data: { label: "Chief of staff", usage: 0, usage_daily: 0, usage_weekly: 0, usage_monthly: 0, byok_usage_monthly: 0, limit: null, limit_remaining: null, limit_reset: null, ...data } });
+  json({ data: { label: "Chief of staff", is_free_tier: false, organization_id: null, usage: 0, usage_daily: 0, usage_weekly: 0, usage_monthly: 0, byok_usage_monthly: 0, limit: null, limit_remaining: null, limit_reset: null, ...data } });
 
 export const MODELS = models;
 export const ISSUED_KEY = "test-issued-openrouter-key-not-real";

@@ -12,7 +12,7 @@
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
 // - the user has set no monthly budget for the provider (`no_budget`), except
-//   for a Connect test call (`testCall`), which runs before budgets are set;
+//   for a test call (`testCall`), which runs before budgets are set;
 // - the user's spend at the provider since the 1st has reached the budget
 //   (`budget_spent`), until the 1st of next month;
 // - the user has not connected the provider (`not_connected`), or the
@@ -315,7 +315,7 @@ export async function callModel(
   return attempt(db, plugins, call, call.fallback, reason, now);
 }
 
-// The Connect test call (src/providers/check.ts): one call on `choice`, with
+// A model's test call (Test with <model>?, src/models/add.ts): one call on `choice`, with
 // every check above except that no budget need be set yet (budgets come after
 // providers on the setup checklist); a budget set and spent still stops it.
 // Its ledger row's task is `test_call`, and it has no fallback.

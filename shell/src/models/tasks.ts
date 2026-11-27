@@ -18,8 +18,8 @@
 // OpenRouter model), each model's strength (tier) worked out from its price
 // (tiers.ts, T11). No task is proposed the Strongest tier; where
 // the user has no model of the task's own strength, the other non-Strongest
-// tier is proposed instead. A free model ($0 in and out, such as
-// OpenRouter's `:free` ones: rate-limited, and the provider may log prompts)
+// tier is proposed instead. A free model (prices/openrouter.ts
+// isTrulyFreeTextModel: rate-limited, and the provider may log prompts)
 // is never proposed, nor used as the one model: a task uses it only once the
 // user chooses it, with Change or, for every task with no model and no
 // proposal (all of a $0 account's passed models are free), with one tap
@@ -42,8 +42,8 @@ import { currentSnapshot, readSnapshotRows } from "../prices/store";
 import { modelTier, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import type { ModelRequest, PluginRegistry } from "../proxy/plugin";
-import { callModel, modelPrices, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
-import { isFree, readUserModels, type UserModel } from "./add";
+import { callModel, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
+import { readFreeModels, readUserModels, type UserModel } from "./add";
 
 export interface Task {
   id: string;
@@ -66,7 +66,7 @@ export const TASKS: readonly Task[] = [
 export const taskById = (id: string): Task | undefined => TASKS.find((t) => t.id === id);
 
 // One of the user's passed models, with its strength and input price, and
-// whether it is free ($0 in and out).
+// whether it is free (prices/openrouter.ts isTrulyFreeTextModel).
 export interface Offered extends UserModel {
   tier?: Tier;
   inputUsd?: number;
@@ -97,6 +97,7 @@ export async function readOffered(db: D1Database, userId: string): Promise<Offer
   const models = await readUserModels(db, userId);
   const snapshot = models.length ? await currentSnapshot(db) : undefined;
   const rows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
+  const free = models.length ? await readFreeModels(db) : new Set<string>();
   return models.map((m) => {
     const own = rows.filter((r) => r.provider === m.provider && r.model === m.model);
     const dearest = (kind: "input" | "output"): number | undefined => {
@@ -104,7 +105,7 @@ export async function readOffered(db: D1Database, userId: string): Promise<Offer
       return at.length ? Math.max(...at) : undefined;
     };
     const inputUsd = dearest("input");
-    return { ...m, tier: modelTier(m.provider, own), inputUsd, free: isFree({ input: inputUsd, output: dearest("output") }) };
+    return { ...m, tier: modelTier(m.provider, own), inputUsd, free: free.has(m.model) };
   });
 }
 
@@ -188,10 +189,7 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
 // and the task's one saved choice only.
 export async function routeTask(db: D1Database, userId: string, task: string): Promise<Route | undefined> {
   const models = await readUserModels(db, userId);
-  if (models.length === 1) {
-    const { short } = await modelPrices(db, models[0]!);
-    if (!isFree({ input: short.input?.usdPerMTok, output: short.output?.usdPerMTok })) return { main: models[0]! };
-  }
+  if (models.length === 1 && !(await readFreeModels(db)).has(models[0]!.model)) return { main: models[0]! };
   const r = await db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
   return r ? savedRoute(r, new Map(models.map((m) => [modelKey(m), m]))) : undefined;
 }

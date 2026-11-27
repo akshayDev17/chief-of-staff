@@ -2,14 +2,14 @@
 // 2026-11-27: OpenRouter's public list "can include models this user's
 // settings would refuse"). Read with the user's own key from OpenRouter's
 // /models/user, which honours the account's provider preferences, privacy
-// settings and guardrails, by every Connect check (which picks its test model
-// from it) and on Refresh model list.
+// settings and guardrails, back from the provider's consent page
+// (providers/check.ts) and on Refresh model list.
 // The model list still shows every model OpenRouter lists; one the account
 // leaves out cannot be chosen, and says why.
 //
 //   readAccountList(db, userId, provider) -> AccountList | undefined
 //   refreshAccountList(db, plugins, userId, provider, now) -> AccountList | { problem }
-//   saveAccountList(db, userId, provider, ids, now)   what a Connect check read
+//   saveAccountList(db, userId, provider, ids, now)   what a read returned
 //   deleteAccountList(db, userId, provider)   on Disconnect
 
 import type { Provider } from "../prices/types";
@@ -35,16 +35,17 @@ export async function refreshAccountList(
   userId: string,
   provider: Provider,
   now: Date,
-): Promise<AccountList | { problem: string }> {
+): Promise<AccountList | { problem: string; details?: string }> {
   const plugin = plugins[provider];
   const connection = await readConnection(db, userId, provider);
   if (!plugin || !connection) return { problem: "That provider is not connected." };
   let ids: string[];
   try {
-    ids = (await plugin.connect.readAccountModels(await plugin.mintCredential(connection, { userId }))).map((m) => m.id);
+    ids = await plugin.connect.readAccountModels(await plugin.mintCredential(connection, { userId }));
   } catch (error) {
     const said = error instanceof ProviderRefusal ? ` (${error.refusal.status} ${error.refusal.errorName}${error.refusal.message ? `: ${error.refusal.message}` : ""})` : "";
-    return { problem: `${plugin.connect.guide.short} did not give your account's model list${said}; the list below is its public one.` };
+    const short = plugin.connect.guide.short;
+    return { problem: `Showing ${short}'s public list.`, details: `${short} did not give your account's model list${said}; the list below is its public one.` };
   }
   return saveAccountList(db, userId, provider, ids, now);
 }

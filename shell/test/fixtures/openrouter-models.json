@@ -549,6 +549,42 @@
    ],
    "expiration_date": "2026-11-30",
    "context_length": 131072
+  },
+  {
+   "id": "google/lyria-3-clip-preview",
+   "name": "Google: Lyria 3 Clip Preview",
+   "description": "30 second duration clips are priced at $0.04 per clip. Lyria 3 is Google's family of music generation models, available through the Gemini API. With Lyria 3, you can generate...",
+   "architecture": {
+    "modality": "text+image->text+audio",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text",
+     "audio"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 65536,
+    "is_moderated": false
+   },
+   "supported_parameters": [
+    "max_tokens",
+    "response_format",
+    "seed",
+    "temperature",
+    "top_p"
+   ],
+   "expiration_date": null,
+   "context_length": 1048576
   }
  ]
 }

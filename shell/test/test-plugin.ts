@@ -6,7 +6,7 @@ import { env } from "cloudflare:test";
 import { ConnectProblem, ProviderRefusal, type ConnectionFields, type ProviderPlugin, type ProviderReply, type Usage } from "../src/proxy/plugin";
 import { vaultSecrets, type SecretStore } from "../src/providers/secrets";
 import { writeSnapshot } from "../src/prices/store";
-import type { OpenRouterCatalog } from "../src/prices/openrouter";
+import { CATALOG_VERSION, type OpenRouterCatalog } from "../src/prices/openrouter";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
 
@@ -28,7 +28,7 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
     priceSource: ["openrouter-models"],
     connect: {
       guide: {
-        name: `Test ${provider}`, short: provider, steps: [], checkedOn: "2026-11-27", pages: [],
+        name: `Test ${provider}`, short: provider, steps: [], about: [], checkedOn: "2026-11-27", pages: [],
         revoke: "delete the test key.", revokeLinks: () => [{ label: "Your keys", href: "https://example.com/keys" }],
       },
       start: async ({ callbackUrl, consentState, creditLimitUsd }) => ({
@@ -39,12 +39,8 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
         if (returned.get("code") !== `code-for-${verifier}`) throw new ConnectProblem("That authorization was refused.");
         return { fields: { method: "oauth_pkce", key_hash: "a".repeat(64) }, secret: `issued-key-${verifier}` };
       },
-      // The account's live list: the seeded models at their seeded prices.
-      readAccountModels: async () => [
-        { id: "test-luna", inputUsd: 0.1, outputUsd: 0.5, text: true, moderated: false },
-        { id: "test-mini", inputUsd: 0.25, outputUsd: 1, text: true, moderated: false },
-        { id: "test-sonnet", inputUsd: 3, outputUsd: 15, text: true, moderated: false },
-      ],
+      // The account's live list: the seeded models.
+      readAccountModels: async () => ["test-luna", "test-mini", "test-sonnet"],
       canCall: (m) => !opts.cannotCall?.includes(m),
       notCallableReason: () => "the test plug-in cannot call it",
       replyModel: (body) => {
@@ -98,6 +94,7 @@ export const row = (model: string, tokenKind: PriceRow["tokenKind"], usdPerMTok:
 // long-prompt 1-hour cache write; test-luna and test-mini list only input and
 // output.
 export const TEST_CATALOG: OpenRouterCatalog = {
+  version: CATALOG_VERSION,
   readAt: "2026-11-27T06:00:00.000Z",
   models: [
     { id: "openrouter/auto", name: "Auto router", blocked: "OpenRouter prices it by the model it picks for each call, so the budget stop has no price", tools: false },
