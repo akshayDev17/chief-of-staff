@@ -72,7 +72,9 @@ offers (`connect.listed`) is left out, unless the user already added it.
 **Bedrock.** The list comes from Bedrock's own model list
 (`src/providers/bedrock-catalog.ts`), which the app's own AWS role reads once
 a day with the price table (ListFoundationModels and ListInferenceProfiles,
-the owner's AWS step) and which is stored with the price snapshot. Each AWS
+the owner's AWS step), and again on **Refresh model list** (once a minute per
+user, `src/providers/bedrock-account.ts`), and which is stored with the price
+snapshot. Each AWS
 price-list name is matched to a Bedrock model ID by a rule (the same name or
 ID as Bedrock's list gives, ignoring case) or by a reviewed entry in
 `src/providers/bedrock-models.json`; `test/bedrock-catalog.test.ts` checks

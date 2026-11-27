@@ -108,9 +108,10 @@ export function setupValues(i) {
       },
       // The next hop: each user's own model-caller role, which in turn trusts
       // this role only with that user's external ID. And Bedrock's own model
-      // list, read once a day for Add a model (src/providers/bedrock-catalog.ts,
-      // T17): ListFoundationModels has no resource type, so it takes "*";
-      // nothing here can call a model.
+      // list, read once a day and on Refresh model list for the Connect
+      // screen's model list (src/providers/bedrock-catalog.ts, T17):
+      // ListFoundationModels has no resource type, so it takes "*"; nothing
+      // here can call a model.
       appRolePermissionPolicy: {
         Version: "2012-10-17",
         Statement: [
