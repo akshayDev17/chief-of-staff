@@ -1,7 +1,8 @@
 // A fetch that answers OpenRouter's addresses with no network: its public
 // model list from the saved 2026-11-27 entries in fixtures/, the per-account
-// list, the PKCE code exchange and Chat Completions, each overridable. Every
-// request it saw is kept, so a test can check what was sent.
+// list, the PKCE code exchange, the current key's figures and Chat
+// Completions, each overridable. Every request it saw is kept, so a test can
+// check what was sent.
 import models from "./fixtures/openrouter-models.json";
 
 export interface Sent {
@@ -11,7 +12,11 @@ export interface Sent {
   body: unknown;
 }
 
-export type Overrides = Partial<Record<"models" | "userModels" | "keys" | "chat", (sent: Sent) => Response | Promise<Response>>>;
+export type Overrides = Partial<Record<"models" | "userModels" | "keys" | "chat" | "currentKey", (sent: Sent) => Response | Promise<Response>>>;
+
+// GET /api/v1/key's reply for the issued key: its figures this month.
+export const keyReply = (data: Record<string, unknown> = {}) =>
+  json({ data: { label: "Chief of staff", usage: 0, usage_daily: 0, usage_weekly: 0, usage_monthly: 0, byok_usage_monthly: 0, limit: null, limit_remaining: null, limit_reset: null, ...data } });
 
 export const MODELS = models;
 export const ISSUED_KEY = "test-issued-openrouter-key-not-real";
@@ -48,6 +53,11 @@ export function fakeFetch(overrides: Overrides = {}): typeof fetch & { sent: Sen
       return json({ data: models.data.filter((m) => m.id !== "anthropic/claude-sonnet-5.5") });
     }
     if (url.href === "https://openrouter.ai/api/v1/auth/keys") return overrides.keys ? overrides.keys(s) : json({ key: ISSUED_KEY, user_id: "user_test" });
+    if (url.href === "https://openrouter.ai/api/v1/key") {
+      if (overrides.currentKey) return overrides.currentKey(s);
+      if (s.headers.authorization !== `Bearer ${ISSUED_KEY}`) return json({ error: { code: 401, message: "User not found." } }, 401);
+      return keyReply();
+    }
     if (url.href === "https://openrouter.ai/api/v1/chat/completions") return overrides.chat ? overrides.chat(s) : chatReply({ model: (body as { model?: string }).model });
     return new Response("not found", { status: 404 });
   }) as typeof fetch & { sent: Sent[] };

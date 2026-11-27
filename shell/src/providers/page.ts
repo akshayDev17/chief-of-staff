@@ -24,7 +24,8 @@
 // ([Open that page] [Try again], and [Ask Admin for help] on friend screens
 // only). There is no table of failure messages: the plug-in's mapping picks
 // the wording. The reply is shown only to the user who made the call.
-// The Usage page, not built yet, is named but not linked.
+// The Usage page, not built yet, is named but not linked. Once a budget is
+// set, the budget bar (src/proxy/budget-bar.ts) sits under it.
 //
 // Below a passed Connect, the provider's model list (models-panel.ts): every
 // model it lists, chosen and tested on this screen, and Test all models. The
@@ -39,6 +40,8 @@ import { refreshPrices } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
+import { BAR_CSS, BAR_JS, readKeyFigure, renderBudgetBar, type KeyFigure } from "../proxy/budget-bar";
+import { monthSpend } from "../proxy/ledger";
 import { readConnection } from "../proxy/connections";
 import type { ConnectionFields, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 
@@ -55,6 +58,9 @@ export interface ProviderPanel {
   connection?: ConnectionFields;
   check?: Check;
   monthlyBudget?: number;
+  // The month's spend for the budget bar, once connected with a budget set:
+  // the app's own count and OpenRouter's figure for the key.
+  spend?: { ledgerUsd: number; key: KeyFigure };
   // The selected panel's model list, once its Connect has passed.
   models?: {
     rows: OfferRow[];
@@ -171,7 +177,16 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
 <p class="small">The app deletes the key from your vault and its models stop answering for you at once. The key itself stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p>
 <div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
-  const budget = `<p class="small"><strong>Monthly budget:</strong> ${panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet"} · <a href="${BUDGETS_PATH}">Budgets</a></p>`;
+  const budget = `<p class="small"><strong>Monthly budget:</strong> ${panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet"} · <a href="${BUDGETS_PATH}">Budgets</a></p>${
+    panel.monthlyBudget && panel.spend
+      ? renderBudgetBar({
+          budgetUsd: panel.monthlyBudget,
+          ledgerUsd: panel.spend.ledgerUsd,
+          key: panel.spend.key,
+          keyPageHref: connection.key_hash && /^[0-9a-f]{64}$/.test(connection.key_hash) ? `https://openrouter.ai/keys/${connection.key_hash}` : undefined,
+        })
+      : ""
+  }`;
   const note =
     input.viewer === "friend"
       ? `<p class="small muted" style="margin-top:6px">Only you see the provider's reply. “Ask Admin for help” sends only this item's name and the plain reason.</p>`
@@ -219,7 +234,7 @@ export function renderProvidersPage(input: ProvidersPageInput): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${refresh}
 <title>Models · Providers · Chief of staff</title>
-<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${TIER_VARS}${MODELS_CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${TIER_VARS}${MODELS_CSS}${BAR_CSS}</style>
 </head>
 <body>
 <main class="screen">
@@ -236,7 +251,7 @@ ${tabs}
 </section>
 <div class="row" style="margin-top:12px"><a class="btn" href="${TASK_MODELS_PATH}">Next: the model for each task</a></div>
 </main>
-<script>${MODELS_JS}
+<script>${MODELS_JS}${BAR_JS}
 </script>
 </body>
 </html>`;
@@ -293,6 +308,7 @@ async function pageInput(
   viewer: Viewer,
   url: URL,
   now: Date,
+  reader: { secrets: SecretStore; fetcher?: typeof fetch },
   extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {},
 ): Promise<ProvidersPageInput> {
   const registered = PROVIDERS.filter((p) => plugins[p]);
@@ -308,6 +324,10 @@ async function pageInput(
   const selected = extra.selected ?? registered.find((p) => p === asked) ?? registered[0]!;
   // Only the selected panel's model list is read: it prices every model.
   const shown: ProviderPanel | undefined = panels.find((p) => p.plugin.provider === selected);
+  // OpenRouter's figure is read only for the panel shown, once connected with a budget.
+  if (shown?.connection && shown.monthlyBudget && shown.check?.state !== "revoked") {
+    shown.spend = { ledgerUsd: await monthSpend(db, userId, selected, now), key: await readKeyFigure(reader.secrets, userId, now, reader.fetcher) };
+  }
   if (shown?.connection && (shown.check?.state === "passed" || extra.outcome)) {
     const rows = await listOffer(db, plugins, userId, selected);
     shown.models = {
@@ -370,7 +390,7 @@ export async function handleProviders(
   const url = new URL(request.url);
   const [, providerPart, verb] = ROUTE.exec(url.pathname) ?? [];
   const page = async (extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
-    html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
+    html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, { secrets, fetcher: input.fetcher }, extra)), status);
   const back = (provider: string, extra = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}`, 303);
   // The price table and the provider's model list, read now when there is
   // none yet or it is over a minute old.

@@ -49,6 +49,18 @@ export const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completion
 // 2026-11-27; data/cos-anthropic-owner-setup/report.md section 5). It lists
 // text-output models by default.
 export const OPENROUTER_USER_MODELS_URL = "https://openrouter.ai/api/v1/models/user?output_modalities=text";
+// The current key's own figures, read with that key (no management key):
+// `usage_monthly` "OpenRouter credit usage (in USD) for the current UTC
+// month", `byok_usage_monthly` "External BYOK usage (in USD)" for the same
+// month, `limit` "Spending limit for the API key in USD" (null: none),
+// `limit_remaining` and `limit_reset`
+// (https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key.md,
+// read 2026-11-27). No OpenRouter page says how soon a call shows in these
+// figures, so the budget bar never takes them as final (src/proxy/budget-bar.ts).
+export const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
+// Where a user sees their usage, filterable "by model, provider and api key"
+// (https://openrouter.ai/docs/faq, read 2026-11-27).
+export const OPENROUTER_ACTIVITY_URL = "https://openrouter.ai/activity";
 export const KEY_LABEL = "Chief of staff";
 export const APP_TITLE = "Chief of staff";
 
@@ -138,6 +150,55 @@ async function readBody(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+// What the current key reports for this UTC month, in USD.
+export interface KeyUsage {
+  // `usage_monthly` plus `byok_usage_monthly`: what the user pays for the
+  // key's calls this month, counted the way the ledger counts them
+  // (usageFromReply adds the upstream cost of a call sent through the user's
+  // own provider key).
+  monthlyUsd: number;
+  // The key's own credit limit on OpenRouter and what is left of it; absent
+  // when the key has none.
+  limitUsd?: number;
+  limitRemainingUsd?: number;
+  // How often OpenRouter resets the limit ("monthly", "weekly"…); absent when never.
+  limitReset?: string;
+}
+
+// The key's figures from GET /api/v1/key's body; undefined when it holds no
+// month's usage.
+export function keyUsageFromBody(body: unknown): KeyUsage | undefined {
+  const d = (body as { data?: Record<string, unknown> } | null)?.data;
+  if (!d || typeof d !== "object") return undefined;
+  const monthly = usd(d.usage_monthly);
+  if (monthly === undefined) return undefined;
+  const limit = usd(d.limit);
+  const remaining = usd(d.limit_remaining);
+  return {
+    monthlyUsd: monthly + (usd(d.byok_usage_monthly) ?? 0),
+    ...(limit !== undefined ? { limitUsd: limit, ...(remaining !== undefined ? { limitRemainingUsd: remaining } : {}) } : {}),
+    ...(limit !== undefined && typeof d.limit_reset === "string" && d.limit_reset ? { limitReset: d.limit_reset } : {}),
+  };
+}
+
+// Reads the key's own figures from OpenRouter with the key itself, server
+// side; the key never leaves the Worker. Throws ProviderRefusal when
+// OpenRouter refuses or sends no figure.
+export async function readKeyUsage(key: string, fetcher: typeof fetch = fetch): Promise<KeyUsage> {
+  const response = await fetcher(OPENROUTER_KEY_URL, {
+    headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+    signal: AbortSignal.timeout(5_000),
+  });
+  const body = await readBody(response);
+  if (!response.ok) {
+    const e = errorFromBody(response.status, body);
+    throw new ProviderRefusal({ step: "key", status: response.status, errorName: e.name, message: e.message });
+  }
+  const usage = keyUsageFromBody(body);
+  if (!usage) throw new ProviderRefusal({ step: "key", status: response.status, errorName: "no_usage", message: "the reply held no monthly usage" });
+  return usage;
 }
 
 const link = (label: string, href: string): Link => ({ label, href });

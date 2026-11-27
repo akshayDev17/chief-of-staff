@@ -91,6 +91,32 @@ price (`user_models`, written by T17) and the design's tokens per application
 applications a day the user plans (5 until they say), marked "estimate" with
 the date its prices were read. The user accepts it or types their own.
 
+### The budget bar
+
+Once the budget is set, Budgets and the Connect panel on Providers show the
+month's spend as one bar in three parts (`budget-bar.ts`; AKS-136, reworked
+for OpenRouter):
+
+- **Solid, spent as OpenRouter reports it**: the app's key's own figure for
+  the current UTC month, `usage_monthly` plus `byok_usage_monthly` from
+  `GET https://openrouter.ai/api/v1/key`, read on each page view, server side,
+  with the key from the user's vault. The key never reaches the browser.
+- **Striped, counted by the app but not in OpenRouter's figure yet**: the
+  ledger's count this month beyond that figure. OpenRouter's docs (read
+  2026-11-27) say nothing about how soon a call shows in the key's figures, so
+  the stripe stays. It is usually $0. It also holds calls made with an earlier
+  key before the user connected again.
+- **Empty, budget left**: the budget less the larger of the two counts.
+
+Under the bar the page shows the app's own count, which is what stops calls,
+and any gap between that count and OpenRouter's figure. When the key has its
+own credit limit on OpenRouter, the page shows that limit and what is left of
+it. The note is a warning when the key's limit would refuse calls before the
+budget runs out. When OpenRouter's figure cannot be read, the page says why and
+the bar shows the app's own count. Hovering over, tapping or tabbing to a part
+of the bar labels it, with a link to OpenRouter's Activity page
+(https://openrouter.ai/activity).
+
 ## Connections and the vault
 
 `connections.ts` is the only code that writes (the Connect check,
