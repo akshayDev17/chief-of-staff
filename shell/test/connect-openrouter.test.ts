@@ -236,8 +236,7 @@ describe("Connect OpenRouter", () => {
   });
 
   it("Disconnect deletes the key from the vault, the record and the check, and opens that exact key's page on OpenRouter", async () => {
-    // The owner renamed the key on OpenRouter's page: the dialog names it as saved there.
-    await connect({ currentKey: () => keyReply({ label: "Laptop key" }) });
+    await connect();
     const hash = await sha256Hex(ISSUED_KEY);
     const keyPage = `https://openrouter.ai/keys/${hash}`;
     const confirm = await (await get("?provider=openrouter&disconnect=1")).text();
@@ -245,7 +244,6 @@ describe("Connect OpenRouter", () => {
     // One line, with a button to the key's own page; the key itself never reaches the page.
     expect(visibleLines(dialog)).toEqual(["Disconnect OpenRouter?", "The app deletes the key from your vault.", "Also delete this key on OpenRouter.", "Open its page", "Cancel", "Disconnect"]);
     expect(dialog).toContain(`<a class="btn small" href="${keyPage}" target="_blank" rel="noopener noreferrer">Open its page</a>`);
-    expect(dialog).toContain("This key is “Laptop key” on OpenRouter.");
     expect(dialog).toContain("OpenRouter&#39;s delete-a-key API takes only your own management key");
     expect(confirm).not.toContain(ISSUED_KEY);
     for (const line of visibleLines(dialog)) expect(words(line), line).toBeLessThanOrEqual(12);
@@ -264,14 +262,15 @@ describe("Connect OpenRouter", () => {
     expect((await env.DB.prepare("SELECT count(*) AS n FROM vault_items").first<{ n: number }>())!.n).toBe(0);
   });
 
-  it("names no key label when OpenRouter's reply cannot be read or holds none, and still opens the key's page", async () => {
-    for (const currentKey of [() => new Response(null, { status: 500 }), () => keyReply({ label: "" })]) {
-      await connect({ currentKey });
-      const confirm = await (await get("?provider=openrouter&disconnect=1")).text();
-      expect(confirm).not.toContain("This key is");
-      expect(confirm).not.toContain("Key on OpenRouter:");
-      expect(confirm).toContain(`href="https://openrouter.ai/keys/${await sha256Hex(ISSUED_KEY)}"`);
-      await post("/openrouter/disconnect");
+  it("never shows any part of the issued key: connected, at Disconnect's confirmation, or after it", async () => {
+    // GET /api/v1/key can label the key with its masked form.
+    const masked = `${ISSUED_KEY.slice(0, 12)}...${ISSUED_KEY.slice(-4)}`;
+    await connect({ currentKey: () => keyReply({ label: masked }) });
+    const pages = [await (await get("?provider=openrouter")).text(), await (await get("?provider=openrouter&disconnect=1")).text()];
+    const gone = await post("/openrouter/disconnect");
+    pages.push(await (await handle(new Request(gone.headers.get("location")!))).text());
+    for (const html of pages) {
+      for (const part of [ISSUED_KEY, ISSUED_KEY.slice(0, 12), ISSUED_KEY.slice(-4), masked]) expect(html).not.toContain(part);
     }
   });
 
@@ -281,18 +280,14 @@ describe("Connect OpenRouter", () => {
     expect(before).toContain("OpenRouter&#39;s flow has no way to reuse one");
     await connect();
     await post("/openrouter/disconnect");
-    // OpenRouter saves the prefilled label on the key it mints.
-    let saved = "";
-    fetcher = fakeFetch({ currentKey: () => keyReply({ label: saved }) });
+    fetcher = fakeFetch();
     const later = new Date("2026-11-28T09:30:00Z");
     const start = await post("/openrouter/connect", {}, { now: later });
     const auth = new URL(start.headers.get("location")!);
-    saved = auth.searchParams.get("key_label")!;
-    expect(saved).toBe("Chief of staff · 2026-11-28 09:30 UTC");
-    await get(`/openrouter/consented?code=code-2&state=${auth.searchParams.get("state")}`, { now: later });
-    const confirm = await (await get("?provider=openrouter&disconnect=1", { now: later })).text();
-    expect(confirm).toContain("This key is “Chief of staff · 2026-11-28 09:30 UTC” on OpenRouter.");
-    expect(confirm).toContain("Key on OpenRouter: “Chief of staff · 2026-11-28 09:30 UTC”");
+    expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-28 09:30 UTC");
+    const back = await get(`/openrouter/consented?code=code-2&state=${auth.searchParams.get("state")}`, { now: later });
+    expect(back.status).toBe(303);
+    expect(await readConnection(env.DB, userId, "openrouter")).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY) });
   });
 
   it("Refresh model list reads OpenRouter's list and the account's again, at most once a minute", async () => {

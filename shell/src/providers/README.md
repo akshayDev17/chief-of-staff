@@ -23,9 +23,7 @@ read 2026-11-27):
    (`<APP_ORIGIN>/chief-of-staff/models/setup/providers/openrouter/consented`),
    the S256 `code_challenge`, `state`, `key_label` and `limit`. The label is
    dated, `Chief of staff · 2026-11-27 14:05 UTC` (UTC, when Connect was
-   tapped), because every Authorize mints a new key (below). The app does not
-   store it: the user may change it on OpenRouter's page, so the screen reads
-   the saved label live from `GET /api/v1/key`'s `label`. `limit` is
+   tapped), because every Authorize mints a new key (below). `limit` is
    the user's monthly OpenRouter budget in the app, or $10 before one is set.
    It is the key's own credit limit on OpenRouter, separate from the app's
    monthly budget: the user can change it, or give it a reset period (say

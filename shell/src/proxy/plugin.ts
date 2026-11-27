@@ -105,8 +105,6 @@ export interface Failure {
 export interface AccountInfo {
   // The account has never bought credit (OpenRouter's `is_free_tier`).
   freeTier: boolean;
-  // The key's label on the provider, as saved there.
-  label?: string;
   // Who owns the key: the user's own account, or an organization (its ID).
   organizationId?: string;
   // The workspace the key spends in, when the provider names one.

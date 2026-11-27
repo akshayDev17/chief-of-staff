@@ -239,7 +239,6 @@ const FREE_TERMS_LINKS: Link[] = [
 // "Get total credits purchased and used for the authenticated user.
 // [Management key] required", https://openrouter.ai/docs/api-reference/get-credits,
 // read 2026-11-27, so the app cannot read the balance). The key reports
-// `label`, as saved on OpenRouter (the user may change the prefilled one);
 // `is_free_tier`, "Whether the user has paid for credits before";
 // `organization_id`, "The ID of the organization that owns this API key, or
 // null when an individual account owns it"; `workspace_id`, "The ID of the
@@ -263,7 +262,6 @@ export function accountOf(body: unknown): AccountInfo | undefined {
   const id = (v: unknown) => (typeof v === "string" && v ? v : undefined);
   return {
     freeTier: d.is_free_tier,
-    ...(id(d.label) ? { label: id(d.label) } : {}),
     ...(id(d.organization_id) ? { organizationId: id(d.organization_id) } : {}),
     ...(id(d.workspace_id) ? { workspaceId: id(d.workspace_id) } : {}),
     ...(limit !== undefined ? { limitUsd: limit, ...(remaining !== undefined ? { limitRemainingUsd: remaining } : {}) } : {}),

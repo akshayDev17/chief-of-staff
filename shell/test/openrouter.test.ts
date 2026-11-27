@@ -124,8 +124,8 @@ describe("the model list and plain reasons", () => {
   });
 
   it("reads the account behind the key: never bought credits, who owns the key, its limit and spend", async () => {
-    expect(accountOf({ data: { label: "Chief of staff · 2026-11-27 14:05 UTC", is_free_tier: true, organization_id: null, workspace_id: "ws-1", limit: 10, limit_remaining: 9.65, limit_reset: null, usage: 0.35, usage_monthly: 0.35, free_model_daily_requests: { used: 17, limit: 50, remaining: 33 } } })).toEqual({
-      freeTier: true, label: "Chief of staff · 2026-11-27 14:05 UTC", workspaceId: "ws-1", limitUsd: 10, limitRemainingUsd: 9.65, usageUsd: 0.35, usageMonthlyUsd: 0.35, freeDaily: { used: 17, limit: 50, remaining: 33 },
+    expect(accountOf({ data: { is_free_tier: true, organization_id: null, workspace_id: "ws-1", limit: 10, limit_remaining: 9.65, limit_reset: null, usage: 0.35, usage_monthly: 0.35, free_model_daily_requests: { used: 17, limit: 50, remaining: 33 } } })).toEqual({
+      freeTier: true, workspaceId: "ws-1", limitUsd: 10, limitRemainingUsd: 9.65, usageUsd: 0.35, usageMonthlyUsd: 0.35, freeDaily: { used: 17, limit: 50, remaining: 33 },
     });
     expect(accountOf({ data: { is_free_tier: false, organization_id: "org-1", limit: null, limit_remaining: null, usage: 2 } })).toEqual({ freeTier: false, organizationId: "org-1", usageUsd: 2 });
     expect(accountOf({ data: {} })).toBeUndefined();

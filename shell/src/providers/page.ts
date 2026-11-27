@@ -35,8 +35,7 @@
 // The app cannot delete the key on OpenRouter (openrouter.ts, "Revoking"), so
 // Disconnect's confirmation opens that exact key's page there, named by the
 // SHA-256 hash the record holds; the key itself never reaches the browser.
-// The page Disconnect returns to links the list of keys. The key's label is
-// the one OpenRouter saved, read live with the account.
+// The page Disconnect returns to links the list of keys.
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
 import { addModel, listOffer, readUserModels, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
@@ -191,13 +190,11 @@ ${alsoDeleteLine(plugin, undefined)}
   const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
   const revokeLinks = g.revokeLinks(connection).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
   const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
-  const keyLabel = panel.account && panel.account !== "unread" ? panel.account.label : undefined;
-  const label = keyLabel ? `<li>This key is “${esc(keyLabel)}” on ${esc(g.short)}.</li>` : "";
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
 <p class="small">The app deletes the key from your vault.</p>
 ${alsoDeleteLine(plugin, connection)}
-<details class="more"><summary>Details</summary><ul class="small about">${label}<li>Its models stop answering for you at once.</li><li>The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</li></ul></details>
+<details class="more"><summary>Details</summary><ul class="small about"><li>Its models stop answering for you at once.</li><li>The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</li></ul></details>
 <div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
   const passed = panel.passedModels ?? 0;
@@ -208,7 +205,7 @@ ${alsoDeleteLine(plugin, connection)}
       : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
   const budget = panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
   const keyDetails = `<details class="more"><summary>Key and budget</summary><ul class="small about">
-${keyLabel ? `<li>Key on ${esc(g.short)}: “${esc(keyLabel)}”</li>` : ""}<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
+<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
 <li>To revoke the key on ${esc(g.short)}: ${esc(g.revoke)} ${revokeLinks}</li>
 </ul></details>`;
   const note = input.viewer === "friend" ? `<p class="small muted">Only you see ${esc(g.short)}'s replies.</p>${passed ? "" : postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small")}` : "";
