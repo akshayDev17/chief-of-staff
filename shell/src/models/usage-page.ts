@@ -127,7 +127,11 @@ export const findText = (l: NamedLine): string => {
 };
 
 function row(l: NamedLine, table: "models" | "tasks"): string {
-  const id = table === "models" ? `<span class="u-sub mono">${esc(l.key)}${l.listed ? "" : " · not in OpenRouter's list now"}</span>` : "";
+  // The ID stays on one line, cut with an ellipsis on a phone; the full ID
+  // is its tooltip, and the search still matches all of it.
+  const id = table === "models"
+    ? `<span class="u-sub mono u-id" title="${esc(l.key)}">${esc(l.key)}</span>${l.listed ? "" : `<span class="u-sub">Not in OpenRouter's list now</span>`}`
+    : "";
   const free = l.free ? ` <span class="pill free">free</span>` : "";
   const refused = l.refused ? `${count(l.refused)} refused` : "";
   const phone = [`${count(l.calls)} call${l.calls === 1 ? "" : "s"}`, `${count(l.inputTokens + l.outputTokens)} tokens`, refused].filter(Boolean).join(" · ");
@@ -318,12 +322,14 @@ table.usage tr.empty td > * { vertical-align: middle; }
 .u-name { overflow-wrap: anywhere; }
 .u-sub { display: block; font-size: .8rem; color: var(--muted); font-weight: 400; overflow-wrap: anywhere; white-space: normal; }
 table.usage .num .u-sub { white-space: nowrap; }
+.u-id { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
 .u-phone { display: none; }
 @media (max-width: 639px) {
   table.usage .wide { display: none; }
   table.usage th:first-child { width: 62%; }
   table.usage .num .u-sub { white-space: normal; }
+  table.usage { table-layout: fixed; }
   .u-phone { display: block; }
 }
 /* Per model: the search above it, then its own scroll box. */

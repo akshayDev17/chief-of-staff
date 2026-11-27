@@ -139,8 +139,8 @@ describe("the page", () => {
     await setBudget(env.DB, userId, "openrouter", 30, "accepted", NOW);
     await seedMonth();
     const { html } = await page();
-    expect(html).toContain('<span class="u-name">Test Sonnet</span><span class="u-sub mono">test-sonnet</span><span class="u-sub u-phone">2 calls · 2,700 tokens</span>');
-    expect(html).toContain('<span class="u-name">Test Luna</span><span class="u-sub mono">test-luna</span><span class="u-sub u-phone">2 calls · 1,100 tokens · 1 refused</span>');
+    expect(html).toContain('<span class="u-name">Test Sonnet</span><span class="u-sub mono u-id" title="test-sonnet">test-sonnet</span><span class="u-sub u-phone">2 calls · 2,700 tokens</span>');
+    expect(html).toContain('<span class="u-name">Test Luna</span><span class="u-sub mono u-id" title="test-luna">test-luna</span><span class="u-sub u-phone">2 calls · 1,100 tokens · 1 refused</span>');
     // Luna's only cost is at list price: all of it estimated.
     expect(html).toMatch(/<span class="u-name">Test Luna<\/span>[\s\S]*?\$0\.10 <span class="pill warn">estimated<\/span>/);
     // Filling forms is part reported, part list price.
@@ -160,8 +160,8 @@ describe("the page", () => {
     await call({ model: "maker/model:free", costUsd: 0 });
     await call({ model: "test-sonnet", costUsd: 0.2 });
     const { html } = await page();
-    expect(html).toContain('<span class="u-name">Maker: Model (free)</span> <span class="pill free">free</span><span class="u-sub mono">maker/model:free</span><span class="u-sub u-phone">');
-    expect(html).toContain(`<span class="u-name">test-sonnet</span><span class="u-sub mono">test-sonnet · not in OpenRouter's list now</span><span class="u-sub u-phone">`);
+    expect(html).toContain('<span class="u-name">Maker: Model (free)</span> <span class="pill free">free</span><span class="u-sub mono u-id" title="maker/model:free">maker/model:free</span><span class="u-sub u-phone">');
+    expect(html).toContain(`<span class="u-name">test-sonnet</span><span class="u-sub mono u-id" title="test-sonnet">test-sonnet</span><span class="u-sub">Not in OpenRouter's list now</span><span class="u-sub u-phone">`);
   });
 
   it("lists both tables dearest first, ties by name, under plain headers", async () => {
