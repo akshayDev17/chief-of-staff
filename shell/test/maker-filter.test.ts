@@ -5,14 +5,12 @@
 // no request, no reload and the address unchanged; hidden without scripts.
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { MAKER_CHIPS_HTML, MAKER_FILTER_HTML, MAKER_FILTER_JS, makerKey, nameMakers } from "../src/models/maker-filter";
+import { MAKER_CHIPS_HTML, MAKER_FILTER_HTML, makerKey, nameMakers } from "../src/models/maker-filter";
 import { BOX_ROWS, handleUsage } from "../src/models/usage-page";
 import { PROVIDERS_PATH } from "../src/paths";
 import { CATALOG_VERSION } from "../src/prices/openrouter";
 import { writeSnapshot } from "../src/prices/store";
 import { handleProviders } from "../src/providers/page";
-import { PAGE_SCRIPT } from "../src/providers/page-script";
-import { NOSCRIPT_STYLE } from "../src/providers/page-style";
 import { writeConnection } from "../src/proxy/connections";
 import { writeLedgerRow } from "../src/proxy/ledger";
 import { fakeFetch, ISSUED_KEY, keyReply } from "./fake-sources";
@@ -48,9 +46,9 @@ describe("each maker's name", () => {
   });
 });
 
-// A month with `n` models from three makers, each called once, named by the live list.
-async function usagePage(n: number): Promise<string> {
-  const models = Array.from({ length: n }, (_, i) => ({ id: `maker-${i % 3}/model-${i}`, name: `Maker ${i % 3}: Model ${i}`, tools: true }));
+// A month with `n` models from three makers, then `more`, each called once, named by the live list.
+async function usagePage(n: number, more: Array<{ id: string; name: string }> = []): Promise<string> {
+  const models = [...Array.from({ length: n }, (_, i) => ({ id: `maker-${i % 3}/model-${i}`, name: `Maker ${i % 3}: Model ${i}` })), ...more].map((m) => ({ ...m, tools: true }));
   await writeSnapshot(env.DB, { takenAt: "2026-11-27T07:00:00Z", status: "good", results: [], rows: [], catalog: { version: CATALOG_VERSION, readAt: "2026-11-27T07:00:00.000Z", models } });
   await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: "b".repeat(64) }, NOW);
   await testSecrets().put(userId, "openrouter", "key", ISSUED_KEY, NOW);
@@ -61,7 +59,7 @@ async function usagePage(n: number): Promise<string> {
       costUsd: 0.01 * (i + 1), costSource: "reported", costedConservatively: {},
     });
   }
-  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), fetcher: fakeFetch({ currentKey: () => keyReply({ usage_monthly: 0 }) }) });
+  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), plugins: { openrouter: testPlugin() }, fetcher: fakeFetch({ currentKey: () => keyReply({ usage_monthly: 0 }) }) });
   return response.text();
 }
 
@@ -79,9 +77,6 @@ describe("the same filter on both pages", () => {
     // The provider's own router, named by none of its models: the plugin's own name.
     expect(html).toContain('data-id="openrouter/auto" data-maker="openrouter" data-maker-name="Test openrouter"');
     expect(html).toContain('data-id="test-luna" data-maker="test-luna" data-maker-name="test-luna"');
-    expect(PAGE_SCRIPT).toContain(MAKER_FILTER_JS);
-    // Without scripts: the toolbar and the chips stay hidden, every row shows.
-    expect(NOSCRIPT_STYLE).toContain(".toolbar, .chips { display: none !important; }");
   });
 
   it("sits beside Usage's Per model search over ten rows, hidden until the script runs, rows named as the live list names their makers", async () => {
@@ -89,11 +84,13 @@ describe("the same filter on both pages", () => {
     const find = html.match(/<div class="find" data-find="by-models" data-noun="models" hidden>[\s\S]*?\n<\/div>/)![0];
     expect(find).toContain(MAKER_FILTER_HTML);
     expect(find).toContain(MAKER_CHIPS_HTML);
-    expect(html).toContain('data-maker="maker-2" data-maker-name="Maker 2" data-calls="1" data-in="10" data-out="1" data-cost="0.12"');
-    // The Shown line waits hidden above the month's total.
-    expect(html).toMatch(/<tfoot><tr class="shown" data-shown hidden><th scope="row">Shown[\s\S]*?<\/tr><tr><th scope="row">This month/);
-    expect(html).toContain("<script>");
-    expect(html.match(/<script>[\s\S]*<\/script>/)![0]).toContain(MAKER_FILTER_JS);
+    expect(html).toContain('data-maker="maker-2" data-maker-name="Maker 2"');
+    expect(html).toContain('<tfoot><tr><th scope="row"><span data-foot-label>This month</span>');
+  });
+
+  it("names OpenRouter's own models on Usage as Providers does: by the plug-in's own name", async () => {
+    const html = await usagePage(BOX_ROWS + 2, [{ id: "openrouter/auto", name: "Auto Router" }]);
+    expect(html).toContain('data-maker="openrouter" data-maker-name="Test openrouter"');
   });
 
   it("is not on Usage for ten rows or fewer, with no search either", async () => {
@@ -245,29 +242,21 @@ describe("with the page's own controls", () => {
     expect(p.filter.classList.contains("open")).toBe(true);
   });
 
-  it("on Usage: while a search or the makers narrow the rows, a Shown line sums the rows shown above the month's total", () => {
-    const p = perModelBox(ROWS.map((r, i) => ({ ...r, calls: i + 1, cost: [1.25, 0.004, 0.37, 0, 0.001][i]! })));
-    expect(p.sub.hidden).toBe(true);
+  it("on Usage: while a search or the makers narrow the rows, the month's total reads “All models this month”", () => {
+    const p = perModelBox(ROWS);
+    expect(p.footLabel.textContent).toBe("This month");
     p.dispatch("click", p.toggle);
     p.tick("Anthropic");
-    expect(p.sub.hidden).toBe(false);
-    // Rows 0 and 2: 1 + 3 calls, $1.25 + $0.37.
-    expect([p.sums.calls!.textContent, p.sums.in!.textContent, p.sums.out!.textContent, p.sums.cost!.textContent, p.sums["calls-text"]!.textContent]).toEqual(["4", "200", "20", "$1.62", "4 calls"]);
-    // It sticks just above the month's total.
-    expect(p.sumCells.every((c) => (c as unknown as { style: { bottom: string } }).style.bottom === "40px")).toBe(true);
-    p.tick("Anthropic", false);
-    p.tick("Meta");
-    expect(p.sums.cost!.textContent).toBe("under $0.01");
-    expect(p.sums["calls-text"]!.textContent).toBe("9 calls");
-    p.type("muse");
-    expect(p.sums.cost!.textContent).toBe("under $0.01");
-    expect(p.sums["calls-text"]!.textContent).toBe("5 calls");
-    p.type("gpt");
-    expect(p.sub.hidden).toBe(true);
+    expect(p.footLabel.textContent).toBe("All models this month");
     p.dispatch("click", p.clear);
-    expect(p.sub.hidden).toBe(true);
+    expect(p.footLabel.textContent).toBe("This month");
     p.type("haiku");
-    expect([p.sub.hidden, p.sums.cost!.textContent, p.sums["calls-text"]!.textContent]).toEqual([false, "$0.37", "3 calls"]);
+    expect(p.footLabel.textContent).toBe("All models this month");
+    p.dispatch("keydown", p.input, "Escape");
+    expect(p.footLabel.textContent).toBe("This month");
+    p.type("gpt");
+    p.dispatch("click", p.x);
+    expect(p.footLabel.textContent).toBe("This month");
     expect(p.sent).toEqual([]);
   });
 

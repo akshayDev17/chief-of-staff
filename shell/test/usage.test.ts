@@ -55,7 +55,7 @@ async function seedMonth() {
 }
 
 const page = async (fetcher = fakeFetch({ currentKey: () => keyReply({ usage_monthly: 1.5 }) })) => {
-  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), fetcher });
+  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), plugins: { openrouter: testPlugin() }, fetcher });
   return { html: await response.text(), fetcher, response };
 };
 
@@ -212,7 +212,7 @@ describe("Per model's scroll box and search", () => {
     expect(models).toContain('placeholder="Search name, maker or ID"');
     expect(models).toContain('<p class="count" data-count aria-live="polite">12 models</p>');
     expect(models).toContain('<tr class="empty" data-no-match hidden>');
-    expect(models).toContain('<th scope="row">This month');
+    expect(models).toContain('<th scope="row"><span data-foot-label>This month</span>');
     // Still dearest first, and no sort control or form anywhere.
     expect(rowNames(html, "models")[0]).toBe("Maker 2: Model 11");
     expect(html.slice(html.indexOf("<body>"), html.indexOf("<script>"))).not.toMatch(/<form|class="th-sort|aria-sort/);
@@ -387,7 +387,7 @@ describe("the owner's live month: no budget, every call on an earlier key", () =
   }
   const livePage = async () => {
     const fetcher = fakeFetch({ currentKey: () => keyReply(live.keyReply) });
-    const response = await handleUsage({ db: env.DB, userId, now: NOW_LIVE, secrets: testSecrets(), fetcher });
+    const response = await handleUsage({ db: env.DB, userId, now: NOW_LIVE, secrets: testSecrets(), plugins: { openrouter: testPlugin() }, fetcher });
     return { html: await response.text(), fetcher };
   };
 

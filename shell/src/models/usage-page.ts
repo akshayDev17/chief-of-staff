@@ -14,7 +14,8 @@
 // GET /api/v1/key that Providers' account line reads.
 //
 // Each model is named as OpenRouter's live list names it, its ID beside it;
-// a model no longer in the list is shown by its ID. The app holds no list of
+// a model no longer in the list is shown by its ID. Its maker is named as on
+// Providers: OpenRouter's own models carry the plug-in's own name. The app holds no list of
 // its own. A model that list marks free (prices/openrouter.ts
 // isTrulyFreeTextModel) carries "free"; every other one is paid.
 //
@@ -28,10 +29,10 @@
 // bottom. Over ten rows, a search sits above it: any part of a model's name,
 // maker or ID, with a live count and a Clear when nothing matches; beside it,
 // the Maker filter Providers has (maker-filter.ts), which narrows the rows
-// with the search. While either narrows the rows, a "Shown" line above the
-// month's total sums the rows shown. Both run in the page only: no request,
-// no reload, the address unchanged. Without scripts both stay hidden and the box holds the
-// whole list. Per task
+// with the search. While either narrows the rows, the foot, still the
+// month's total, reads "All models this month". Both run in the page only:
+// no request, no reload, the address unchanged. Without scripts both stay
+// hidden and the box holds the whole list. Per task
 // is bounded by the app's tasks, about a dozen rows, so it stays a plain
 // table.
 //
@@ -58,7 +59,7 @@ import { BAR_CSS, BAR_JS, budgetText, money, readKeyFigure, renderBudgetBar, typ
 import { readBudget } from "../proxy/budgets";
 import { connectedAt, connectedProviders, readConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
-import type { ConnectionFields } from "../proxy/plugin";
+import type { ConnectionFields, PluginRegistry } from "../proxy/plugin";
 import { TEST_TASK } from "../proxy/proxy";
 import { MAKER_CHIPS_HTML, MAKER_FILTER_CSS, MAKER_FILTER_HTML, MAKER_FILTER_JS, makerKey, makerRowAttrs, nameMakers } from "./maker-filter";
 import { modelsSubtabs } from "./setup-tabs";
@@ -85,9 +86,10 @@ const sortDearestFirst = (lines: NamedLine[]): NamedLine[] => [...lines].sort((a
 const TASK_NAMES: Record<string, string> = { [TEST_TASK]: "Model tests", [TEST_ALL_TASK]: "Test all models" };
 export const taskName = (id: string): string => TASK_NAMES[id] ?? taskById(id)?.label ?? id;
 
-export function nameModels(lines: UsageLine[], catalog: OpenRouterCatalog | undefined): NamedLine[] {
+// `own`: the provider the lines are from, named as it names itself.
+export function nameModels(lines: UsageLine[], catalog: OpenRouterCatalog | undefined, own?: { key: string; name: string }): NamedLine[] {
   const listed = new Map((catalog?.models ?? []).map((m) => [m.id, m]));
-  const makers = nameMakers([...(catalog?.models ?? []), ...lines.map((l) => ({ id: l.key }))]);
+  const makers = nameMakers([...(catalog?.models ?? []), ...lines.map((l) => ({ id: l.key }))], own);
   return lines.map((l) => {
     const m = listed.get(l.key);
     return { ...l, name: m?.name || l.key, listed: Boolean(m), free: Boolean(m?.free), maker: makers.get(makerKey(l.key))! };
@@ -146,9 +148,7 @@ function row(l: NamedLine, table: "models" | "tasks"): string {
   const free = l.free ? ` <span class="pill free">free</span>` : "";
   const refused = l.refused ? `${count(l.refused)} refused` : "";
   const phone = [`${count(l.calls)} call${l.calls === 1 ? "" : "s"}`, `${count(l.inputTokens + l.outputTokens)} tokens`, refused].filter(Boolean).join(" · ");
-  // The row's own figures, for the Shown line's sums.
-  const figures = ` data-calls="${l.calls}" data-in="${l.inputTokens}" data-out="${l.outputTokens}" data-cost="${l.costUsd}"`;
-  const find = table === "models" ? ` data-find-text="${esc(findText(l))}"${makerRowAttrs(l.key, l.maker ?? makerKey(l.key))}${figures}` : "";
+  const find = table === "models" ? ` data-find-text="${esc(findText(l))}"${makerRowAttrs(l.key, l.maker ?? makerKey(l.key))}` : "";
   return `<tr${find}>
 <td><span class="u-name">${esc(l.name)}</span>${free}${id}<span class="u-sub u-phone">${phone}</span></td>
 <td class="num wide">${count(l.calls)}${refused ? `<span class="u-sub">${refused}</span>` : ""}</td>
@@ -185,12 +185,10 @@ function table(table: "models" | "tasks", lines: NamedLine[], input: UsagePageIn
     ? `\n<tr class="empty" data-no-match hidden><td colspan="5"><span>No model matches “<span data-said></span>”<span data-said-makers hidden> from the makers you picked</span>.</span> <button type="button" class="btn secondary small" data-clear>Clear</button></td></tr>`
     : "";
   const body = sorted.length ? sorted.map((l) => row(l, table)).join("\n") + noMatch : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
-  // While a search or the Maker filter narrows Per model: the rows shown, summed.
-  const shown = searchable
-    ? `<tr class="shown" data-shown hidden><th scope="row">Shown<span class="u-sub u-phone" data-sum="calls-text"></span></th><td class="num wide" data-sum="calls"></td><td class="num wide" data-sum="in"></td><td class="num wide" data-sum="out"></td><td class="num" data-sum="cost"></td></tr>`
-    : "";
+  // The search script names the foot "All models this month" while it narrows the rows.
+  const footLabel = searchable ? `<span data-foot-label>This month</span>` : "This month";
   const foot = sorted.length
-    ? `<tfoot>${shown}<tr><th scope="row">This month<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
+    ? `<tfoot><tr><th scope="row">${footLabel}<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
     : "";
   const frame = boxed
     ? `${searchable ? modelSearch(sorted.length) : ""}<div class="tbl-wrap tbl-box" tabindex="0" role="region" aria-label="Per model, scrolls">`
@@ -390,7 +388,6 @@ table.usage .num .u-sub { white-space: nowrap; }
 .tbl-box table.usage { border-collapse: separate; border-spacing: 0; }
 .tbl-box thead th { position: sticky; top: 0; z-index: 2; background: var(--card); }
 .tbl-box tfoot th, .tbl-box tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--card); }
-table.usage tfoot tr.shown th, table.usage tfoot tr.shown td { font-weight: 400; }
 .tbl-box th:last-child, .tbl-box td:last-child { padding-right: 8px; }
 .gap { margin: 8px 0 0; }
 .gap > p { margin: 0; }
@@ -409,7 +406,8 @@ table.usage tfoot tr.shown th, table.usage tfoot tr.shown td { font-weight: 400;
 // on each keystroke or choice. Every word typed must appear in the row's
 // name, maker or ID, and its maker must be one chosen, if any is. The search's
 // own clear and Escape clear the search; Clear under "No model matches"
-// clears the makers too. Nothing is sent and the address never changes.
+// clears the makers too. While either narrows the rows, the foot reads "All
+// models this month". Nothing is sent and the address never changes.
 export const FIND_JS = String.raw`
 (function () {
 ${MAKER_FILTER_JS}
@@ -418,37 +416,20 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-find]"), function 
   var box = table.parentNode, input = find.querySelector(".search input"), count = find.querySelector("[data-count]"), x = find.querySelector("[data-clear-q]");
   var rows = Array.prototype.slice.call(table.querySelectorAll("tr[data-find-text]"));
   var none = table.querySelector("tr[data-no-match]"), said = none.querySelector("[data-said]"), fromMakers = none.querySelector("[data-said-makers]"), noun = " " + find.getAttribute("data-noun");
-  var sub = table.querySelector("tr[data-shown]"), total = sub.nextElementSibling;
-  function n(x) { return x.toLocaleString("en-US"); }
-  function money(usd) { return usd > 0 && usd < 0.005 ? "under $0.01" : "$" + usd.toFixed(2); }
-  // The Shown line: the rows shown, summed; it sticks just above the month's total.
-  function showSums(on, hits) {
-    sub.hidden = !on;
-    if (!on) return;
-    var t = { calls: 0, in: 0, out: 0, cost: 0 };
-    hits.forEach(function (r) { ["calls", "in", "out", "cost"].forEach(function (k) { t[k] += Number(r.getAttribute("data-" + k)); }); });
-    var cell = function (k) { return sub.querySelector('[data-sum="' + k + '"]'); };
-    cell("calls").textContent = n(t.calls);
-    cell("in").textContent = n(t.in);
-    cell("out").textContent = n(t.out);
-    cell("cost").textContent = money(t.cost);
-    cell("calls-text").textContent = n(t.calls) + (t.calls === 1 ? " call" : " calls");
-    var h = total.offsetHeight + "px";
-    Array.prototype.forEach.call(sub.children, function (c) { c.style.bottom = h; });
-  }
+  var footLabel = table.querySelector("[data-foot-label]");
   var all = rows.length.toLocaleString("en-US");
   var makers = makerFilter({ scope: find, rows: function () { return rows; }, changed: apply });
   function apply() {
-    var q = input.value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean), picked = makers.chosen().length, hits = [];
+    var q = input.value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean), picked = makers.chosen().length, shown = 0;
     rows.forEach(function (r) {
       var text = r.getAttribute("data-find-text");
       var hit = makers.matches(r) && words.every(function (w) { return text.indexOf(w) !== -1; });
       r.hidden = !hit;
-      if (hit) hits.push(r);
+      if (hit) shown++;
     });
-    var shown = hits.length;
-    showSums((words.length > 0 || picked > 0) && shown > 0, hits);
-    count.textContent = words.length || picked ? shown.toLocaleString("en-US") + " of " + all + noun : all + noun;
+    var narrowed = words.length > 0 || picked > 0;
+    count.textContent = narrowed ? shown.toLocaleString("en-US") + " of " + all + noun : all + noun;
+    footLabel.textContent = narrowed ? "All models this month" : "This month";
     said.textContent = q || "your filter";
     fromMakers.hidden = !picked;
     none.hidden = shown > 0;
@@ -475,6 +456,7 @@ export interface UsageDeps {
   userId: string;
   now: Date;
   secrets: SecretStore;
+  plugins: PluginRegistry;
   fetcher?: typeof fetch;
 }
 
@@ -490,6 +472,8 @@ export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
     // Read whatever the budget: without a key in the vault it asks nothing.
     readKeyFigure(deps.secrets, userId, now, deps.fetcher),
   ]);
+  const plugin = deps.plugins.openrouter;
+  const own = plugin && { key: plugin.provider, name: plugin.connect.guide.name };
   return {
     now,
     connected: providers.includes("openrouter"),
@@ -498,7 +482,7 @@ export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
     connection,
     ...(keySince ? { keySince: keySince.toISOString() } : {}),
     usage,
-    models: nameModels(usage.byModel, catalog),
+    models: nameModels(usage.byModel, catalog, own),
     tasks: nameTasks(usage.byTask),
   };
 }

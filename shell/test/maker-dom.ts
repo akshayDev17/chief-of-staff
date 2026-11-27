@@ -1,6 +1,7 @@
 // Stand-ins for the two lists with the Maker filter (models/maker-filter.ts),
 // as their scripts see them: Models › Usage's Per model box (the search, the
-// filter, the count, the chips, the rows and the "No model matches" row), and
+// filter, the count, the chips, the rows, the "No model matches" row and the
+// foot's label), and
 // Models › Setup › Providers' model table (its search, the filter, its count,
 // the chips and the rows). Each element answers the exact
 // selectors the scripts ask it; an event goes to its target's own listeners,
@@ -117,8 +118,7 @@ function drive(script: string, document: Record<string, unknown>, m: ReturnType<
   return { ...m, sent, dispatch, listed, chipKeys, tick, removeChip, clearMakers, outside: node() };
 }
 
-// `cost` (USD) and `calls`: the row's figures, for Usage's Shown line.
-export interface ListRow { text: string; maker: string; makerName: string; calls?: number; cost?: number }
+export interface ListRow { text: string; maker: string; makerName: string }
 
 // Usage's Per model box for `rows`, its script run on it.
 export function perModelBox(rows: ListRow[]) {
@@ -131,14 +131,9 @@ export function perModelBox(rows: ListRow[]) {
   const scroller = node();
   scroller.scrollTop = 240;
   const table = Object.assign(node({}, scroller), { parentNode: scroller });
-  const trs = rows.map((r) => Object.assign(node({ "data-find-text": r.text, "data-maker": r.maker, "data-maker-name": r.makerName, "data-calls": String(r.calls ?? 1), "data-in": "100", "data-out": "10", "data-cost": String(r.cost ?? 0.01) }, table), { hidden: false }));
-  // The foot: the Shown line, then the month's total, 40px tall.
-  const sums = Object.fromEntries(["calls", "in", "out", "cost", "calls-text"].map((k) => [k, node({ "data-sum": k })]));
-  const sumCells = Object.values(sums).map((c) => Object.assign(c, { style: { bottom: "" } }));
-  const total = Object.assign(node(), { offsetHeight: 40 });
-  const sub = Object.assign(node({ "data-shown": "", hidden: "" }, table), { nextElementSibling: total, children: sumCells });
-  for (const [k, c] of Object.entries(sums)) sub.q[`[data-sum="${k}"]`] = c;
-  table.q["tr[data-shown]"] = sub;
+  const trs = rows.map((r) => Object.assign(node({ "data-find-text": r.text, "data-maker": r.maker, "data-maker-name": r.makerName }, table), { hidden: false }));
+  const footLabel = Object.assign(node({ "data-foot-label": "" }, table), { textContent: "This month" });
+  table.q["[data-foot-label]"] = footLabel;
   const none = node({ "data-no-match": "", hidden: "" }, table);
   const said = node({}, none);
   const fromMakers = node({ hidden: "" }, none);
@@ -149,7 +144,7 @@ export function perModelBox(rows: ListRow[]) {
   const d = drive(FIND_JS, { querySelectorAll: (q: string) => (q === "[data-find]" ? [find] : []), getElementById: (id: string) => (id === "by-models" ? table : null) }, m);
   const type = (v: string) => { input.value = v; d.dispatch("input", input); };
   const shown = () => trs.flatMap((r, i) => (r.hidden ? [] : [i]));
-  return { ...d, find, input, x, count, scroller, trs, none, said, fromMakers, clear, type, shown, sub, sums, sumCells };
+  return { ...d, find, input, x, count, scroller, trs, none, said, fromMakers, clear, type, shown, footLabel };
 }
 
 // Providers' model table for `rows`, its page script run on it.
