@@ -33,7 +33,7 @@
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
 import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
-import { nextAction, setupTabsLine } from "./setup-tabs";
+import { modelsSubtabs, nextAction, setupTabsLine } from "./setup-tabs";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
@@ -189,7 +189,7 @@ ${body}
 <body>
 <main class="screen">
 <h1>Models</h1>
-<div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
+${modelsSubtabs("setup")}
 ${setupTabsLine(TASK_MODELS_PATH)}
 <h2>Model for each task</h2>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}

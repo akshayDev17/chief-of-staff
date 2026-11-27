@@ -30,7 +30,7 @@
 // Visible copy is the action lines only; every explanation is collapsed
 // (the owner, 2026-11-27, of the old three-paragraph guide: "why not make it
 // even more verbose ... so that the users learn to read a book in
-// 30seconds?"). The Usage page, not built yet, is named but not linked.
+// 30seconds?").
 //
 // The app cannot delete the key on OpenRouter (openrouter.ts, "Revoking"), so
 // Disconnect's confirmation opens that exact key's page there, named by the
@@ -41,7 +41,7 @@ import { readAccountList, refreshAccountList } from "../models/account-list";
 import { addModel, listOffer, readUserModels, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
 import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
-import { nextAction, setupTabsLine } from "../models/setup-tabs";
+import { modelsSubtabs, nextAction, setupTabsLine } from "../models/setup-tabs";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { refreshPrices } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
@@ -243,7 +243,7 @@ ${refresh}
 <body${running ? ` data-reload-every="20" data-reload-to="${progress}"` : ""}>
 <main class="screen">
 <h1>Models</h1>
-<div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
+${modelsSubtabs("setup")}
 ${setupTabsLine(PROVIDERS_PATH)}
 <h2>Model provider</h2>
 <p>OpenRouter reaches every maker's models. You pay it for your own calls.</p>

@@ -21,7 +21,8 @@ file and version, so a component's CI job sees only its own changes:
   OpenRouter's own OAuth PKCE consent page issues the app a key tied to the
   user's own OpenRouter account, which goes straight into that user's vault
   (see `shell/src/providers/README.md`), with OpenRouter's model list on its
-  Connect screen, and the model for each task (see `shell/src/models/README.md`).
+  Connect screen, the model for each task, and Models › Usage, the month's
+  spend per model and per task (see `shell/src/models/README.md`).
   D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.

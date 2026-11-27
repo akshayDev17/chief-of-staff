@@ -4,6 +4,7 @@
 // 2026-11-27). Every screen's tab line and its Next button come from this one
 // list, so the two cannot drift apart.
 //
+//   modelsSubtabs(on) -> HTML      the Models tab's two sub-tabs, Setup and Usage
 //   setupTabsLine(path) -> HTML    the tab line, the current screen in bold
 //   nextAction(path, cls) -> HTML  "Next: <the next screen>"
 //
@@ -11,7 +12,7 @@
 // 6, on Job application settings), which is not built yet: its Next names it
 // and leads nowhere.
 
-import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH, USAGE_PATH } from "../paths";
 
 export interface SetupTab {
   // The tab's own label.
@@ -29,6 +30,15 @@ export const SETUP_TABS: readonly SetupTab[] = [
 
 // The setup checklist's item after the Models tab's (design-v3 11.6, item 6).
 export const AFTER_SETUP_TABS = { nextName: "Connect Gmail", built: false } as const;
+
+// The Models tab has exactly two sub-tabs (design-v3 10.1, the owner,
+// 2026-11-24: "within models, create 2 sub tabs: setup and usage."). Setup
+// opens its first screen.
+export function modelsSubtabs(on: "setup" | "usage"): string {
+  const tab = (id: "setup" | "usage", label: string, href: string) =>
+    id === on ? `<span class="on" aria-current="page">${label}</span>` : `<a href="${href}">${label}</a>`;
+  return `<nav class="subtabs" aria-label="Models">${tab("setup", "Setup", SETUP_TABS[0]!.href)}${tab("usage", "Usage", USAGE_PATH)}</nav>`;
+}
 
 export function setupTabsLine(path: string): string {
   return `<nav class="small setup-tabs" aria-label="Models setup" style="margin:-4px 0 10px">${SETUP_TABS.map((t) =>

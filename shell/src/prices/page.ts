@@ -243,7 +243,7 @@ ${alerts}
 
 // The shell's server-rendered pages share these styles.
 export const PAGE_CSS = `
-:root { color-scheme: light dark; --bg: #f7f5f0; --card: #ffffff; --text: #1d1b18; --muted: #6b665d; --line: #d9d4c9;
+:root { color-scheme: light dark; --bg: #f4f3f1; --card: #ffffff; --text: #1d1b18; --muted: #6b665d; --line: #d9d4c9;
   --accent: #2f5d8a; --warn: #8a5a00; --warn-soft: #fbefd5; --ok: #2d6a3e; --ok-soft: #e3f1e6; }
 @media (prefers-color-scheme: dark) { :root { --bg: #171614; --card: #201f1c; --text: #ece8e1; --muted: #a39d92; --line: #3a3732;
   --accent: #8db7e0; --warn: #f0c46c; --warn-soft: #3a2f17; --ok: #8fd19e; --ok-soft: #1d3324; } }
@@ -285,9 +285,10 @@ td[data-l="Input / M"], td[data-l="Output / M"] { white-space: nowrap; font-vari
 export const CONTROLS_CSS = `
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
-.subtabs > span { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: .85rem; background: var(--card); }
-.subtabs > span.on { border-color: var(--accent); }
-.subtabs > span[aria-disabled] { color: var(--muted); }
+.subtabs > span, .subtabs > a { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: .85rem; background: var(--card); color: var(--text); text-decoration: none; }
+.subtabs > .on { border-color: var(--accent); }
+.subtabs > a:hover { border-color: var(--accent); }
+.subtabs > a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn { display: inline-flex; align-items: center; font: inherit; font-weight: 500; font-size: .9rem; padding: 4px 10px; min-height: 30px;
   border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--card); cursor: pointer; text-decoration: none; }
 .btn.secondary { background: var(--card); color: var(--accent); }
