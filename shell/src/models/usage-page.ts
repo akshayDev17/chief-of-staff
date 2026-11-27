@@ -145,15 +145,13 @@ function costCell(l: NamedLine): string {
   return `${figure}${note}`;
 }
 
-function row(l: NamedLine, table: TableId, topCost: number): string {
-  const share = topCost > 0 ? (l.costUsd / topCost) * 100 : 0;
-  const top = topCost > 0 && l.costUsd === topCost;
+function row(l: NamedLine, table: TableId): string {
   const id = table === "models" ? `<span class="u-sub mono">${esc(l.key)}${l.listed ? "" : " · not in OpenRouter's list now"}</span>` : "";
   const free = l.free ? ` <span class="pill free">free</span>` : "";
   const refused = l.refused ? `${count(l.refused)} refused` : "";
   const phone = [`${count(l.calls)} call${l.calls === 1 ? "" : "s"}`, `${count(l.inputTokens + l.outputTokens)} tokens`, refused].filter(Boolean).join(" · ");
   return `<tr data-name="${esc(l.name.toLowerCase())}" data-calls="${l.calls}" data-cost="${l.costUsd}">
-<td><span class="u-name">${esc(l.name)}</span>${free}${id}<span class="u-sub u-phone">${phone}</span>${share >= 1.5 ? `<span class="share${top ? " top" : ""}" aria-hidden="true"><span style="width:${share.toFixed(1)}%"></span></span>` : ""}</td>
+<td><span class="u-name">${esc(l.name)}</span>${free}${id}<span class="u-sub u-phone">${phone}</span></td>
 <td class="num wide">${count(l.calls)}${refused ? `<span class="u-sub">${refused}</span>` : ""}</td>
 <td class="num wide">${count(l.inputTokens)}</td>
 <td class="num wide">${count(l.outputTokens)}</td>
@@ -164,9 +162,8 @@ function row(l: NamedLine, table: TableId, topCost: number): string {
 function table(table: TableId, lines: NamedLine[], input: UsagePageInput, emptyRow: string): string {
   const label = table === "models" ? "Model" : "Task";
   const sorted = sortLines(lines, input.sorts[table]);
-  const topCost = Math.max(0, ...lines.map((l) => l.costUsd));
   const { total } = input.usage;
-  const body = sorted.length ? sorted.map((l) => row(l, table, topCost)).join("\n") : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
+  const body = sorted.length ? sorted.map((l) => row(l, table)).join("\n") : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
   const foot = sorted.length
     ? `<tfoot><tr><th scope="row">This month<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
     : "";
@@ -276,9 +273,6 @@ table.usage tr.empty td > * { vertical-align: middle; }
 .u-sub { display: block; font-size: .8rem; color: var(--muted); font-weight: 400; overflow-wrap: anywhere; white-space: normal; }
 table.usage .num .u-sub { white-space: nowrap; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
-.share { display: block; height: 2px; margin-top: 6px; }
-.share > span { display: block; height: 100%; background: var(--line); }
-.share.top > span { background: var(--text); }
 .u-phone { display: none; }
 @media (max-width: 639px) {
   table.usage .wide { display: none; }
