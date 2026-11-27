@@ -89,7 +89,7 @@ describe("Models › Setup › Providers", () => {
     expect(page).toContain('<p class="tc-verdict"><strong>Test call passed</strong> (ran by itself)</p>');
     expect(page).toContain('<p class="tc-reply">Bedrock replied: 200 OK · global.amazon.nova-2-lite-v1:0 (Global) · “OK”</p>');
     expect(page).toContain("38 input and 3 output tokens · under $0.0001 · connected; a connection has no end date");
-    expect(page).toContain("<strong>Region:</strong> chosen by the app from what your model supports: Global. The test call proves it.");
+    expect(page).toContain("<strong>Region:</strong> chosen by the app from what Nova 2.0 Lite supports: Global. The test call proves it.");
     expect(page).toContain("<strong>Monthly budget:</strong> not set yet");
     expect(page).toContain('Connect Amazon Bedrock <span aria-label="connected">✓</span>');
   });

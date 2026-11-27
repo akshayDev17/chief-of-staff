@@ -177,25 +177,25 @@ export const testLocations = (plugin: ProviderPlugin, model: string): string[] =
   return pinned ? Object.keys(pinned) : plugin.connect.locations(model);
 };
 
-// The test call's model and location: the first model the user picked at
-// this provider, while the plug-in can still call it, else the plug-in's own
-// test model, at the region the user chose or else the app's default for that
-// model.
+// The test call's model and location: always the plug-in's own test model,
+// never a model the user picked (one of those can need terms or a form the
+// test model does not), at the region the user chose, else the app's default.
+// Where the user also added the test model itself, its row gives the
+// location to start from and, on Foundry, the deployment name they kept.
 async function testChoice(
   db: D1Database,
   userId: string,
   plugin: ProviderPlugin,
   check: Check | undefined,
 ): Promise<{ model: string; location: string; locations: string[]; deployment?: string; pinnedId?: string }> {
-  const picked = await db
-    .prepare("SELECT model, location, deployment FROM user_models WHERE user_id = ? AND provider = ? ORDER BY added_at LIMIT 1")
-    .bind(userId, plugin.provider)
-    .first<{ model: string; location: string; deployment: string | null }>()
-    .then((m) => (m && plugin.connect.canCall(m.model) ? m : null));
-  const model = picked?.model ?? plugin.connect.testModel;
+  const model = plugin.connect.testModel;
+  const added = await db
+    .prepare("SELECT location, deployment FROM user_models WHERE user_id = ? AND provider = ? AND model = ?")
+    .bind(userId, plugin.provider, model)
+    .first<{ location: string; deployment: string | null }>();
   const locations = testLocations(plugin, model);
-  const location = check?.region && locations.includes(check.region) ? check.region : picked && locations.includes(picked.location) ? picked.location : locations[0]!;
-  return { model, location, locations, deployment: picked?.deployment ?? undefined, pinnedId: pinnedIds(plugin, model)?.[location] };
+  const location = check?.region && locations.includes(check.region) ? check.region : added && locations.includes(added.location) ? added.location : locations[0]!;
+  return { model, location, locations, deployment: added?.deployment ?? undefined, pinnedId: pinnedIds(plugin, model)?.[location] };
 }
 
 // Makes the test call through the proxy, then records the result.

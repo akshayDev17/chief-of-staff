@@ -153,12 +153,13 @@ function regionLine(panel: ProviderPanel, changing: boolean): string {
   const { plugin, check } = panel;
   const c = plugin.connect;
   if (!c.guide.regionChoice || !check?.region) return "";
-  const model = check.result?.model ?? c.testModel;
+  // The test call's own model, never the model a stored result names.
+  const model = c.testModel;
   const label = esc(c.locationLabel(check.region, model));
   const how =
     check.regionSetBy === "user"
       ? `${label}, chosen by you. The test call proves it.`
-      : `chosen by the app from what your model supports: ${label}. The test call proves it.`;
+      : `chosen by the app from what ${esc(model)} supports: ${label}. The test call proves it.`;
   if (!changing) return `<p class="small" style="margin-top:8px"><strong>Region:</strong> ${how} <a href="${providerHref(plugin.provider, "&change=region")}">Change</a></p>`;
   const options = testLocations(plugin, model)
     .map((l) => `<option value="${esc(l)}"${l === check.region ? " selected" : ""}>${esc(c.locationLabel(l, model))}</option>`)

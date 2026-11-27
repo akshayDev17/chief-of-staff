@@ -141,6 +141,12 @@ verify against the published set until the old key is retired
 
 After "Connect", the test call runs by itself; there is no test-call button.
 
+- The test call always runs on the plug-in's own test model
+  (`connect.testModel`: Nova 2.0 Lite at its pinned profile IDs on Bedrock,
+  Claude Haiku 5.5 on Foundry and Vertex AI), never on a model the user
+  added, so a picked model's Marketplace terms or use-case form never fail
+  Connect. Where the user added the test model itself, its row gives the
+  starting location and, on Foundry, the deployment name they kept.
 - While the provider-side grant is not there yet (the stack not created, the
   role not assigned), the check tries again every minute for an hour after
   Connect (the cron `* * * * *`), and the page refreshes itself.
@@ -163,7 +169,7 @@ After "Connect", the test call runs by itself; there is no test-call button.
 
 ## Region
 
-The app picks the test call's region from what the model supports: on
+The app picks the test call's region from what the test model supports: on
 Bedrock, Global where Bedrock names a Global profile for the model and the
 price table prices it there, else the app's region (the model's own ID where
 it runs on demand there, or the geography profile Bedrock names); on Foundry the

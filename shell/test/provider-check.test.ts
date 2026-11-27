@@ -49,14 +49,14 @@ beforeEach(async () => {
 
 // AWS as the scenario has it: whether the user's stack exists, and what Converse says.
 function awsWorld(offer?: BedrockOffer) {
-  const world = { stack: false, converse: (): Response => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3 } }) };
+  const world = { stack: false, converse: (_sent: Sent): Response => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3 } }) };
   const { fetcher, sent } = scriptedFetch([
     [/sts\.us-east-1/, (s: Sent) => {
       const action = new URLSearchParams(s.body).get("Action");
       if (action === "AssumeRoleWithWebIdentity") return stsCredentials(action, "ASIAAPP");
       return world.stack ? stsCredentials("AssumeRole", "ASIAUSER") : stsError("AccessDenied", "User: arn:aws:sts::111122223333:assumed-role/chief-of-staff-app/chief-of-staff is not authorized to perform: sts:AssumeRole");
     }],
-    [/bedrock-runtime/, () => world.converse()],
+    [/bedrock-runtime/, (s: Sent) => world.converse(s)],
     [/cloudformation/, () => new Response("<Outputs><member><OutputKey>TemplateVersion</OutputKey><OutputValue>1.0.0</OutputValue></member></Outputs>")],
   ]);
   const plugins = {
@@ -519,5 +519,72 @@ describe("Bedrock's own list and the models it no longer offers", () => {
       detail: "Claude Haiku 5.5 is not offered at Amazon Bedrock yet: Bedrock's own model list marks it legacy, or no longer as a chat model",
     });
     expect(converseUrls(sent)).toHaveLength(before);
+  });
+});
+
+describe("the Connect test call's model", () => {
+  const USE_CASE_FORM = "Model use case details have not been submitted for this account. Fill out the Anthropic use case details form before using the model. If you have already filled out the form, try again in 15 minutes.";
+  const converseUrls = (sent: Sent[]) => sent.filter((s) => s.url.includes("bedrock-runtime")).map((s) => decodeURIComponent(s.url));
+  const open = async (plugins: ReturnType<typeof awsWorld>["plugins"], path: string, now: Date, init: RequestInit = {}) =>
+    handleProviders(new Request(`${APP_ORIGIN}${PROVIDERS_PATH}${path}`, init), { db: env.DB, plugins, userId, viewer: "owner", appOrigin: APP_ORIGIN, now });
+  const press = (plugins: ReturnType<typeof awsWorld>["plugins"], path: string, now: Date, fields: Record<string, string> = {}) =>
+    open(plugins, path, now, { method: "POST", body: new URLSearchParams(fields), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } });
+  const NOVA_GLOBAL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/global.amazon.nova-2-lite-v1:0/converse";
+  const NOVA_US = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1:0/converse";
+
+  // The owner's account, 2026-11-27: Claude Haiku 4.5 added first (its test
+  // passed then), Nova 2.0 Lite added later. Haiku 4.5 now answers with
+  // Anthropic's use-case form, and the check is recorded as failed on it.
+  it("is always the provider's test model, never the model added first: Try again, the re-check and Set and test call Nova 2 Lite", async () => {
+    const { world, plugins, sent } = awsWorld();
+    world.stack = true;
+    const ok = world.converse;
+    world.converse = (s) =>
+      s.url.includes("anthropic.claude-haiku-4-5")
+        ? Response.json({ message: USE_CASE_FORM }, { status: 404, headers: { "x-amzn-ErrorType": "ResourceNotFoundException" } })
+        : ok(s);
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-24T07:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "Claude Haiku 4.5", "input", 1), price("bedrock", "Claude Haiku 4.5", "output", 5),
+      ],
+    });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'bedrock', 'Claude Haiku 4.5', 'global', '2026-11-26T19:51:30Z')").bind(userId).run();
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'bedrock', 'Nova 2.0 Lite', 'global', '2026-11-27T03:19:45Z')").bind(userId).run();
+    await connectBedrock(plugins);
+    // The row as it stands live: failed on Claude Haiku 4.5.
+    const stale = {
+      at: T0.toISOString(), verdict: "failed", reason: "no_such_model", model: "Claude Haiku 4.5", modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0", location: "global",
+      reply: { status: 404, errorName: "ResourceNotFoundException", message: USE_CASE_FORM },
+    };
+    await env.DB.prepare("UPDATE provider_checks SET state = 'failed', next_try_at = NULL, passed_at = NULL, result = ? WHERE user_id = ? AND provider = 'bedrock'").bind(JSON.stringify(stale), userId).run();
+    sent.length = 0;
+
+    // The region picker is labelled for the test model, not the stale result's.
+    const picker = await (await open(plugins, "?provider=bedrock&change=region", at(1))).text();
+    expect(picker).toContain(`<strong>Region</strong> for ${TEST_MODEL}</label>`);
+    expect(picker).not.toContain("<strong>Region</strong> for Claude Haiku 4.5");
+
+    // Try again.
+    expect((await press(plugins, "/bedrock/retry", at(1))).status).toBe(303);
+    expect(converseUrls(sent)).toEqual([NOVA_GLOBAL]);
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", result: { model: TEST_MODEL, modelId: "global.amazon.nova-2-lite-v1:0" } });
+
+    // The every-minute re-check, once due.
+    await env.DB.prepare("UPDATE provider_checks SET next_try_at = ? WHERE user_id = ? AND provider = 'bedrock'").bind(at(2).toISOString(), userId).run();
+    expect(await runDueChecks(env.DB, plugins, at(2))).toBe(1);
+    expect(converseUrls(sent)).toEqual([NOVA_GLOBAL, NOVA_GLOBAL]);
+
+    // Set and test.
+    expect((await press(plugins, "/bedrock/region", at(3), { region: "us-east-1" })).status).toBe(303);
+    expect(converseUrls(sent)).toEqual([NOVA_GLOBAL, NOVA_GLOBAL, NOVA_US]);
+    expect(await readCheck(env.DB, userId, "bedrock")).toMatchObject({ state: "passed", region: "us-east-1", regionSetBy: "user", result: { model: TEST_MODEL, modelId: "us.amazon.nova-2-lite-v1:0" } });
+    const after = await (await open(plugins, "?provider=bedrock&change=region", at(3))).text();
+    expect(after).toContain(`<strong>Region</strong> for ${TEST_MODEL}</label>`);
+    expect(after).toContain('<option value="us-east-1" selected>US cross-Region from us-east-1</option>');
+    expect(converseUrls(sent).some((u) => u.includes("claude-haiku-4-5"))).toBe(false);
   });
 });

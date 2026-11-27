@@ -285,7 +285,7 @@ describe("Add a model: each user's own", () => {
     expect((await ledger(other)).map((r) => r.model)).toEqual(["test-haiku"]);
   });
 
-  it("keeps a model's first added date when it is tested again, so the daily check keeps calling the first model picked", async () => {
+  it("keeps a model's first added date when it is tested again, while the Connect check calls only the test model", async () => {
     await pick(plugins, "bedrock", { model: "test-haiku" });
     const later = new Date("2026-11-26T10:00:00Z");
     await addModel(env.DB, plugins, { userId, provider: "bedrock", model: "test-sonnet", now: later });
@@ -296,7 +296,18 @@ describe("Add a model: each user's own", () => {
     expect(haiku.test?.at).toBe(latest.toISOString());
 
     await runCheck(env.DB, plugins, userId, "bedrock", latest);
-    expect(plugin.calls.at(-1)!.model).toBe("test-haiku");
+    expect(plugin.calls.at(-1)!.model).toBe(plugin.connect.testModel);
+  });
+
+  it("runs the Connect check on the test model at the deployment the user kept for it, never on an earlier-added model's", async () => {
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, deployment, added_at) VALUES (?, 'bedrock', 'test-haiku', 'global', 'my-haiku', ?)").bind(userId, NOW.toISOString()).run();
+    await runCheck(env.DB, plugins, userId, "bedrock", NOW);
+    expect(plugin.calls).toHaveLength(1);
+    expect(plugin.calls[0]).toMatchObject({ model: "test-sonnet", deployment: undefined });
+    await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, deployment, added_at) VALUES (?, 'bedrock', 'test-sonnet', 'global', 'my-sonnet', ?)").bind(userId, new Date("2026-11-26T10:00:00Z").toISOString()).run();
+    await runCheck(env.DB, plugins, userId, "bedrock", NOW);
+    expect(plugin.calls).toHaveLength(2);
+    expect(plugin.calls[1]).toMatchObject({ model: "test-sonnet", deployment: "my-sonnet" });
   });
 
   it("refuses a form posted from another site", async () => {
