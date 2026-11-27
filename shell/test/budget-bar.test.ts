@@ -1,11 +1,11 @@
 // The OpenRouter budget bar (AKS-136, reworked for OpenRouter): the key's own
-// figures read from OpenRouter server side, the three parts, and the bar on
-// Models › Setup › Budgets and on the Connect panel.
+// figures read from OpenRouter server side, the three parts, tapping a part,
+// and the bar on Models › Setup › Budgets only.
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { keyUsageFromBody, readKeyUsage } from "../src/providers/openrouter";
 import { handleProviders } from "../src/providers/page";
-import { barParts, readKeyFigure, renderBudgetBar, type KeyFigure } from "../src/proxy/budget-bar";
+import { BAR_JS, barParts, readKeyFigure, renderBudgetBar, type KeyFigure } from "../src/proxy/budget-bar";
 import { setBudget } from "../src/proxy/budgets";
 import { handleBudgets } from "../src/proxy/budgets-page";
 import { writeConnection } from "../src/proxy/connections";
@@ -59,6 +59,12 @@ describe("OpenRouter's figures for the key", () => {
     expect(await readKeyFigure(secrets, userId, NOW, fakeFetch())).toEqual({ usage: { monthlyUsd: 0 }, readAt: NOW.toISOString() });
     const deleted = fakeFetch({ currentKey: () => Response.json({ error: { code: 401, message: "User not found." } }, { status: 401 }) });
     expect(await readKeyFigure(secrets, userId, NOW, deleted)).toEqual({ unread: "OpenRouter no longer accepts the key" });
+    for (const status of [402, 429, 503]) {
+      const refused = fakeFetch({ currentKey: () => Response.json({ error: { code: status, message: "no" } }, { status }) });
+      expect(await readKeyFigure(secrets, userId, NOW, refused)).toEqual({ unread: `OpenRouter refused the request (status ${status})` });
+    }
+    const empty = fakeFetch({ currentKey: () => Response.json({ data: { label: "Chief of staff" } }) });
+    expect(await readKeyFigure(secrets, userId, NOW, empty)).toEqual({ unread: "OpenRouter's reply held no monthly figure" });
     const down = (async () => { throw new TypeError("network"); }) as unknown as typeof fetch;
     expect(await readKeyFigure(secrets, userId, NOW, down)).toEqual({ unread: "OpenRouter did not answer" });
     expect(await readKeyFigure({ ...secrets, read: () => Promise.reject(new Error("no VAULT_KEY")) }, userId, NOW)).toEqual({ unread: "the app could not open your vault" });
@@ -120,11 +126,14 @@ describe("the bar", () => {
   });
 
   it("warns when the key's own limit on OpenRouter comes before the budget, else notes it", () => {
-    const tight = renderBudgetBar({ budgetUsd: 60, ledgerUsd: 9.4, key: read({ monthlyUsd: 9.4, limitUsd: 10, limitRemainingUsd: 0.6, limitReset: "monthly" }), keyPageHref: `https://openrouter.ai/keys/${HASH}` });
-    expect(tight).toContain('<p class="bb-note bb-warn" role="note">The key\'s own credit limit on OpenRouter: $10 (resets monthly), $0.60 left. OpenRouter refuses calls at it, before your budget is used up; change it on <a href="https://openrouter.ai/keys/' + HASH);
+    const tight = renderBudgetBar({ budgetUsd: 60, ledgerUsd: 9.4, key: read({ monthlyUsd: 9.4, limitUsd: 10, limitRemainingUsd: 0.6, limitReset: "monthly" }), connection: { key_hash: HASH } });
+    expect(tight).toContain(
+      `<p class="bb-note bb-warn" role="note">The key's own credit limit on OpenRouter: $10 (resets monthly), $0.60 left. OpenRouter refuses calls at it, before your budget is used up; change it there: <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">Your keys on OpenRouter</a> · <a href="https://openrouter.ai/keys/${HASH}" target="_blank" rel="noopener noreferrer">This key on OpenRouter</a>.</p>`,
+    );
     const loose = renderBudgetBar({ budgetUsd: 60, ledgerUsd: 9.4, key: read({ monthlyUsd: 9.4, limitUsd: 100, limitRemainingUsd: 90.6 }) });
     expect(loose).toContain("The key's own credit limit on OpenRouter: $100, $90.60 left. OpenRouter refuses calls at it, whatever is left of your budget");
     expect(loose).not.toContain("bb-warn");
+    expect(loose).toContain('change it there: <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">Your keys on OpenRouter</a>.</p>');
     expect(renderBudgetBar({ budgetUsd: 60, ledgerUsd: 1, key: read({ monthlyUsd: 1 }) })).not.toContain("credit limit");
   });
 });
@@ -156,21 +165,86 @@ describe("the bar on the Models pages", () => {
     expect(html).toContain("Counted by the app, not in OpenRouter&#39;s figure yet $0.25</li>");
     expect(html).toContain('href="#amount-openrouter">Change the budget</a>');
     expect(html).toContain("The key's own credit limit on OpenRouter: $31 (resets monthly), $29.50 left.");
-    expect(html).toContain('document.querySelectorAll("[data-budget-bar]")');
+    expect(html).toContain(`<a href="https://openrouter.ai/keys/${HASH}" target="_blank" rel="noopener noreferrer">This key on OpenRouter</a>`);
     expect(html).not.toContain(ISSUED_KEY);
     expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
   });
 
-  it("is on the Connect panel under the monthly budget", async () => {
+  it("is not on Providers, which reads no figure from OpenRouter", async () => {
     await setBudget(env.DB, userId, "openrouter", 31, "accepted", NOW);
     const response = await handleProviders(new Request(`${ORIGIN}/chief-of-staff/models/setup/providers`), {
       db: env.DB, plugins: { openrouter: testPlugin() }, readPlugins: async () => ({ openrouter: testPlugin() }), secrets: testSecrets(),
       userId, viewer: "friend", appOrigin: ORIGIN, now: NOW, fetcher,
     });
     const html = await response.text();
-    expect(html).toMatch(/<strong>Monthly budget:<\/strong> \$31 · <a href="[^"]+">Budgets<\/a><\/p><div class="bb" data-budget-bar>/);
-    expect(html).toContain("$1.75 of $31 · $29.25 left");
-    expect(html).toContain('href="/chief-of-staff/models/setup/budgets">Change the budget</a>');
-    expect(html).not.toContain(ISSUED_KEY);
+    expect(html).toMatch(/<strong>Monthly budget:<\/strong> \$31 · <a href="[^"]+">Budgets<\/a><\/p>/);
+    expect(html).not.toContain("data-budget-bar");
+    expect(fetcher.sent.map((s) => s.url)).not.toContain("https://openrouter.ai/api/v1/key");
+  });
+});
+
+// Runs the bar's own tap script against a small stand-in for the browser's
+// DOM: just the elements and calls the script uses.
+type Listener = (e: { key?: string; target?: unknown }) => void;
+
+function element(attrs: Record<string, string> = {}) {
+  const listeners: Record<string, Listener[]> = {};
+  return {
+    attrs: { ...attrs },
+    getAttribute(n: string) { return this.attrs[n] ?? null; },
+    setAttribute(n: string, v: string) { this.attrs[n] = v; },
+    addEventListener(type: string, fn: Listener) { (listeners[type] ??= []).push(fn); },
+    fire(type: string, e: { key?: string; target?: unknown } = {}) {
+      for (const fn of listeners[type] ?? []) fn({ target: this, ...e });
+    },
+  };
+}
+
+function tapBar() {
+  const segs = ["real", "est", "left"].map((id) => element({ "data-region": id, "aria-expanded": "false" }));
+  const outside = element();
+  const bar = Object.assign(element(), { querySelectorAll: () => segs, contains: (n: unknown) => n === bar || segs.includes(n as never) });
+  const document = Object.assign(element(), { querySelectorAll: () => [bar] });
+  new Function("document", BAR_JS)(document);
+  // A click on a part bubbles up to the document, as in a browser.
+  const click = (target: ReturnType<typeof element>) => {
+    target.fire("click");
+    document.fire("click", { target });
+  };
+  const open = () => segs.filter((s) => s.attrs["aria-expanded"] === "true").map((s) => s.attrs["data-region"]);
+  return { segs, outside, bar, document, click, open };
+}
+
+describe("tapping a part of the bar", () => {
+  it("opens that part's label only, and moves to another part tapped next", () => {
+    const t = tapBar();
+    t.click(t.segs[1]!);
+    expect(t.open()).toEqual(["est"]);
+    expect(t.segs.map((s) => s.attrs["aria-expanded"])).toEqual(["false", "true", "false"]);
+    t.click(t.segs[2]!);
+    expect(t.open()).toEqual(["left"]);
+  });
+
+  it("closes the label on a second tap of the same part", () => {
+    const t = tapBar();
+    t.click(t.segs[0]!);
+    t.click(t.segs[0]!);
+    expect(t.open()).toEqual([]);
+  });
+
+  it("closes the label on a tap outside the bar", () => {
+    const t = tapBar();
+    t.click(t.segs[0]!);
+    t.click(t.outside);
+    expect(t.open()).toEqual([]);
+  });
+
+  it("closes the label on Escape", () => {
+    const t = tapBar();
+    t.click(t.segs[2]!);
+    t.bar.fire("keydown", { key: "Enter" });
+    expect(t.open()).toEqual(["left"]);
+    t.bar.fire("keydown", { key: "Escape" });
+    expect(t.open()).toEqual([]);
   });
 });

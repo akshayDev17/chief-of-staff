@@ -27,7 +27,7 @@ import {
 import { BAR_CSS, BAR_JS, readKeyFigure, renderBudgetBar, type KeyFigure } from "./budget-bar";
 import { connectedProviders, readConnection } from "./connections";
 import type { SecretStore } from "../providers/secrets";
-import type { PluginRegistry } from "./plugin";
+import type { ConnectionFields, PluginRegistry } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
@@ -39,7 +39,7 @@ export interface ProviderBudgetCard {
   suggestion?: Suggestion;
   // OpenRouter's own figure for the key, read once the budget is set.
   key?: KeyFigure;
-  keyPageHref?: string;
+  connection?: ConnectionFields;
 }
 
 export interface BudgetsPageInput {
@@ -65,7 +65,7 @@ function card(c: ProviderBudgetCard, applicationsADay: number): string {
   const unset = c.budget ? "" : `<p class="small muted">Until it is set, this provider's models cannot be called.</p>`;
   const bar =
     c.budget && c.key
-      ? renderBudgetBar({ budgetUsd: c.budget.monthlyUsd, ledgerUsd: c.spentThisMonth, key: c.key, budgetHref: `#amount-${c.provider}`, keyPageHref: c.keyPageHref })
+      ? renderBudgetBar({ budgetUsd: c.budget.monthlyUsd, ledgerUsd: c.spentThisMonth, key: c.key, budgetHref: `#amount-${c.provider}`, connection: c.connection })
       : "";
   const hidden = `<input type="hidden" name="provider" value="${c.provider}">
 <input type="hidden" name="per_day" value="${applicationsADay}">`;
@@ -152,14 +152,14 @@ async function pageInput(db: D1Database, userId: string, applicationsADay: numbe
   const cards = await Promise.all(
     providers.map(async (provider): Promise<ProviderBudgetCard> => {
       const budget = await readBudget(db, userId, provider);
-      const hash = (await readConnection(db, userId, provider))?.key_hash;
+      const connection = await readConnection(db, userId, provider);
       return {
         provider,
         budget,
         spentThisMonth: await monthSpend(db, userId, provider, now),
         suggestion: await suggestBudget(db, await pickedModels(db, userId, provider), applicationsADay),
         ...(budget ? { key: await readKeyFigure(reader.secrets, userId, now, reader.fetcher) } : {}),
-        ...(hash && /^[0-9a-f]{64}$/.test(hash) ? { keyPageHref: `https://openrouter.ai/keys/${hash}` } : {}),
+        connection,
       };
     }),
   );

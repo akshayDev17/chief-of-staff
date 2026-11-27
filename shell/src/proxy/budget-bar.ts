@@ -23,8 +23,9 @@
 
 import { BUDGETS_PATH } from "../paths";
 import { esc } from "../prices/page";
-import { OPENROUTER_ACTIVITY_URL, readKeyUsage, type KeyUsage } from "../providers/openrouter";
+import { keyLinks, OPENROUTER_ACTIVITY_URL, readKeyUsage, type KeyUsage } from "../providers/openrouter";
 import type { SecretStore } from "../providers/secrets";
+import { ProviderRefusal, type ConnectionFields } from "./plugin";
 
 // OpenRouter's figure for the key, or the plain reason it could not be read.
 export type KeyFigure = { usage: KeyUsage; readAt: string } | { unread: string };
@@ -43,8 +44,10 @@ export async function readKeyFigure(secrets: SecretStore, userId: string, now: D
   try {
     return { usage: await readKeyUsage(key, fetcher), readAt: now.toISOString() };
   } catch (e) {
-    const status = (e as { refusal?: { status?: number } }).refusal?.status;
-    return { unread: status === 401 ? "OpenRouter no longer accepts the key" : "OpenRouter did not answer" };
+    if (!(e instanceof ProviderRefusal)) return { unread: "OpenRouter did not answer" };
+    if (e.refusal.status === 401) return { unread: "OpenRouter no longer accepts the key" };
+    if (e.refusal.errorName === "no_usage") return { unread: "OpenRouter's reply held no monthly figure" };
+    return { unread: `OpenRouter refused the request (status ${e.refusal.status})` };
   }
 }
 
@@ -79,8 +82,8 @@ export interface BudgetBarInput {
   // Where the budget is changed: the Budgets page, or its own field when the
   // bar is on that page.
   budgetHref?: string;
-  // The key's own page on OpenRouter, when its hash is known.
-  keyPageHref?: string;
+  // The user's OpenRouter connection, for the links to the key's page there.
+  connection?: ConnectionFields;
 }
 
 interface Region {
@@ -156,16 +159,14 @@ export function renderBudgetBar(input: BudgetBarInput): string {
     "usage" in k
       ? `Source: OpenRouter's own figure for the Chief of staff key, ${money(p.reported)} at ${hhmm(k.readAt)}, plus what the app counted beyond it. The app's own count this month, which stops calls at the budget: ${money(input.ledgerUsd)}.${gap}`
       : `OpenRouter's own figure could not be read just now (${esc(k.unread)}), so the bar shows the app's own count this month, which stops calls at the budget: ${money(input.ledgerUsd)}.`;
-  const keyPage = input.keyPageHref
-    ? `<a href="${esc(input.keyPageHref)}" target="_blank" rel="noopener noreferrer">this key's page on OpenRouter</a>`
-    : `<a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">your keys on OpenRouter</a>`;
+  const keyPages = keyLinks(input.connection).map((l) => linkHtml({ ...l, outside: true })).join(" · ");
   let limit = "";
   if ("usage" in k && k.usage.limitUsd !== undefined) {
     const { limitUsd, limitRemainingUsd, limitReset } = k.usage;
     const resets = limitReset ? ` (resets ${esc(limitReset)})` : "";
     const remaining = limitRemainingUsd !== undefined ? `, ${money(limitRemainingUsd)} left` : "";
     const first = limitRemainingUsd !== undefined && limitRemainingUsd < p.left;
-    const sentence = `The key's own credit limit on OpenRouter: ${budgetText(limitUsd)}${resets}${remaining}. OpenRouter refuses calls at it${first ? ", before your budget is used up" : ", whatever is left of your budget"}; change it on ${keyPage}.`;
+    const sentence = `The key's own credit limit on OpenRouter: ${budgetText(limitUsd)}${resets}${remaining}. OpenRouter refuses calls at it${first ? ", before your budget is used up" : ", whatever is left of your budget"}; change it there: ${keyPages}.`;
     limit = first ? `<p class="bb-note bb-warn" role="note">${sentence}</p>` : `<p class="bb-note small muted">${sentence}</p>`;
   }
   return `<div class="bb" data-budget-bar>

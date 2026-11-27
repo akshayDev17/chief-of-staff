@@ -93,9 +93,8 @@ the date its prices were read. The user accepts it or types their own.
 
 ### The budget bar
 
-Once the budget is set, Budgets and the Connect panel on Providers show the
-month's spend as one bar in three parts (`budget-bar.ts`; AKS-136, reworked
-for OpenRouter):
+Once the budget is set, Budgets, and only Budgets, shows the month's spend as
+one bar in three parts (`budget-bar.ts`; AKS-136, reworked for OpenRouter):
 
 - **Solid, spent as OpenRouter reports it**: the app's key's own figure for
   the current UTC month, `usage_monthly` plus `byok_usage_monthly` from
@@ -111,10 +110,12 @@ for OpenRouter):
 Under the bar the page shows the app's own count, which is what stops calls,
 and any gap between that count and OpenRouter's figure. When the key has its
 own credit limit on OpenRouter, the page shows that limit and what is left of
-it. The note is a warning when the key's limit would refuse calls before the
-budget runs out. When OpenRouter's figure cannot be read, the page says why and
-the bar shows the app's own count. Hovering over, tapping or tabbing to a part
-of the bar labels it, with a link to OpenRouter's Activity page
+it, with links to the key's page there. The note is a warning when the key's
+limit would refuse calls before the budget runs out. When OpenRouter's figure
+cannot be read, the page says why (OpenRouter did not answer, refused the
+request with a given status, or sent a reply with no monthly figure) and the
+bar shows the app's own count. Hovering over, tapping or tabbing to a part of
+the bar labels it, with a link to OpenRouter's Activity page
 (https://openrouter.ai/activity).
 
 ## Connections and the vault

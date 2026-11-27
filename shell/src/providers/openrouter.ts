@@ -204,7 +204,7 @@ export async function readKeyUsage(key: string, fetcher: typeof fetch = fetch): 
 const link = (label: string, href: string): Link => ({ label, href });
 
 // Your keys on OpenRouter, and this key's own page when its hash is known.
-const keyLinks = (connection: ConnectionFields | undefined): Link[] => [
+export const keyLinks = (connection: ConnectionFields | undefined): Link[] => [
   link("Your keys on OpenRouter", SETTINGS_KEYS),
   ...(connection?.key_hash && /^[0-9a-f]{64}$/.test(connection.key_hash) ? [link("This key on OpenRouter", `https://openrouter.ai/keys/${connection.key_hash}`)] : []),
 ];
