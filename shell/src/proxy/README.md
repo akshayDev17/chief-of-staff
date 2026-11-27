@@ -39,7 +39,7 @@ no key in the vault) records the connection as revoked, for T49's alert
    current price table (one read of its rows, `modelPrices`), else it is
    refused (`no_price`).
 3. Enforces the provider's monthly budget: none set is refused (`no_budget`),
-   except for a model's test call (Test with <model>?) and Test all models
+   except for a model's test call (Test on its row) and Test all models
    (`sendTestCall`),
    which run before budgets are set; the user's spend at that provider since
    00:00 UTC on the 1st reaching it is refused (`budget_spent`) until the 1st,

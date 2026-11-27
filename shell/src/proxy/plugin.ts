@@ -173,11 +173,11 @@ export interface ConnectMethod {
   // cannot be trusted.
   finish(verifier: string, returned: URLSearchParams): Promise<{ fields: ConnectionFields; secret: string }>;
   // Whether the plug-in can call the model: the provider still lists it.
-  // A model the user added that the provider has dropped is shown as "not
-  // offered yet" with `notCallableReason`, never picked.
+  // A model the provider has dropped is shown as "not offered" with
+  // `notCallableReason`, never picked.
   canCall(model: string): boolean;
   // Why `model`, which the plug-in cannot call, is not offered, in plain
-  // words after "not offered yet: ".
+  // words after "not offered: ".
   notCallableReason(model: string): string;
   // For a model the provider lists no tool support for, why ("OpenRouter
   // lists no tool support for it"), shown in the model list; the per-task

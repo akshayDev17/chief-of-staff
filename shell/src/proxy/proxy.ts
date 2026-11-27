@@ -7,8 +7,8 @@
 // Before sending a call to a provider the core refuses it when:
 // - no plug-in serves the provider (`no_plugin`);
 // - the plug-in cannot call the model, or not at its location
-//   (`not_callable`, with the plug-in's reason): a model the user added that
-//   the provider's list now drops;
+//   (`not_callable`, with the plug-in's reason): a model that passed its test
+//   but the provider's list now drops;
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price; a router (priced by the model it picks
 //   for each call) is priced at the user's price cap instead, and refused
@@ -329,7 +329,7 @@ export async function callModel(
   return attempt(db, plugins, call, call.fallback, reason, now);
 }
 
-// A model's test call (Test with <model>?, src/models/add.ts): one call on `choice`, with
+// A model's test call (Test on its row, src/models/test-model.ts): one call on `choice`, with
 // every check above except that no budget need be set yet (budgets come after
 // providers on the setup checklist); a budget set and spent still stops it.
 // Its ledger row's task is `test_call`, and it has no fallback.

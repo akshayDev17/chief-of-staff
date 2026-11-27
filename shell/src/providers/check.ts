@@ -10,7 +10,7 @@
 // scroll/highlight the testing section"). Once the provider has issued the
 // app its key, the connection is connected, and the page opens at the model
 // test, where the user chooses a model and tests it with one tap
-// (models/add.ts). The provider is usable once one of the user's models has
+// (models/test-model.ts). The provider is usable once one of the user's models has
 // passed its test call. Back from the consent page, the account's own model
 // list is read with the new key and saved (it costs nothing), so the model
 // list can mark the models the account leaves out.
