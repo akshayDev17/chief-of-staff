@@ -3,15 +3,14 @@
 //
 //   readBudget(db, userId, provider) -> Budget | undefined
 //   setBudget(db, userId, provider, usd, how, now)
-//   clearBudget(db, userId, provider)
 //   readSuggestionBasis(db, userId) -> SuggestionBasis | undefined
 //   suggest(basis, applicationsADay) -> Suggestion
 //
 // The budget is required: with none set, no model can be called except a
 // model's test call and Test all models (proxy.ts, `no_budget`). There is no
 // default, no daily budget and no per-model budget. The user sets it by
-// accepting the suggestion or typing their own value, and may clear it, which
-// stops model calls again until it is set.
+// accepting the suggestion or typing their own value, and may change it any
+// time.
 
 import { readPriceCaps } from "../models/price-caps";
 import { readUsableModels, type UsableModel } from "../models/usable";
@@ -58,11 +57,6 @@ export async function setBudget(
     )
     .bind(userId, provider, monthlyUsd, setHow, now.toISOString())
     .run();
-}
-
-// The user's budget goes; model calls stop until one is set again.
-export async function clearBudget(db: D1Database, userId: string, provider: string): Promise<void> {
-  await db.prepare("DELETE FROM provider_budgets WHERE user_id = ? AND provider = ?").bind(userId, provider).run();
 }
 
 // Tokens per application, the design's own figures (design-v3 12.2,

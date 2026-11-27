@@ -1,8 +1,8 @@
 // Models › Setup › Budgets, rendered on the server (design-v3 1.8): the
 // user's one monthly OpenRouter budget.
 //
-//   GET  /chief-of-staff/models/setup/budgets[?per_day=<n>][&confirm=clear]   the page, or with Accept: application/json its <main>
-//   POST /chief-of-staff/models/setup/budgets   do=accept (per_day) | do=set (amount) | do=clear
+//   GET  /chief-of-staff/models/setup/budgets[?per_day=<n>]   the page, or with Accept: application/json its <main>
+//   POST /chief-of-staff/models/setup/budgets   do=accept (per_day) | do=set (amount)
 //
 // Before the budget is set the page suggests one, with its basis, marked
 // "estimate" with its "checked on" date: the dearest model, for one
@@ -16,11 +16,11 @@
 // type their own instead. Until it is set, no model can be called except a
 // test call (proxy.ts, `no_budget`). Once set, the page shows the month's
 // spend as the shared budget bar (budget-bar.ts, the same bar as Models ›
-// Usage), and the budget can be changed or cleared.
+// Usage), and the budget can be changed.
 //
 // Nothing reloads the page or changes its address (the owner, 2026-11-28, of
-// the Models pages): the page's script sends each form and the Clear confirm
-// link in place with Accept: application/json, and swaps in the <main> the
+// the Models pages): the page's script sends each form in place with
+// Accept: application/json, and swaps in the <main> the
 // server answers with. A form posted without the script gets a redirect back
 // to the page (post-redirect-get), with any problem and the typed amount in a
 // flash cookie the next page shows once, so a refresh re-runs nothing.
@@ -33,7 +33,6 @@ import { PAGE_STYLE } from "../providers/page-style";
 import type { SecretStore } from "../providers/secrets";
 import { BAR_CSS, BAR_JS, budgetText, money, readKeyFigure, renderBudgetBar, type KeyFigure } from "./budget-bar";
 import {
-  clearBudget,
   DAYS_A_MONTH,
   DEFAULT_APPLICATIONS_A_DAY,
   MAX_APPLICATIONS_A_DAY,
@@ -55,7 +54,6 @@ const PROVIDER: Provider = "openrouter";
 // What to show; it changes nothing.
 export interface View {
   applicationsADay: number;
-  confirmClear?: boolean;
 }
 
 // What a page shows once, after a form: a problem with the amount typed, or
@@ -86,10 +84,9 @@ export function parseApplicationsADay(text: string | null): number {
 
 export const parseView = (params: URLSearchParams): View => ({
   applicationsADay: parseApplicationsADay(params.get("per_day")),
-  ...(params.get("confirm") === "clear" ? { confirmClear: true } : {}),
 });
 
-const viewHref = (view: View): string => `${BUDGETS_PATH}?per_day=${view.applicationsADay}${view.confirmClear ? "&confirm=clear" : ""}`;
+const viewHref = (view: View): string => `${BUDGETS_PATH}?per_day=${view.applicationsADay}`;
 
 const perM = (usd: number): string => `$${usd.toFixed(2)}`;
 const day = (iso: string): string => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -150,8 +147,7 @@ ${err}</form>`;
 }
 
 // Under the field before the budget is set: calls stay stopped, and what the
-// month has spent already (test calls, or calls before a budget was
-// cleared), which the budget counts too.
+// month has spent already (test calls), which the budget counts too.
 function stopLines(state: BudgetsState): string {
   const spent = state.spentThisMonth >= 0.005 ? `<p class="stop">Already spent this month: ${money(state.spentThisMonth)}. The budget counts it.</p>` : "";
   return `<p class="stop">Model calls stay stopped until it is set. Tests still run.</p>${spent}`;
@@ -184,9 +180,6 @@ ${stopLines(state)}
 function setPanel(state: BudgetsState, budget: Budget): string {
   const { basis, view } = state;
   const bar = renderBudgetBar({ budgetUsd: budget.monthlyUsd, ledgerUsd: state.spentThisMonth, key: state.key ?? { unread: "OpenRouter's figure was not read" }, budgetHref: "#amount", connection: state.connection });
-  const clear = view.confirmClear
-    ? `<div class="confirm" role="alertdialog" aria-labelledby="clear-q"><p id="clear-q"><strong>Clear the budget?</strong> Model calls stop until you set one again.</p><div class="acts"><form method="post" action="${BUDGETS_PATH}" data-fetch>${perDayField(view)}<button type="submit" class="btn small danger-o" name="do" value="clear" data-k="clear-yes">Clear budget</button></form><a class="link" href="${esc(viewHref({ applicationsADay: view.applicationsADay }))}" data-view data-k="clear-no" data-autofocus>Cancel</a></div></div>`
-    : `<a class="link danger" href="${esc(viewHref({ ...view, confirmClear: true }))}" data-view data-k="clear">Clear budget</a>`;
   const again = basis
     ? `<details class="how again"><summary>Suggested: about <span data-sugg>${budgetText(suggest(basis, view.applicationsADay).monthlyUsd)}</span> a month</summary>
 ${volumeForm(view, basis)}
@@ -202,7 +195,6 @@ ${bar}
 </div>
 <div class="set">
 ${ownForm(state, { cls: "outline", button: "Save", value: String(budget.monthlyUsd), label: "Change it" })}
-<div class="clear">${clear}</div>
 ${again}
 </div>`;
 }
@@ -291,7 +283,6 @@ details.about { margin-top: 12px; }
 .field-err { grid-column: 1 / -1; color: var(--negative); font-size: var(--fs-small); }
 .or { font-size: var(--fs-small); color: var(--muted); text-align: center; }
 .stop { font-size: var(--fs-small); color: var(--muted); }
-.clear { font-size: var(--fs-small); }
 .again .acts { margin-top: 10px; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -304,16 +295,14 @@ details.about { margin-top: 12px; }
   .budget .big { font-size: 30px; line-height: 36px; }
   .btn { min-height: 44px; }
   .money-in input, .vol input { height: 44px; }
-  .clear .link { display: inline-block; padding: 12px 0; }
 }
 `;
 
 // The page's script. Typing the applications a day works the suggestion out
 // again, with monthlyFor's own sum (budgets.ts), and sends nothing; every
-// form marked data-fetch and every link marked data-view is sent in place,
-// asking for JSON, and the <main> the server answers with is swapped in, the
-// address unchanged. Focus goes where the answer names, else to what it
-// marks data-autofocus, else stays.
+// form marked data-fetch is sent in place, asking for JSON, and the <main>
+// the server answers with is swapped in, the address unchanged. Focus goes
+// where the answer names, else stays.
 const BUDGETS_SCRIPT = String.raw`
 (function () {
   "use strict";
@@ -347,13 +336,13 @@ const BUDGETS_SCRIPT = String.raw`
     var old = main.querySelector(".banner");
     if (old) old.replaceWith(box); else main.querySelector(".tabs").after(box);
   }
-  function swap(html, focusK, opens) {
+  function swap(html, focusK) {
     main.innerHTML = html;
     if (window.cosBudgetBars) window.cosBudgetBars();
-    var t = (focusK && (main.querySelector('[data-k="' + focusK + '"]') || (focusK === "next" && main.querySelector("[data-next]")))) || (opens && main.querySelector("[data-autofocus]"));
+    var t = focusK && (main.querySelector('[data-k="' + focusK + '"]') || (focusK === "next" && main.querySelector("[data-next]")));
     if (t) t.focus({ preventScroll: true });
   }
-  function send(url, init, button, opens) {
+  function send(url, init, button) {
     if (busy) return;
     busy = true;
     if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); button.insertAdjacentHTML("afterbegin", '<span class="spin" aria-hidden="true"></span> '); }
@@ -361,7 +350,7 @@ const BUDGETS_SCRIPT = String.raw`
     init.credentials = "same-origin";
     fetch(url, init)
       .then(function (r) { if (!r.ok && r.status !== 400) throw new Error(String(r.status)); return r.json(); })
-      .then(function (j) { busy = false; swap(j.main, j.focus, opens); })
+      .then(function (j) { busy = false; swap(j.main, j.focus); })
       .catch(function () {
         busy = false;
         if (button) { button.disabled = false; button.removeAttribute("aria-busy"); var s = button.querySelector(".spin"); if (s) s.remove(); }
@@ -379,18 +368,11 @@ const BUDGETS_SCRIPT = String.raw`
     if (b && b.disabled) return;
     var data = new FormData(form);
     if (b && b.name) data.append(b.name, b.value);
-    send(form.action, { method: "POST", body: data }, b, false);
+    send(form.action, { method: "POST", body: data }, b);
   });
   document.addEventListener("click", function (e) {
     var to = e.target.closest && e.target.closest('a[href="#amount"]');
-    if (to && main.contains(to)) { var f = document.getElementById("amount"); if (f) { e.preventDefault(); f.focus(); f.select(); } return; }
-    var a = e.target.closest && e.target.closest("a[data-view]");
-    if (!a || !main.contains(a) || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-    e.preventDefault();
-    var u = new URL(a.href);
-    var n = perDay();
-    if (n !== null) u.searchParams.set("per_day", String(n));
-    send(u.pathname + u.search, { method: "GET" }, null, true);
+    if (to && main.contains(to)) { var f = document.getElementById("amount"); if (f) { e.preventDefault(); f.focus(); f.select(); } }
   });
 })();
 `;
@@ -450,7 +432,7 @@ const flashCookie = (flash: Flash | undefined): string =>
 
 export const NOT_A_BUDGET = "Type a budget in dollars, more than $0, for example 30.";
 
-// GET shows the page, or its <main> as JSON; POST sets, changes or clears the
+// GET shows the page, or its <main> as JSON; POST sets or changes the
 // budget, then answers in place (JSON) or redirects back to the page.
 // Scoped to the signed-in user throughout.
 export async function handleBudgets(request: Request, db: D1Database, userId: string, now: Date, reader: KeyReader): Promise<Response> {
@@ -509,9 +491,6 @@ export async function handleBudgets(request: Request, db: D1Database, userId: st
       await setBudget(db, userId, PROVIDER, amount, "typed", now);
       return done({ said: `Budget set: ${budgetText(amount)} a month.` }, "next");
     }
-    case "clear":
-      await clearBudget(db, userId, PROVIDER);
-      return done({ said: "Budget cleared. Model calls stop until you set one." }, "amount");
   }
   return done({ problem: "There is nothing to do here." }, "amount", 400);
 }

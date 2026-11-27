@@ -1,6 +1,6 @@
 // Models › Setup › Budgets (design-v3 1.8): the one monthly OpenRouter
 // budget, its suggestion from the usable models at OpenRouter's list prices,
-// and setting, changing and clearing it in place or, without the script, by
+// and setting and changing it in place or, without the script, by
 // post-redirect-get. Every request goes through the Worker, Access included,
 // against a D1 with every migration applied.
 import { env } from "cloudflare:test";
@@ -191,7 +191,7 @@ describe("Models › Setup › Budgets, before the budget is set", () => {
   });
 });
 
-describe("setting, changing and clearing the budget", () => {
+describe("setting and changing the budget", () => {
   it("sets the suggestion in place: JSON with the new <main>, the bar, no redirect", async () => {
     const r = await postInPlace({ do: "accept", per_day: "5" });
     expect(r.status).toBe(200);
@@ -254,21 +254,6 @@ describe("setting, changing and clearing the budget", () => {
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 12, setHow: "typed" });
   });
 
-  it("clears the budget after a confirm, both in place; the suggestion comes back and calls stop", async () => {
-    await setBudget(env.DB, ownerId, "openrouter", 31, "accepted", NOW);
-    const ask = await send("?per_day=5&confirm=clear", { headers: { accept: "application/json" } });
-    const confirm = ((await ask.json()) as { main: string }).main;
-    expect(confirm).toContain('<p id="clear-q"><strong>Clear the budget?</strong> Model calls stop until you set one again.</p>');
-    expect(confirm).toContain('data-view data-k="clear-no" data-autofocus>Cancel</a>');
-    expect(await readBudget(env.DB, ownerId, "openrouter")).toBeDefined();
-    const r = await postInPlace({ do: "clear", per_day: "5" });
-    expect(r.status).toBe(200);
-    expect(await readBudget(env.DB, ownerId, "openrouter")).toBeUndefined();
-    expect(r.body.main).toContain("Budget cleared. Model calls stop until you set one.");
-    expect(r.body.main).toContain("Set $31 a month");
-    expect(r.body.main).not.toContain('<div class="bb" data-budget-bar>');
-  });
-
   it("refuses a user who has not connected OpenRouter, and a form posted from another site", async () => {
     const friend = await send("", { method: "POST", body: new URLSearchParams({ do: "set", amount: "10" }), headers: { "content-type": "application/x-www-form-urlencoded" } }, { sub: "friend-sub", email: "friend@example.com" });
     expect(friend.status).toBe(303);
@@ -285,7 +270,8 @@ describe("setting, changing and clearing the budget", () => {
     await writeConnection(env.DB, friend, testPlugin(), { method: "oauth_pkce", key_hash: "c".repeat(64) }, NOW);
     await setBudget(env.DB, friend, "openrouter", 99, "typed", NOW);
     expect(await page()).not.toContain("$99");
-    await postInPlace({ do: "clear" });
+    await postInPlace({ do: "set", amount: "10" });
+    expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 10 });
     expect(await readBudget(env.DB, friend, "openrouter")).toMatchObject({ monthlyUsd: 99 });
   });
 

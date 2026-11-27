@@ -206,7 +206,7 @@ export const BAR_CSS = `
 // closes it. Keyboard focus on a part opens its label too, and it stays open
 // while focus moves into the label's links; hover needs no script (BAR_CSS).
 // It wires every bar on the page, and `cosBudgetBars()` wires again any bar
-// a page swapped in since (Budgets sets and clears in place); a bar already
+// a page swapped in since (Budgets sets and changes in place); a bar already
 // wired is left as it is.
 export const BAR_JS = `
 function cosBudgetBars() { document.querySelectorAll("[data-budget-bar]").forEach(function (bar) {
