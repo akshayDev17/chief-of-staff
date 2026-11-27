@@ -13,7 +13,13 @@ on its row, Test all models, Retest failed), that the provider's current list
 still offers the user. That means the list names it and the app can call it,
 a router has the user's price cap, and the account's own list, where read,
 includes it. A later failed test takes the model out, and a later pass puts
-it back. Each model's latest finished test is one row of
+it back. Only the model's own verdict counts as its latest test: a refusal
+that says nothing about the model (`test-model.ts` `isVerdict`: the
+provider not connected, the month's budget spent, no credential, no credit,
+the provider busy, or a test that could not run) changes nothing about
+whether it is usable. Its row still shows that outcome: Test all's in the
+run, a single Test's in the page's view. The strip's Works / Doesn't work
+counts and filters go by the verdict. Each model's latest verdict is one row of
 `model_latest_tests`. A Test all models run that is still testing a model
 does not change it, so tasks keep their models while a run goes on.
 Migration 0013 carried the tests made before it over: each model's newest
@@ -74,10 +80,11 @@ every user, 5 at once, each the model's own test call (task
 `test_all_models`). A tick claims each test before calling, so overlapping
 ticks never test a model twice, and a claim older than 10 minutes is taken
 again. A 200 with no text (a reasoning model that spent its tokens thinking)
-counts as working. Each result becomes the model's latest test. One run at a
+counts as working. Each result is recorded in the run, and each verdict
+becomes the model's latest test. One run at a
 time per user (a unique index holds it when two starts race), and a new one
 at most every 10 minutes. **Retest failed (N)** reruns, in the same run, the
-run's failures that can still be tested and have not passed since. A run made
+run's failures, verdicts or not, that can still be tested and have not passed since. A run made
 on an older model list (`CATALOG_VERSION`) offers no Retest failed. The real
 total is the sum of the run's ledger rows: OpenRouter's reported cost.
 
@@ -115,15 +122,20 @@ for the main model and the fallback, from their usable models only. The
 provider list has one entry today, OpenRouter; another provider's usable
 models join the same lists (`task_routes` names each by provider and model).
 
+- a task uses only its saved choice. A task with no saved choice has no
+  model; migration 0013 saved, as an accepted choice with no fallback, the one
+  model each user's tasks used before (the user's only added model, unless
+  free);
 - a saved choice holds while its main model is usable. Once that model is not
-  usable (a later test failed, or the provider dropped it), the task reads
-  "Choose a model", and no proposal or one tap replaces the choice by itself.
-  Its calls go to its saved fallback while that is usable, else they are
-  refused with a plain reason, never sent to a model the user did not choose
-  for the task;
-- one usable model and no saved choice: every task uses it, with nothing to
-  tap, unless it is free;
-- more: each task is proposed the cheapest passed model at its tier and, as
+  usable (a later test of it failed, or the provider dropped it), no proposal
+  or one tap replaces the choice by itself. Its calls go to its saved fallback
+  while that is usable, and the task says it runs on its fallback, named,
+  with its Change form open to choose a new main model; with no usable
+  fallback the task reads "Choose a model" and its calls are refused with a
+  plain reason, never sent to a model the user did not choose for the task
+  (`readTaskRoutes` `stopped`, the one rule `routeTask` calls by and the
+  Providers page's note under a failed result follows);
+- each task is proposed the cheapest passed model at its tier and, as
   its fallback, the next cheapest at that tier, another model (on OpenRouter
   today, so another OpenRouter model), never the main one; where the user has
   none at the task's tier, the other non-Strongest tier, and the page says
@@ -143,9 +155,10 @@ models join the same lists (`task_routes` names each by provider and model).
 fallback: OpenRouter refusing or failing the main call (429, 408, 5xx, no
 reply) is answered once by the fallback, named in its ledger row. A spent
 budget or a missing key stops both, since they share the one provider.
-Until a proposal is accepted or a model chosen, a task with several models
-has none, and `callTask` refuses it (`no_model`); so does a task whose saved
-main model and fallback are both no longer usable. Every query is scoped to the
+Until a proposal is accepted or a model chosen, a task has none, and
+`callTask` refuses it (`no_model`), saying to choose a model for it on Model
+for each task; so does a task whose saved main model and fallback are both no
+longer usable, saying to test its model again or choose another. Every query is scoped to the
 signed-in user.
 
 # Models › Usage (design-v3 10.1)

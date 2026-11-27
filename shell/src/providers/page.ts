@@ -46,9 +46,9 @@
 import { readAccountList, refreshAccountList } from "../models/account-list";
 import { parsePriceCap, savePriceCap } from "../models/price-caps";
 import { modelsSubtabs, nextAction, SETUP_TABS } from "../models/setup-tabs";
-import { taskById } from "../models/tasks";
+import { readTaskRoutes } from "../models/tasks";
 import { planRetest, planTestAll, readTestAll, shownTests, startRetest, startTestAll } from "../models/test-all";
-import { listOffer, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
+import { isVerdict, listOffer, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
 import { readLatestTests, readUsableModels } from "../models/usable";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { isCurrentCatalog } from "../prices/openrouter";
@@ -237,16 +237,19 @@ async function readAccount(plugin: ProviderPlugin, connection: ConnectionFields,
   }
 }
 
-// The tasks whose saved choice names `model` as their main model.
-async function tasksWithMain(db: D1Database, userId: string, provider: Provider, model: string): Promise<string[]> {
-  const { results } = await db
-    .prepare("SELECT task FROM task_routes WHERE user_id = ? AND main_provider = ? AND main_model = ?")
-    .bind(userId, provider, model)
-    .all<{ task: string }>();
-  return results.flatMap((r) => {
-    const t = taskById(r.task);
-    return t ? [t.label] : [];
-  });
+// For each of `models`: the tasks whose saved main model it is and that
+// stopped with it, each with the fallback it runs on now, if any.
+async function tasksStoppedOn(db: D1Database, userId: string, provider: Provider, models: string[]): Promise<Map<string, Array<{ task: string; fallback?: string }>>> {
+  if (!models.length) return new Map();
+  const { routes } = await readTaskRoutes(db, userId);
+  return new Map(
+    models.map((model) => [
+      model,
+      routes.flatMap((r) =>
+        r.stopped?.main.provider === provider && r.stopped.main.model === model ? [{ task: r.task.label, ...(r.stopped.fallback ? { fallback: r.stopped.fallback.model } : {}) }] : [],
+      ),
+    ]),
+  );
 }
 
 export async function readPageState(
@@ -268,8 +271,11 @@ export async function readPageState(
     const plan = await planTestAll(db, plugins, userId, provider, now, rows);
     const retest = await planRetest(db, plugins, userId, provider, rows);
     const shown = shownTests(run, latest);
-    const failed = (view.results ?? []).filter((r) => shown.get(r.model)?.state === "failed");
-    const usedBy = new Map(await Promise.all(failed.map(async (r) => [r.model, await tasksWithMain(db, userId, provider, r.model)] as const)));
+    const failed = (view.results ?? []).filter((r) => {
+      const s = shown.get(r.model);
+      return !r.reason && s?.state === "failed" && s.verdict === "failed";
+    });
+    const usedBy = await tasksStoppedOn(db, userId, provider, failed.map((r) => r.model));
     const catalogCurrent = isCurrentCatalog(catalog);
     state.table = {
       plugin,
@@ -445,10 +451,12 @@ export async function handleProviders(
     case "test": {
       if (!model) return done(provider, {}, { flash: { problem: "Choose a model to test." }, keepCard: true });
       const outcome = await testOne(db, plugins, { userId, provider, model, now });
-      const reason = outcome.kind === "refused" && PRECHECK_REFUSALS.has(outcome.reason) ? outcome.reason : undefined;
+      // A refusal that recorded no test is carried in the view itself.
+      const unrecorded = outcome.kind === "refused" && (PRECHECK_REFUSALS.has(outcome.reason) || !isVerdict(outcome)) ? outcome : undefined;
       // In place, the results already shown stay under their rows.
       const shownBefore = wantsJson ? (parseView(new URLSearchParams(request.headers.get("x-cos-view") ?? "")).results ?? []) : [];
-      const results = [{ model, ...(reason ? { reason } : {}) }, ...shownBefore.filter((r) => r.model !== model)].slice(0, MAX_RESULTS);
+      const result = { model, ...(unrecorded ? { reason: unrecorded.reason, ...(unrecorded.reply ? { reply: unrecorded.reply } : {}) } : {}) };
+      const results = [result, ...shownBefore.filter((r) => r.model !== model)].slice(0, MAX_RESULTS);
       return done(provider, { results }, { focus: `t-${model}`, anchor: `#${rowAnchor(model)}`, keepCard: true });
     }
     case "check-account": {

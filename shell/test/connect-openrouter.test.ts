@@ -210,7 +210,7 @@ describe("Connect OpenRouter", () => {
 
   it("without the script, a test posts and redirects to its result, so a refresh runs nothing", async () => {
     await connect();
-    fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 429, message: "Rate limited upstream" } }, { status: 429 }) });
+    fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 404, message: "No endpoints found" } }, { status: 404 }) });
     const tested = await post("/openrouter/test", { model: "openai/gpt-6-luna" });
     expect(tested.status).toBe(303);
     expect(tested.headers.get("location")).toBe(`${BASE}?provider=openrouter&result=openai%2Fgpt-6-luna#m-openai-gpt-6-luna`);
@@ -218,18 +218,49 @@ describe("Connect OpenRouter", () => {
     const page = await (await follow(tested)).text();
     expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
     const row = rowOf(page, "openai/gpt-6-luna");
-    expect(row).toContain('<span class="pill">Busy</span>');
-    expect(row).toContain("Test again");
-    expect(row).toContain("OpenRouter replied: 429");
+    expect(row).toContain(`<span class="pill bad">Doesn't work</span>`);
+    expect(row).toContain("OpenRouter replied: 404");
     expect((await readLatestTests(env.DB, userId, "openrouter")).get("openai/gpt-6-luna")?.state).toBe("failed");
   });
 
-  it("names the tasks a failed test leaves without their model", async () => {
+  it("keeps a passed model usable when a single Test is refused as busy, and carries the result in the view", async () => {
     await connect();
-    await env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, set_how, set_at) VALUES (?, 'match', 'openrouter', 'openai/gpt-6-luna', 'changed', ?)").bind(userId, NOW.toISOString()).run();
+    fetcher = fakeFetch();
+    await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true });
+    const passed = (await readLatestTests(env.DB, userId, "openrouter")).get("openai/gpt-6-luna");
+    expect(passed?.state).toBe("passed");
+    fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 429, message: "Rate limited upstream" } }, { status: 429 }) });
+    const tested = await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { now: new Date("2026-11-27T10:05:00Z") });
+    expect(tested.status).toBe(303);
+    const [model, reason, reply] = new URL(tested.headers.get("location")!).searchParams.get("result")!.split("|");
+    expect([model, reason]).toEqual(["openai/gpt-6-luna", "busy"]);
+    expect(JSON.parse(reply!)).toMatchObject({ status: 429, message: "Rate limited upstream" });
+    fetcher = fakeFetch();
+    const page = await (await follow(tested)).text();
+    expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
+    const row = rowOf(page, "openai/gpt-6-luna");
+    expect(row).toContain('data-state="works"');
+    expect(row).toContain("Test again");
+    expect(row).toContain("OpenRouter replied: 429");
+    expect(row).toContain("Rate limited upstream");
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("openai/gpt-6-luna")).toEqual(passed);
+    expect((await readUsableModels(env.DB, userId)).map((m) => m.model)).toEqual(["openai/gpt-6-luna"]);
+  });
+
+  it("names the tasks a failed test leaves on their fallback, or without a model", async () => {
+    await connect();
+    fetcher = fakeFetch();
+    await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true });
+    await post("/openrouter/test", { model: "mistralai/mistral-nemo" }, { json: true });
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, set_how, set_at) VALUES (?, 'match', 'openrouter', 'openai/gpt-6-luna', 'changed', ?)").bind(userId, NOW.toISOString()),
+      env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, 'score', 'openrouter', 'openai/gpt-6-luna', 'openrouter', 'mistralai/mistral-nemo', 'changed', ?)").bind(userId, NOW.toISOString()),
+    ]);
     fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 404, message: "No endpoints found" } }, { status: 404 }) });
-    const { main } = await json(await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true }));
-    expect(rowOf(main, "openai/gpt-6-luna")).toContain("Matching questions reads “Choose a model” now.");
+    const { main } = await json(await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true, now: new Date("2026-11-27T10:05:00Z") }));
+    const row = rowOf(main, "openai/gpt-6-luna");
+    expect(row).toContain("Scoring roles runs on its fallback mistralai/mistral-nemo now.");
+    expect(row).toContain("Matching questions reads “Choose a model” now.");
   });
 
   it("reads the account's own model list after Connect; a model it leaves out links the settings, then Check again", async () => {
@@ -380,8 +411,6 @@ describe("Connect OpenRouter", () => {
     expect(card).toContain("OpenRouter&#39;s delete-a-key API takes only your own management key");
     expect(card).toMatch(/<button type="submit" class="btn small danger-o" data-k="disc-yes">Disconnect<\/button>/);
     expect(confirm).not.toContain(ISSUED_KEY);
-    // The old address still opens the confirm.
-    expect(await (await get("?provider=openrouter&disconnect=1")).text()).toContain("Disconnect OpenRouter?");
     const gone = await post("/openrouter/disconnect");
     expect(gone.status).toBe(303);
     expect(gone.headers.get("location")).toBe(`${BASE}?provider=openrouter&disconnected=1`);

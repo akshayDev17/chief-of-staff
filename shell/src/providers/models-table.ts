@@ -48,9 +48,10 @@ export type Viewer = "owner" | "friend";
 // redirect, and the page's script fetches the same address in place.
 export interface View {
   // The results under their rows, newest first: each test adds its own and
-  // keeps the ones shown already, up to MAX_RESULTS. `reason`: a refusal made
-  // before any call, which records no test.
-  results?: Array<{ model: string; reason?: TestRefusal }>;
+  // keeps the ones shown already, up to MAX_RESULTS. `reason`: a refusal that
+  // records no test, made before any call or saying nothing about the model
+  // (models/test-model.ts isVerdict), with the provider's `reply` where it gave one.
+  results?: Array<{ model: string; reason?: TestRefusal; reply?: TestRecord["reply"] }>;
   notice?: { model: string; kind: "capped" | "allowed" | "left-out" };
   confirm?: "test-all" | "retest" | "disconnect";
   cap?: string;
@@ -62,18 +63,34 @@ const NOTICE_KINDS = new Set(["capped", "allowed", "left-out"]);
 export const MAX_RESULTS = 8;
 const CONFIRMS = new Set(["test-all", "retest", "disconnect"]);
 
+// The provider's reply as a view carries it, kept only in its own shape.
+function parseReply(text: string): TestRecord["reply"] {
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.status !== "number") return undefined;
+  const field = (k: string) => (typeof o[k] === "string" ? { [k]: o[k] as string } : {});
+  return { status: o.status, ...field("errorName"), ...field("message"), ...field("repliedModel") };
+}
+
 export function parseView(params: URLSearchParams): View {
   const view: View = {};
-  // Each `result` is a model, or `<model>|<reason>`.
+  // Each `result` is a model, `<model>|<reason>`, or `<model>|<reason>|<reply as JSON>`.
   const results = params.getAll("result").filter(Boolean).slice(0, MAX_RESULTS).map((r) => {
-    const [model, reason] = r.split("|");
-    return { model: model!, ...(reason ? { reason: reason as TestRefusal } : {}) };
+    const [model, reason, ...reply] = r.split("|");
+    const parsed = reply.length ? parseReply(reply.join("|")) : undefined;
+    return { model: model!, ...(reason ? { reason: reason as TestRefusal } : {}), ...(reason && parsed ? { reply: parsed } : {}) };
   });
   if (results.length) view.results = results;
   const notice = params.get("notice");
   const kind = params.get("kind") ?? "";
   if (notice && NOTICE_KINDS.has(kind)) view.notice = { model: notice, kind: kind as NonNullable<View["notice"]>["kind"] };
-  const confirm = params.get("confirm") ?? (params.get("disconnect") === "1" ? "disconnect" : params.get("test-all") === "confirm" ? "test-all" : "");
+  const confirm = params.get("confirm") ?? "";
   if (CONFIRMS.has(confirm)) view.confirm = confirm as View["confirm"];
   const cap = params.get("cap");
   if (cap) view.cap = cap;
@@ -84,7 +101,7 @@ export function parseView(params: URLSearchParams): View {
 
 export function viewQuery(provider: string, view: View): string {
   const q = new URLSearchParams({ provider });
-  for (const r of view.results ?? []) q.append("result", r.reason ? `${r.model}|${r.reason}` : r.model);
+  for (const r of view.results ?? []) q.append("result", r.reason ? `${r.model}|${r.reason}${r.reply ? `|${JSON.stringify(r.reply)}` : ""}` : r.model);
   if (view.notice) {
     q.set("notice", view.notice.model);
     q.set("kind", view.notice.kind);
@@ -121,8 +138,10 @@ export interface ModelsTableInput {
   retest: RetestPlan;
   run?: TestAllRun;
   shown: Map<string, ShownTest>;
-  // For a failed result under a row: the tasks whose saved main model it is.
-  usedBy: Map<string, string[]>;
+  // For a failed result under a row: the tasks whose saved main model it is,
+  // each with the fallback it runs on now, where it has a usable one
+  // (models/tasks.ts readTaskRoutes `stopped`).
+  usedBy: Map<string, Array<{ task: string; fallback?: string }>>;
   view: View;
   step?: Step;
   // A problem from the last request, shown above the table.
@@ -190,12 +209,14 @@ const shortName = (r: OfferRow): string => {
   return n.includes(": ") ? n.slice(n.indexOf(": ") + 2) : n;
 };
 
-// What a row's state is, for the strip and the script's filters.
+// What a row's state is, for the strip and the script's filters: the
+// model's latest verdict.
 type RowState = "works" | "fails" | "pending" | "blocked";
 const rowState = (r: OfferRow, shown: Map<string, ShownTest>): RowState => {
   if (blockKind(r)) return "blocked";
-  const s = shown.get(r.model)?.state;
-  return s === "passed" ? "works" : s === "failed" ? "fails" : "pending";
+  const s = shown.get(r.model);
+  const verdict = s && s.state !== "testing" ? s.verdict : undefined;
+  return verdict === "passed" ? "works" : verdict === "failed" ? "fails" : "pending";
 };
 
 const running = (input: ModelsTableInput): boolean => Boolean(input.run && !input.run.finishedAt);
@@ -310,8 +331,8 @@ function resultHtml(r: OfferRow, input: ModelsTableInput): string {
   const latest = input.shown.get(r.model);
   let record: TestRecord | undefined;
   if (res.reason) {
-    const refused: Refused = { kind: "refused", model: r.model, reason: res.reason };
-    record = { reason: res.reason, text: refusalText(refused, plugin), fix: refusalFix(refused, plugin) };
+    const refused: Refused = { kind: "refused", model: r.model, reason: res.reason, ...(r.free ? { free: true } : {}) };
+    record = { reason: res.reason, text: refusalText(refused, plugin), fix: refusalFix(refused, plugin), ...(res.reply ? { reply: res.reply } : {}) };
   } else if (latest && latest.state !== "testing") {
     if (latest.state === "passed") return `<div class="result ok" role="status"><p class="v">${ICON.ok}<span><strong>${esc(shortName(r))} passed.</strong> Tasks can use it.</span>${hide}</p></div>`;
     record = latest.result;
@@ -329,7 +350,11 @@ function resultHtml(r: OfferRow, input: ModelsTableInput): string {
       : "",
   ].join("");
   const usedBy = input.usedBy.get(r.model) ?? [];
-  const used = usedBy.length ? `<p>${esc(joinAnd(usedBy))} ${usedBy.length === 1 ? "reads" : "read"} “Choose a model” now.</p>` : "";
+  const none = usedBy.filter((u) => !u.fallback).map((u) => u.task);
+  const used = [
+    ...usedBy.flatMap((u) => (u.fallback ? [`<p>${esc(u.task)} runs on its fallback ${esc(u.fallback)} now.</p>`] : [])),
+    none.length ? `<p>${esc(joinAnd(none))} ${none.length === 1 ? "reads" : "read"} “Choose a model” now.</p>` : "",
+  ].join("");
   const links = (record.links ?? []).filter((l) => l.href !== credits?.href).map((l) => newTab(l, "ext")).join(" · ");
   const det = [record.reply ? `<p>${replyText(plugin, record.reply)}</p>` : "", record.fix ? `<p>${esc(record.fix)}</p>` : "", links ? `<p>${links}</p>` : ""].join("");
   const cls = record.reason === "no_credits" ? "warn" : "bad";
@@ -365,6 +390,8 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   const p = plugin.provider;
   const shown = input.shown.get(r.model);
   const state = rowState(r, input.shown);
+  // The failed test the row reports, which may be no verdict on the model.
+  const failed = shown?.state === "failed" ? shown : undefined;
   const kind = blockKind(r);
   const makerKey = r.model.split("/")[0]!;
   const maker = makerNames.get(makerKey) ?? makerKey;
@@ -375,7 +402,7 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   // on hundreds of rows says nothing); the strip's Works cell finds them.
   let tags = "";
   if (r.free) tags += '<span class="pill free">Free</span>';
-  if (state === "fails") tags += failTag(shown && shown.state !== "testing" ? shown.result : undefined);
+  if (failed) tags += failTag(failed.result);
   const resultHere = view.results?.some((x) => x.model === r.model) ?? false;
   const plainMeta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span></span>`;
   let meta: string;
@@ -383,17 +410,17 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   else if (kind === "router") meta = `<span class="meta">Priced per call by the model it picks</span>`;
   else if (kind === "not_callable") meta = `<span class="meta" title="${esc(plugin.connect.notCallableReason(r.model))}">Can't be tested · ${esc(plugin.connect.notCallableReason(r.model))}</span>`;
   else if (kind === "no_price") meta = `<span class="meta">No price yet · <span data-hl>${id}</span></span>`;
-  else if (r.cap && state !== "fails") {
+  else if (r.cap && !failed) {
     meta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped · <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span>`;
-  } else if (state === "fails" && !resultHere && shown && shown.state !== "testing") {
-    meta = `<span class="meta why">${esc(shown.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button></span>`;
+  } else if (failed && !resultHere) {
+    meta = `<span class="meta why">${esc(failed.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button></span>`;
   } else meta = plainMeta;
   let extra = "";
   if (view.cap === r.model && r.router) extra = capEditor(r, input);
   else if (view.notice?.model === r.model) extra = noticeHtml(r, input);
   else if (resultHere) extra = resultHtml(r, input);
-  else if (state === "fails" && shown && shown.state !== "testing") {
-    const res = shown.result;
+  else if (failed) {
+    const res = failed.result;
     const det = [`<span>${esc(maker)} · ${id}</span>`, res.reply ? `<span>${replyText(plugin, res.reply)}</span>` : "", res.fix ? `<span>${esc(res.fix)}</span>` : ""].join("");
     extra = `<div class="det" id="det-${esc(anchor)}" data-det-panel hidden>${det}</div>`;
   }

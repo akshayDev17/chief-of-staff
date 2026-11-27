@@ -15,6 +15,7 @@ import worker from "../src/index";
 import { handleTaskModels } from "../src/models/picker-page";
 import { routeTask, TASKS } from "../src/models/tasks";
 import { FRESH_LIST_WAIT, readTestAll, runQueuedTests } from "../src/models/test-all";
+import { readLatestTests } from "../src/models/usable";
 import { refreshPrices } from "../src/prices/refresh";
 import { readCurrentCatalog } from "../src/prices/store";
 import { isTrulyFreeTextModel } from "../src/prices/openrouter";
@@ -163,7 +164,9 @@ describe("a $0 OpenRouter account", () => {
     expect(free).toMatch(/<strong>[^<]+ passed\.<\/strong> Tasks can use it\./);
     const paidModel = MODELS.data.find((m) => !isTrulyFreeTextModel(m) && Number(m.pricing.prompt) > 0 && !m.id.startsWith("~") && !m.id.endsWith(":batch") && m.id !== "anthropic/claude-sonnet-5.5")!.id;
     const paid = entry(await tested(paidModel), paidModel);
-    expect(paid).toContain('<span class="pill warn">Needs credit</span>');
+    // A 402 says nothing about the model: no verdict, so the row stays untested.
+    expect(paid).toContain('data-state="pending"');
+    expect((await readLatestTests(env.DB, userId, "openrouter")).has(paidModel)).toBe(false);
     // The one action leads; OpenRouter's own words are in the collapsed details.
     expect(paid).toMatch(/<strong>Needs credit on OpenRouter\.<\/strong><\/span><button type="button" class="link hide" data-hide="[^"]+">Hide<\/button><\/p><div class="acts"><a class="btn small outline ext" href="https:\/\/openrouter.ai\/settings\/credits"[^>]*>Add credits<\/a><\/div><details><summary>Details<\/summary><p>OpenRouter replied: 402/);
     expect(paid).not.toContain("cheapest free model");

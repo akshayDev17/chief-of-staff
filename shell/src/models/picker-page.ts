@@ -7,13 +7,14 @@
 //   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
-// Only the user's own passed models are offered (chosen one by one, or added
-// from Test all models' results). With one, every task uses it ("Model now"),
-// unless it is free. With more,
-// each task shows its main model and its fallback, another of the user's
-// models: the user's choice, or the proposal at the task's suggested strength
-// marked "proposed" until accepted (again, for an accepted task whose
-// proposal has changed). Changing a task chooses the provider and then the
+// Only the user's usable models are offered (models/usable.ts: each model
+// whose latest test passed). Each task shows its main model and its
+// fallback, another of the user's models: the user's choice, or the proposal
+// at the task's suggested strength marked "proposed" until accepted (again,
+// for an accepted task whose proposal has changed); a task with neither
+// reads "Choose a model". A task whose saved main model stopped passing
+// reads that it runs on its fallback, named, with its Change form open to
+// choose a new main model; with no usable fallback it reads "Choose a model". Changing a task chooses the provider and then the
 // model, for the main and the fallback (the owner, 2026-11-27: "for each kind
 // of task : choose the provider and the model"); OpenRouter is the one
 // provider today, and another provider's passed models join the same lists. A proposed model of the other
@@ -39,7 +40,7 @@ import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
 import { FREE_NOTE } from "./test-model";
 import type { Link } from "../proxy/plugin";
-import { acceptProposals, changeTask, freeRoutes, modelKey, onlyModel, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
+import { acceptProposals, changeTask, freeRoutes, modelKey, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
 
 export interface PickerPageInput {
   viewer: Viewer;
@@ -85,9 +86,9 @@ function pairSelects(id: string, role: "main" | "fallback", chosen: Offered | un
 <select class="f" id="${id}-${role}-m" name="${role}_model" data-pair-model>${none}${groups}</select></fieldset>`;
 }
 
-function changeForm(r: TaskRoute, now: Route | undefined, input: PickerPageInput): string {
+function changeForm(r: TaskRoute, now: { main?: Offered; fallback?: Offered } | undefined, input: PickerPageInput): string {
   const id = `t-${r.task.id}`;
-  return `<details class="change"><summary class="btn small ghost">Change</summary>
+  return `<details class="change"${r.stopped?.fallback ? " open" : ""}><summary class="btn small ghost">Change</summary>
 <form method="post" action="${TASK_MODELS_PATH}/change" class="pick">
 <input type="hidden" name="task" value="${esc(r.task.id)}">
 ${pairSelects(id, "main", now?.main, input)}
@@ -101,8 +102,11 @@ function substituteNote(task: Task, m: Offered, asFallback: boolean): string {
   return ` <span class="small">a ${m.tier} model, since you have no ${asFallback ? "other " : ""}${task.tier} model yet</span>`;
 }
 
-function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput, single: boolean): string {
-  if (single) return `<td data-l="Model now">${route ? esc(modelName(route.main, input)) : "–"}</td>`;
+function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput): string {
+  const onFallback = r.stopped?.fallback;
+  if (onFallback) {
+    return `<td data-l="Main">Runs on its fallback for now: ${esc(r.stopped!.main.model)} stopped passing its test. Choose a new main model with Change.</td><td data-l="Fallback (another model)">${esc(modelName(onFallback, input))}</td>`;
+  }
   if (!route) return `<td data-l="Main">Choose a model</td><td data-l="Fallback (another model)">–</td>`;
   const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
   const fromProposal = r.pending || r.current?.setHow === "accepted";
@@ -111,7 +115,7 @@ function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInp
     ? esc(modelName(route.fallback, input)) + tag + note(route.fallback, true)
     : input.offered.length > 1
       ? "none"
-      : "none: add another model for a fallback";
+      : "none: test another model for a fallback";
   return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another model)">${fallback}</td>`;
 }
 
@@ -139,30 +143,22 @@ function freeTermsLine(input: PickerPageInput): string {
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
-  // One usable model and no task whose saved model is no longer usable:
-  // every task uses that model, with nothing to change.
-  const single = onlyModel(input.offered) !== undefined && !input.routes.some((r) => r.unusable);
   const intro = !input.offered.length
     ? `<div class="banner warn">Test a model first. Only models that passed are offered here. <a href="${PROVIDERS_PATH}#test">Test a model</a></div>`
-    : single
-      ? `<p>Every task uses your one passed model for now.</p>
-<details class="more"><summary>How to get a fallback</summary><p class="small">Test another model on <a href="${PROVIDERS_PATH}#test">Providers and models</a>. The app then proposes a main model and a fallback for each task.</p></details>`
-      : `<p>Each task gets a main model and a fallback.</p>
+    : `<p>Each task gets a main model and a fallback.</p>
 <details class="more"><summary>How it works</summary><ul class="small">
 <li>Both come from your models that passed, at the task's suggested strength.</li>
 <li>When the main model fails a call, the fallback answers it.</li>
 <li>Change any task: choose its provider, then its model.</li>
 ${input.offered.some((m) => m.free) ? "<li>A free model is never proposed. Choose it with Change, or the one tap.</li>" : ""}
 </ul></details>`;
-  const head = single
-    ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
-    : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
+  const head = `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
   const body = input.routes
     .map((r) => {
       const route = r.pending ? r.proposal : r.current;
-      const change = single ? "" : changeForm(r, route, input);
+      const change = changeForm(r, route ?? (r.stopped?.fallback ? { fallback: r.stopped.fallback } : undefined), input);
       return `<tr><td data-l="Task">${esc(r.task.label)}</td><td data-l="Suggested strength">${r.task.tier}</td>
-${routeCells(r, route, input, single)}
+${routeCells(r, route, input)}
 <td data-l="">${change}</td></tr>`;
     })
     .join("\n");

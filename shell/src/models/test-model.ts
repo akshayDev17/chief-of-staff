@@ -4,7 +4,10 @@
 // records it as the model's latest test (models/usable.ts): a model whose
 // latest test passed is one the user's tasks can use, and a later failed
 // test takes it out (the owner, 2026-11-27: "quite franky remove the add
-// feature altogether").
+// feature altogether"). Only the model's own verdict is recorded so: a
+// refusal that says nothing about the model (`notVerdict`: the provider not
+// connected, the month's budget spent, no credential, no credit, the
+// provider busy) leaves its latest test, and so its tasks, as they were.
 //
 //   listOffer(db, plugins, userId, provider) -> OfferRow[]
 //   testOne(db, plugins, { userId, provider, model, now }) -> TestOutcome     Test on a row
@@ -112,6 +115,8 @@ export interface Refused {
   location?: string;
   // The model is free, so a 402 on it is not a paid model's.
   free?: boolean;
+  // Says nothing about the model, so it is no verdict on it.
+  notVerdict?: true;
 }
 
 export type TestOutcome = { kind: "passed"; model: string; test: TestResult } | Refused;
@@ -244,6 +249,13 @@ export function blockedReason(row: OfferRow, plugin: ProviderPlugin): string | u
   }
 }
 
+// The failure kinds that say nothing about the model: the key is gone, the
+// account or key is out of credit, the provider is busy.
+const NOT_VERDICT_FAILURES: ReadonlySet<PlainReason> = new Set<PlainReason>(["not_set_up", "no_credits", "busy"]);
+
+// Whether an outcome is the model's own verdict, which becomes its latest test.
+export const isVerdict = (o: TestOutcome): boolean => o.kind === "passed" || !o.notVerdict;
+
 // One test call on `model` through the proxy, and what it proved: the passed
 // call, or the plain refusal. Used by Test and by Test all models.
 export async function testModel(
@@ -299,10 +311,12 @@ export async function testModel(
   if (outcome.failure) {
     const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
+    const credential = outcome.kind === "refused" && outcome.reason === "credential_failed";
     return refuse(plain.reason, {
       reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,
       fix: plain.fix,
       links: plain.links,
+      ...(credential || NOT_VERDICT_FAILURES.has(plain.reason) ? { notVerdict: true as const } : {}),
     });
   }
   if (outcome.kind === "provider_error") return refuse("no_reply", { note: `${plugin.connect.guide.short} did not answer the test call.` });
@@ -314,13 +328,13 @@ export async function testModel(
     case "no_cap":
       return refuse("no_cap");
     case "budget_spent":
-      return refuse("budget_spent", { note: `Resumes ${outcome.resumesOn}.` });
+      return refuse("budget_spent", { note: `Resumes ${outcome.resumesOn}.`, notVerdict: true });
     case "credential_failed":
       return outcome.missing
-        ? refuse("app_not_configured", { note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` })
-        : refuse("no_reply", { note: `No answer from ${plugin.connect.guide.short} while connecting.` });
+        ? refuse("app_not_configured", { note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.`, notVerdict: true })
+        : refuse("no_reply", { note: `No answer from ${plugin.connect.guide.short} while connecting.`, notVerdict: true });
     default:
-      return refuse("not_connected");
+      return refuse("not_connected", { notVerdict: true });
   }
 }
 
@@ -366,8 +380,9 @@ export function testRecord(o: TestOutcome, plugin: ProviderPlugin): TestRecord {
   };
 }
 
-// Test on a row: one test call, recorded as the model's latest test. A row
-// that cannot be tested is refused with no call and nothing recorded.
+// Test on a row: one test call, recorded as the model's latest test when it
+// is the model's verdict. A row that cannot be tested is refused with no
+// call and nothing recorded.
 export async function testOne(
   db: D1Database,
   plugins: PluginRegistry,
@@ -378,7 +393,7 @@ export async function testOne(
   if ("kind" in found) return found;
   const { offer, offers, plugin } = found;
   const outcome = await testModel(db, plugin, plugins, { userId, model, location: offer.location, otherIds: offers.map((r) => r.model), now, free: offer.free });
-  await latestTestWrite(db, userId, provider, model, outcome.kind === "passed" ? "passed" : "failed", testRecord(outcome, plugin), now).run();
+  if (isVerdict(outcome)) await latestTestWrite(db, userId, provider, model, outcome.kind === "passed" ? "passed" : "failed", testRecord(outcome, plugin), now).run();
   return outcome;
 }
 

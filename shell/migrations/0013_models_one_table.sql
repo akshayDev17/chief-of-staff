@@ -39,8 +39,8 @@ CREATE TABLE model_latest_tests (
 
 -- The tests already made: each model's newest of its latest Test all models
 -- result and the passed test it was added with, so every model a task uses
--- today stays usable while that test is its latest (task_routes is left as
--- it is). A model added with no recorded test has no pass to carry over.
+-- today stays usable while that test is its latest (no task_routes row is
+-- changed). A model added with no recorded test has no pass to carry over.
 INSERT INTO model_latest_tests (user_id, provider, model, state, result, tested_at)
 SELECT user_id, provider, model, state, result, tested_at FROM (
   SELECT user_id, provider, model, state, result, tested_at,
@@ -54,6 +54,25 @@ SELECT user_id, provider, model, state, result, tested_at FROM (
      WHERE test_result IS NOT NULL AND json_valid(test_result)
   )
 ) WHERE n = 1;
+
+-- The route every task with no saved choice took until now: the user's one
+-- added model at a provider a plug-in serves (openrouter today), unless the
+-- current model list names it free. A task with no saved choice now has no
+-- model, so each of those tasks keeps that model as an accepted choice, with
+-- no fallback. The task IDs are src/models/tasks.ts TASKS.
+INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at)
+SELECT u.user_id, t.column1, u.provider, u.model, NULL, NULL, 'accepted', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+FROM user_models AS u
+CROSS JOIN (VALUES ('match'), ('extract'), ('score'), ('fill_form'), ('check_form'), ('cover_letter'), ('free_text'), ('linkedin_message')) AS t
+WHERE u.provider = 'openrouter'
+  AND (SELECT count(*) FROM user_models AS o WHERE o.user_id = u.user_id AND o.provider = 'openrouter') = 1
+  AND NOT EXISTS (
+    SELECT 1 FROM openrouter_catalogs AS c, json_each(c.catalog, '$.models') AS m
+    WHERE c.snapshot_id = (SELECT id FROM price_snapshots WHERE status != 'rolled_back' ORDER BY id DESC LIMIT 1)
+      AND json_extract(m.value, '$.id') = u.model AND json_extract(m.value, '$.free') = 1
+  )
+  AND NOT EXISTS (SELECT 1 FROM task_routes AS r WHERE r.user_id = u.user_id AND r.task = t.column1)
+ON CONFLICT DO NOTHING;
 
 -- A Test all models run made on an older model list (an older catalog
 -- version, src/prices/openrouter.ts CATALOG_VERSION) offers no Retest

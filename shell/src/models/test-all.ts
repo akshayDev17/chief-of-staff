@@ -9,15 +9,18 @@
 //   runQueuedTests(db, plugins, now)                                 the every-minute cron, a few at a time
 //   readTestAll(db, userId, provider) -> TestAllRun | undefined      the latest run and its results
 //   planRetest / startRetest                                         Retest failed: the run's failures again, in the same run
-//   shownTests(run, latest) -> Map<model, ShownTest>                  what each model's row shows: its latest test, or "testing"
+//   shownTests(run, latest) -> Map<model, ShownTest>                  what each model's row shows, and its verdict
 //
 // Each test is the model's own test call (models/test-model.ts testModel)
 // through the proxy, which prices it and writes its ledger row under the task
 // `test_all_models`. Its reply is capped at 16 tokens; a 200 with no text (a
 // reasoning model that spent them thinking) counts as working. Each result
-// becomes the model's latest test (models/usable.ts), so a model that passes
-// is one the user's tasks can use and one that fails is not, as with Test on
-// its row. The estimate is each model's last measured test cost where the user has one
+// is recorded in the run, and each verdict becomes the model's latest test
+// (models/usable.ts), so a model that passes is one the user's tasks can use
+// and one that fails is not, as with Test on its row. A refusal that says
+// nothing about the model (models/test-model.ts isVerdict: not connected,
+// the budget spent, no credential, no credit, busy, or a test that could not
+// run) shows on the model's row and changes nothing else. The estimate is each model's last measured test cost where the user has one
 // (its latest answered test call's ledger row: the same request, so the same
 // price), otherwise its list prices for the test's tokens (at most
 // ESTIMATE_INPUT_TOKENS in and the 16-token cap out), plus any fee per call
@@ -28,8 +31,8 @@
 // one-line prompt; a second run costs what the first measured. The real total
 // is the sum of the run's ledger rows: the cost OpenRouter reported for each call.
 //
-// Retest failed reruns a finished run's failures that can still be tested
-// and have not passed since, in the same run (its rows go back to queued and
+// Retest failed reruns a finished run's failures, verdicts or not, that can
+// still be tested and have not passed since, in the same run (its rows go back to queued and
 // the run reopens), so the results keep the models that passed in the full
 // run. A run made on an older model list (catalog version) offers no Retest
 // failed.
@@ -50,7 +53,7 @@ import { readCurrentCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
 import { readConnection } from "../proxy/connections";
 import type { PluginRegistry, ProviderPlugin } from "../proxy/plugin";
-import { blockedReason, listOffer, testModel, testRecord, type OfferRow } from "./test-model";
+import { blockedReason, isVerdict, listOffer, testModel, testRecord, type OfferRow } from "./test-model";
 import { latestTestWrite, readLatestTests, type LatestTest, type TestRecord } from "./usable";
 
 export const TEST_ALL_TASK = "test_all_models";
@@ -219,8 +222,8 @@ async function pooled<T>(items: readonly T[], limit: number, job: (item: T) => P
 
 // The cron: the oldest queued tests (and stale claims), PER_TICK at most,
 // claimed in one statement, then called CONCURRENCY at once. A test that
-// throws is recorded as failed with no reply, so a run always finishes. Only
-// the tick holding a test's claim records its result. Nothing is claimed
+// throws is recorded in the run as failed with no reply, so a run always
+// finishes. Only the tick holding a test's claim records its result. Nothing is claimed
 // while the model list predates parseModels' rules, so no test runs on an old
 // list's verdicts: the tests wait for the daily refresh or Refresh model
 // list (FRESH_LIST_WAIT). Returns how many ran.
@@ -244,22 +247,27 @@ export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, no
   const free = new Set(catalog.filter((m) => m.free).map((m) => m.id));
   await pooled(results, CONCURRENCY, async (t) => {
     const plugin = plugins[t.provider];
-    let row: { state: "passed" | "failed"; result: TestRecord; costUsd?: number };
+    let row: { state: "passed" | "failed"; result: TestRecord; costUsd?: number; verdict: boolean };
     try {
       if (!plugin) throw new Error("no plug-in");
       const location = plugin.connect.locations(t.model)[0] ?? "global";
       const outcome = await testModel(db, plugin, plugins, { userId: t.user_id, model: t.model, location, otherIds, now, task: TEST_ALL_TASK, free: free.has(t.model) });
-      row = { state: outcome.kind === "passed" ? "passed" : "failed", result: testRecord(outcome, plugin), ...(outcome.kind === "passed" ? { costUsd: outcome.test.costUsd } : {}) };
+      row = {
+        state: outcome.kind === "passed" ? "passed" : "failed",
+        result: testRecord(outcome, plugin),
+        ...(outcome.kind === "passed" ? { costUsd: outcome.test.costUsd } : {}),
+        verdict: isVerdict(outcome),
+      };
     } catch (error) {
       console.warn(`test all models: a test failed to run: ${error instanceof Error ? error.name : "error"}`);
-      row = { state: "failed", result: { reason: "no_reply", text: "The test could not run." } };
+      row = { state: "failed", result: { reason: "no_reply", text: "The test could not run." }, verdict: false };
     }
     const recorded = await db
       .prepare("UPDATE model_tests SET state = ?, result = ?, cost_usd = ?, tested_at = ? WHERE run_id = ? AND model = ? AND state = 'running' AND claimed_at = ?")
       .bind(row.state, JSON.stringify(row.result), row.costUsd ?? null, now.toISOString(), t.run_id, t.model, claimedAt)
       .run();
-    // Only the tick holding the claim makes it the model's latest test.
-    if (recorded.meta.changes) await latestTestWrite(db, t.user_id, t.provider, t.model, row.state, row.result, now).run();
+    // Only the tick holding the claim makes a verdict the model's latest test.
+    if (recorded.meta.changes && row.verdict) await latestTestWrite(db, t.user_id, t.provider, t.model, row.state, row.result, now).run();
   });
   await db
     .prepare(
@@ -303,8 +311,8 @@ export async function readTestAll(db: D1Database, userId: string, provider: Prov
   };
 }
 
-// Retest failed: the latest run's failures that can still be tested and have
-// not passed since, their estimate, and how many failures are no longer on
+// Retest failed: the latest run's failures, verdicts or not, that can still
+// be tested and have not passed since, their estimate, and how many failures are no longer on
 // the model list. `wait` says why it cannot start now, if it cannot.
 export interface RetestPlan {
   models: TestAllPlan["models"];
@@ -318,7 +326,7 @@ export async function planRetest(db: D1Database, plugins: PluginRegistry, userId
   if (!plugin) return { models: [], estimateUsd: 0, skipped: 0, wait: "That provider is not offered." };
   const run = await readTestAll(db, userId, provider);
   const latest = await readLatestTests(db, userId, provider);
-  const failed = new Set((run?.tests ?? []).filter((t) => t.state === "failed" && latest.get(t.model)?.state !== "passed").map((t) => t.model));
+  const failed = new Set((run?.tests ?? []).filter((t) => t.state === "failed" && !passedSince(latest.get(t.model), t.testedAt)).map((t) => t.model));
   offers ??= await listOffer(db, plugins, userId, provider);
   const models = estimateTests(offers.filter((r) => failed.has(r.model)), plugin, await measuredTestCosts(db, userId, provider));
   const plan = { models, estimateUsd: models.reduce((sum, m) => sum + m.estimateUsd, 0), skipped: failed.size - models.length };
@@ -357,14 +365,30 @@ export async function startRetest(db: D1Database, plugins: PluginRegistry, userI
   return { count: plan.models.length, skipped: plan.skipped };
 }
 
-// What a model's row shows: its latest test, or `testing` while the latest
-// run still has it queued or running (its latest test, and so whether tasks
-// can use it, stays as it was until the run tests it).
-export type ShownTest = { state: "testing" } | ({ state: LatestTest["state"] } & Pick<LatestTest, "testedAt" | "result">);
+const isNewer = (a: string, b: string): boolean => Date.parse(a) > Date.parse(b);
+
+// The model's latest test passed after `at`.
+const passedSince = (latest: LatestTest | undefined, at: string | undefined): boolean =>
+  latest?.state === "passed" && (at === undefined || isNewer(latest.testedAt, at));
+
+// What a model's row shows: `state`, `testedAt` and `result` are the test it
+// reports, `testing` while the latest run still has it queued or running;
+// `verdict` is its latest test (models/usable.ts), which says whether tasks
+// can use it and which the strip counts, absent while it has none. The
+// reported test is the latest one, or the run's newer refusal that says
+// nothing about the model and so made no latest test. While the run tests a
+// model, its latest test, and so whether tasks can use it, stays as it was.
+export type ShownTest = { state: "testing" } | ({ state: LatestTest["state"]; verdict?: LatestTest["state"] } & Pick<LatestTest, "testedAt" | "result">);
 
 export function shownTests(run: TestAllRun | undefined, latest: Map<string, LatestTest>): Map<string, ShownTest> {
   const out = new Map<string, ShownTest>();
-  for (const [model, t] of latest) out.set(model, { state: t.state, testedAt: t.testedAt, result: t.result });
-  if (run && !run.finishedAt) for (const t of run.tests) if (t.state === "queued" || t.state === "running") out.set(t.model, { state: "testing" });
+  for (const [model, t] of latest) out.set(model, { state: t.state, verdict: t.state, testedAt: t.testedAt, result: t.result });
+  for (const t of run?.tests ?? []) {
+    const l = latest.get(t.model);
+    if ((t.state === "queued" || t.state === "running") && !run!.finishedAt) out.set(t.model, { state: "testing" });
+    else if (t.state === "failed" && t.result && t.testedAt && (!l || isNewer(t.testedAt, l.testedAt))) {
+      out.set(t.model, { state: "failed", ...(l ? { verdict: l.state } : {}), testedAt: t.testedAt, result: t.result });
+    }
+  }
   return out;
 }

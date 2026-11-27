@@ -127,7 +127,12 @@ Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
 - The model table lists OpenRouter's live list (the app holds no model ID of
   its own) with Test on every row, Test all models and Retest failed beside
   it, and the routers' price caps (`src/models/README.md`). There is no Add:
-  a model whose latest test passed is usable for tasks.
+  a model whose latest test passed is usable for tasks. A refusal that says
+  nothing about the model (not connected, budget spent, no credential, no
+  credit, busy) is no verdict: it shows on the row, from the run or carried
+  in the view for a single Test, and changes nothing about the model's use.
+  Under a failed verdict, each task whose main model it was says that it runs
+  on its fallback, named, or that it reads “Choose a model” now.
 - **Nothing reloads the page or changes its address** (the owner,
   2026-11-28). The page's script sends every form (Test, Check again, the
   price cap, Refresh, Test all, Retest failed, Disconnect) and every view link

@@ -150,6 +150,6 @@ export const recordTest = (userId: string, model: string, state: "passed" | "fai
     state,
     state === "passed"
       ? { text: "Works now.", test: { at, location: "global", status: 200, costUsd: 0.000001 } }
-      : { reason: "busy", text: "Busy right now.", reply: { status: 429 } },
+      : { reason: "no_such_model", text: "No such model.", reply: { status: 404 } },
     new Date(at),
   ).run();
