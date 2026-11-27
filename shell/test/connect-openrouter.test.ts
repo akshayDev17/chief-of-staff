@@ -131,7 +131,7 @@ describe("Connect OpenRouter", () => {
     const page = await (await get()).text();
     expect(page).toContain("<strong>OpenRouter account:</strong> never bought credits · personal key · key limit $10.00, $10.00 left · key spent $0");
     expect(page).toContain('href="https://openrouter.ai/settings/credits"');
-    expect(page).toContain("Spends in workspace ws-1.");
+    expect(page).not.toContain("About this account");
     fetcher = fakeFetch({ currentKey: () => new Response("down", { status: 503 }) });
     expect(await (await get()).text()).toContain("could not be read just now.");
   });
@@ -143,7 +143,7 @@ describe("Connect OpenRouter", () => {
     expect(chosen.status).toBe(200);
     const html = await chosen.text();
     expect(html).toContain("<strong>openai/gpt-6-luna passed.</strong>");
-    expect(html).toContain("Usable: 1 model passed.");
+    expect(html).not.toContain("Not usable yet");
     const calls = fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"));
     expect(calls.map((s) => (s.body as { model: string }).model)).toEqual(["openai/gpt-6-luna"]);
     expect(calls[0]!.headers.authorization).toBe(`Bearer ${ISSUED_KEY}`);

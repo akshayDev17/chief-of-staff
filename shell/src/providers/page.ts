@@ -130,17 +130,7 @@ function accountLine(panel: ProviderPanel): string {
     `key spent ${formatCost(a.usageUsd)}`,
   ];
   const credits = a.freeTier ? ` <a class="btn small" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer">Add credits</a>` : "";
-  const details = [
-    `<li>${a.freeTier ? "This account has never bought credits: paid models answer 402." : "This account has bought credits before."}</li>`,
-    `<li>${a.organizationId ? `Owned by organization ${esc(a.organizationId)}.` : "Owned by your own account, not an organization."}</li>`,
-    a.workspaceId ? `<li>Spends in workspace ${esc(a.workspaceId)}.</li>` : "",
-    a.limitReset ? `<li>The key's limit resets ${esc(a.limitReset)}.</li>` : "",
-    a.usageMonthlyUsd !== undefined ? `<li>This key spent ${esc(formatCost(a.usageMonthlyUsd))} this month.</li>` : "",
-    a.freeDaily ? `<li>${a.freeDaily.remaining.toLocaleString("en-US")} of ${a.freeDaily.limit.toLocaleString("en-US")} free-model requests left today.</li>` : "",
-    `<li>Credits sit on one account or organization. Connect again and pick the one with credits.</li>`,
-  ].join("");
-  return `<p class="small acct"><strong>${esc(name)} account:</strong> ${facts.map(esc).join(" · ")}${credits}</p>
-<details class="more"><summary>About this account</summary><ul class="small about">${details}</ul></details>`;
+  return `<p class="small acct"><strong>${esc(name)} account:</strong> ${facts.map(esc).join(" · ")}${credits}</p>`;
 }
 
 function connectForm(panel: ProviderPanel): string {
@@ -188,7 +178,6 @@ ${alsoDeleteLine(plugin, undefined)}
   if (!connection) return `${gone}${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
   const revoked = check?.state === "revoked";
   const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
-  const revokeLinks = g.revokeLinks(connection).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
   const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
@@ -198,16 +187,9 @@ ${alsoDeleteLine(plugin, connection)}
 <div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
   const passed = panel.passedModels ?? 0;
-  const usable = revoked
-    ? ""
-    : passed
-      ? `<p class="small ok-line">Usable: ${passed} ${passed === 1 ? "model" : "models"} passed.</p>`
-      : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
+  const usable = revoked || passed ? "" : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
   const budget = panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
-  const keyDetails = `<details class="more"><summary>Key and budget</summary><ul class="small about">
-<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
-<li>To revoke the key on ${esc(g.short)}: ${esc(g.revoke)} ${revokeLinks}</li>
-</ul></details>`;
+  const keyDetails = `<p class="small">Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></p>`;
   const note = input.viewer === "friend" ? `<p class="small muted">Only you see ${esc(g.short)}'s replies.</p>${passed ? "" : postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small")}` : "";
   const reconnect = revoked ? `<p class="small">Connect again to get a new key.</p>${connectForm(panel)}` : "";
   const models =
