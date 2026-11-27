@@ -118,3 +118,30 @@ budget or a missing key stops both, since they share the one provider.
 Until a proposal is accepted or a model chosen, a task with several models
 has none, and `callTask` refuses it (`no_model`). Every query is scoped to the
 signed-in user.
+
+# Models › Usage (design-v3 10.1)
+
+`/chief-of-staff/models/usage` (`usage-page.ts`, figures in `usage.ts`) shows
+the month's OpenRouter spend, counted from 00:00 UTC on the 1st:
+
+- the month's figure against the budget, as the budget bar shows it: the same
+  bar as Models › Setup › Budgets (`src/proxy/budget-bar.ts`), with
+  OpenRouter's own figure for the key read live, server side, once a budget
+  is set;
+- per model and per task: calls (and how many OpenRouter refused), input and
+  output tokens, and cost. All three come from one read of the ledger
+  (`model_calls`), so each table's foot is the bar's own count, the one the
+  proxy stops calls at.
+
+Each model is named as OpenRouter's live list names it, its ID beside it; a
+model no longer in the list shows its ID only. "free" marks a model the list
+marks free. A cost is OpenRouter's own, from its reply; one costed at list
+price, where the reply reported none, is marked estimated, and so is a row
+written before the ledger recorded how it was costed. The test calls appear
+as the tasks "Model tests" and "Test all models".
+
+Both tables list the dearest first, ties by name. With nothing to show yet,
+the page highlights one next action, the first missing: Connect OpenRouter,
+then Set a budget, then Test a model. After a Disconnect the month's figures
+stay, and the page says they are from before it, with Connect OpenRouter as
+its next action.

@@ -8,8 +8,8 @@
 // design's tokens per application (budgets.ts) at the volume the user plans.
 // The user accepts it with one tap or types their own; until then the card
 // says the provider's models cannot be called. Once it is set, the card shows
-// the month's spend against it as the budget bar (budget-bar.ts). The Usage
-// page, not built yet, is named but not linked.
+// the month's spend against it as the budget bar (budget-bar.ts), the same
+// bar Models › Usage shows.
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { isProvider, type Provider } from "../prices/types";
@@ -30,7 +30,7 @@ import type { ConnectionFields } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
-import { nextAction, setupTabsLine } from "../models/setup-tabs";
+import { modelsSubtabs, nextAction, setupTabsLine } from "../models/setup-tabs";
 
 export interface ProviderBudgetCard {
   provider: Provider;
@@ -114,7 +114,7 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <body>
 <main class="screen">
 <h1>Models</h1>
-<div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
+${modelsSubtabs("setup")}
 ${setupTabsLine(BUDGETS_PATH)}
 <h2>Budgets, one per provider</h2>
 <p>One monthly budget per provider, counted from the 1st.</p>

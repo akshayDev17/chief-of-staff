@@ -23,3 +23,4 @@ export const PROVIDERS_PATH = `${BASE_PATH}/models/setup/providers`;
 export const BUDGETS_PATH = `${BASE_PATH}/models/setup/budgets`;
 export const ADD_MODEL_PATH = `${BASE_PATH}/models/setup/add`;
 export const TASK_MODELS_PATH = `${BASE_PATH}/models/setup/tasks`;
+export const USAGE_PATH = `${BASE_PATH}/models/usage`;

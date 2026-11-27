@@ -9,6 +9,7 @@ import { vaultSecrets } from "./providers/secrets";
 import { handleProviders, isProvidersPath } from "./providers/page";
 import { handleTaskModels, isTaskModelsPath } from "./models/picker-page";
 import { handleBudgets } from "./proxy/budgets-page";
+import { handleUsage, isUsagePath } from "./models/usage-page";
 import { ADD_MODEL_PATH, BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH } from "./paths";
 import { userFromAccess } from "./users";
 
@@ -92,6 +93,14 @@ export default {
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
       return handleTaskModels(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", now });
+    }
+    // Models › Usage, for the signed-in user: the month's OpenRouter spend
+    // against the budget, per model and per task, from the ledger.
+    if (isUsagePath(url.pathname) && request.method === "GET") {
+      const now = new Date();
+      const user = await userFromAccess(env.DB, claims, now);
+      if (!user) return accessDenied();
+      return handleUsage({ db: env.DB, userId: user.id, now, secrets: vaultSecrets(env.DB, env) });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === PRICE_TABLE_PATH && request.method === "GET") {
