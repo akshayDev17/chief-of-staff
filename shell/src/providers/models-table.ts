@@ -236,22 +236,31 @@ export interface Shown {
 // What the row shows: `state` for the strip and the filters (the verdict);
 // its tag; `lead`, the failure its reason line and its result lead with;
 // `note`, a newer refusal under a failed verdict, after it; `passed`, a
-// result that says it passed; `askAdmin`, the reason a friend's Ask Admin
-// sends: the refusal just hit, else the lead's, and only a reason the
-// model-help form takes (MODEL_HELP_REASONS).
+// result that says it passed; `ask`, the reason a friend's Ask Admin sends
+// and the block it sits in, the one whose reason it is: the refusal just
+// hit, else the lead's, and only a reason the model-help form takes
+// (MODEL_HELP_REASONS).
 export interface RowView {
   state: RowState;
   tag?: RowTag;
   lead?: Shown;
   note?: Shown & { from: "test" | "run" };
   passed: boolean;
-  askAdmin?: TestRefusal;
+  ask?: { reason: TestRefusal; on: "lead" | "note" };
 }
 
 const actionsFor = (r: TestRecord): RowAction[] =>
   r.reason === "no_credits" ? ["credits"] : r.reason === "busy" ? ["test-again"] : r.reason === "budget_spent" ? ["budgets"] : [];
 const shownOf = (result: TestRecord): Shown => ({ result, actions: actionsFor(result) });
 const askable = (reason: TestRefusal | undefined): TestRefusal | undefined => (reason && MODEL_HELP_REASONS.has(reason) ? reason : undefined);
+// Ask Admin on `first`'s block when the form takes its reason, else on the
+// lead with `lead`'s reason.
+function askOn(first: TestRefusal | undefined, on: "lead" | "note", lead?: TestRefusal): Pick<RowView, "ask"> {
+  const reason = askable(first);
+  if (reason) return { ask: { reason, on } };
+  const fallback = askable(lead);
+  return fallback ? { ask: { reason: fallback, on: "lead" } } : {};
+}
 
 // A failed verdict leads, as "Doesn't work", with a newer refusal as its
 // note; otherwise the refusal leads. An outcome tag (Needs credit, Busy,
@@ -263,13 +272,13 @@ export function describeRow(f: RowFacts): RowView {
   const refusal = f.testing && f.refusal?.from === "run" ? undefined : f.refusal;
   if (failed) {
     const note = refusal ? { ...shownOf(refusal.result), from: refusal.from } : undefined;
-    return { state, tag: "doesnt-work", lead: shownOf(failed), ...(note ? { note } : {}), passed: false, askAdmin: askable(note?.result.reason) ?? askable(failed.reason) };
+    return { state, tag: "doesnt-work", lead: shownOf(failed), ...(note ? { note } : {}), passed: false, ...askOn(note?.result.reason, "note", failed.reason) };
   }
   if (refusal) {
     const usable = !f.blocked && !f.testing && f.verdict?.state === "passed";
     const reason = refusal.result.reason;
     const tag: RowTag | undefined = usable ? (reason === "no_credits" ? "needs-credit" : reason === "busy" ? "busy" : "couldnt-test") : undefined;
-    return { state, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, askAdmin: askable(reason) };
+    return { state, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, ...askOn(reason, "lead") };
   }
   return { state, passed: !f.testing && f.verdict?.state === "passed" };
 }
@@ -419,11 +428,11 @@ function resultHtml(r: OfferRow, input: ModelsTableInput, v: RowView): string {
     budgets: `<a class="btn small outline" href="${BUDGETS_PATH}">Budgets</a>`,
   };
   const ask =
-    input.viewer === "friend" && v.askAdmin
-      ? `<form method="post" action="${action(p, "model-help")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><input type="hidden" name="reason" value="${esc(v.askAdmin)}"><button type="submit" class="btn small outline" data-k="help-${esc(r.model)}">Ask Admin for help</button></form>`
+    input.viewer === "friend" && v.ask
+      ? `<form method="post" action="${action(p, "model-help")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><input type="hidden" name="reason" value="${esc(v.ask.reason)}"><button type="submit" class="btn small outline" data-k="help-${esc(r.model)}">Ask Admin for help</button></form>`
       : "";
-  const acts = (s: Shown, withAsk: boolean): string => {
-    const html = s.actions.map((a) => ACTION[a]).join("") + (withAsk ? ask : "");
+  const acts = (s: Shown, block: "lead" | "note"): string => {
+    const html = s.actions.map((a) => ACTION[a]).join("") + (v.ask?.on === block ? ask : "");
     return html ? `<div class="acts">${html}</div>` : "";
   };
   const usedBy = v.tag === "doesnt-work" ? (input.usedBy.get(r.model) ?? []) : [];
@@ -432,10 +441,10 @@ function resultHtml(r: OfferRow, input: ModelsTableInput, v: RowView): string {
     ...usedBy.flatMap((u) => (u.fallback ? [`<p>${esc(u.task)} runs on its fallback ${esc(u.fallback)} now.</p>`] : [])),
     none.length ? `<p>${esc(joinAnd(none))} ${none.length === 1 ? "reads" : "read"} “Choose a model” now.</p>` : "",
   ].join("");
-  const note = v.note ? `<div class="later"><p>${esc(noteLine(v.note))}</p>${acts(v.note, true)}</div>` : "";
+  const note = v.note ? `<div class="later"><p>${esc(noteLine(v.note))}</p>${acts(v.note, "note")}</div>` : "";
   const det = [...detailParts(plugin, v.lead.result, credits?.href), ...(v.note ? detailParts(plugin, v.note.result, credits?.href) : [])].map((d) => `<p>${d}</p>`).join("");
   const cls = v.lead.result.reason === "no_credits" ? "warn" : "bad";
-  return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(v.lead.result.text)}</strong></span>${hide}</p>${used}${acts(v.lead, !v.note)}${note}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
+  return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(v.lead.result.text)}</strong></span>${hide}</p>${used}${acts(v.lead, "lead")}${note}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
 }
 
 function capEditor(r: OfferRow, input: ModelsTableInput): string {

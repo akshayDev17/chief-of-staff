@@ -89,8 +89,15 @@ function expected(c: Case) {
   const noteActions = note && ACTIONS[refusal!.reason!] ? [ACTIONS[refusal!.reason!]!] : [];
   const passed = !lead && c.verdict === "passed" && c.row !== "testing";
   const askable = (reason: TestRefusal | undefined) => (reason && MODEL_HELP_REASONS.has(reason) ? reason : undefined);
-  const askAdmin = lead ? (askable(refusal?.reason) ?? (failed ? askable(FAILED.reason) : undefined)) : undefined;
-  return { state, tag, lead, note, leadActions, noteActions, passed, askAdmin };
+  const refusalAsk = askable(refusal?.reason);
+  const ask = !lead
+    ? undefined
+    : refusalAsk
+      ? { reason: refusalAsk, on: note ? "note" : "lead" }
+      : failed && askable(FAILED.reason)
+        ? { reason: FAILED.reason, on: "lead" }
+        : undefined;
+  return { state, tag, lead, note, leadActions, noteActions, passed, ask };
 }
 
 const label = (c: Case) => `${c.verdict} verdict, ${c.kind ? `${c.kind.name} from ${c.from}` : "no refusal"}, ${c.row} row`;
@@ -130,12 +137,19 @@ describe("a model's row and its result", () => {
       if (e.lead === FAILED.text) expect(det, name).toContain(esc(FAILED.fix!));
       const refusalFixText = c.kind && e.note ? record(c.kind).fix : undefined;
       if (refusalFixText) expect(det, name).toContain(esc(refusalFixText));
-      // A friend's Ask Admin sends the refusal just hit, else the lead's reason.
+      // A friend's Ask Admin sends the refusal just hit, else the lead's
+      // reason, and sits in the block whose reason it sends.
       const friend = render(c, "friend", true);
-      const asked = friend.match(/name="reason" value="([^"]*)"><button[^>]*>Ask Admin for help/)?.[1];
-      expect(asked, name).toBe(e.askAdmin);
-      // The server's model-help form takes every reason a button sends.
-      if (asked !== undefined) expect(MODEL_HELP_REASONS.has(asked), name).toBe(true);
+      const asks = [...friend.matchAll(/name="reason" value="([^"]*)"><button[^>]*>Ask Admin for help/g)];
+      expect(asks.length, name).toBe(e.ask ? 1 : 0);
+      const asked = asks[0];
+      if (asked) {
+        const noteAt = friend.indexOf('<div class="later">');
+        const on = noteAt >= 0 && asked.index! > noteAt ? "note" : "lead";
+        expect({ reason: asked[1], on }, name).toEqual(e.ask);
+        // The server's model-help form takes every reason a button sends.
+        expect(MODEL_HELP_REASONS.has(asked[1]!), name).toBe(true);
+      }
     }
   });
 
