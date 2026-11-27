@@ -7,274 +7,187 @@ import { recentAlerts } from "../src/prices/store";
 import { callModel, costOf, type ModelCall } from "../src/proxy/proxy";
 import { dumpEveryTable, ok, refused, seedPrices, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
-const NOW = new Date("2026-11-25T10:00:00Z");
+const NOW = new Date("2026-11-27T10:00:00Z");
 const clock = () => NOW;
 const PROMPT = "PROMPT-BODY-never-stored";
 
-let bedrock: TestPlugin;
-let vertex: TestPlugin;
+let openrouter: TestPlugin;
 let userId: string;
 
 const ledger = async (user = userId) =>
   (await env.DB.prepare("SELECT * FROM model_calls WHERE user_id = ? ORDER BY id").bind(user).all<Record<string, unknown>>()).results;
 
-const call = (over: Partial<ModelCall> = {}): ModelCall => ({
-  userId,
-  task: "fill",
-  site: "jobs.example.com",
-  runId: "run-1",
-  main: { provider: "bedrock", model: "test-sonnet", location: "global", request: { prompt: PROMPT } },
-  fallback: { provider: "vertex", model: "test-gemini", location: "global", request: { prompt: PROMPT } },
-  ...over,
-});
+const sonnet = { provider: "openrouter", model: "test-sonnet", location: "global", request: { prompt: PROMPT } } as const;
+const mini = { provider: "openrouter", model: "test-mini", location: "global", request: { prompt: PROMPT } } as const;
 
-const connect = async (user: string, plugin: TestPlugin) =>
-  writeConnection(env.DB, user, plugin, { account: "123456789012", region: "global" }, NOW);
+const call = (over: Partial<ModelCall> = {}): ModelCall => ({ userId, task: "fill", site: "jobs.example.com", runId: "run-1", main: sonnet, fallback: mini, ...over });
+const plugins = () => ({ openrouter });
 
 beforeEach(async () => {
   await seedPrices();
-  bedrock = testPlugin("bedrock");
-  vertex = testPlugin("vertex");
+  openrouter = testPlugin();
   userId = (await userFor("owner-sub")).id;
-  await connect(userId, bedrock);
-  await connect(userId, vertex);
-  await setBudget(env.DB, userId, "bedrock", 30, "accepted", NOW);
-  await setBudget(env.DB, userId, "vertex", 10, "typed", NOW);
+  await writeConnection(env.DB, userId, openrouter, { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
+  await setBudget(env.DB, userId, "openrouter", 30, "accepted", NOW);
 });
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("one ledger row per call", () => {
-  it("records provider, model, plug-in version, the five token counts, time and cost", async () => {
-    bedrock.replies.push(ok({ input: 2000, cachedInput: 5000, cacheWrite: 1000, cacheWrite1h: 500, output: 400 }));
-    const outcome = await callModel(env.DB, { bedrock, vertex }, call(), clock);
-    expect(outcome).toMatchObject({ kind: "answered", provider: "bedrock", fallback: false, status: 200, body: { reply: "a test reply" } });
+  it("takes the cost OpenRouter reported, and keeps its generation ID", async () => {
+    openrouter.replies.push({ ...ok({ input: 2000, cachedInput: 5000, cacheWrite1h: 500, output: 400, reportedCostUsd: 0.0123 }), callId: "gen-abc" });
+    const outcome = await callModel(env.DB, plugins(), call(), clock);
+    expect(outcome).toMatchObject({ kind: "answered", provider: "openrouter", fallback: false, status: 200, costUsd: 0.0123 });
     const rows = await ledger();
     expect(rows).toHaveLength(1);
-    // 2000 × $3 + 5000 × $0.30 + 1000 × $3.75 (5-minute) + 500 × $6 (1-hour) + 400 × $15, per million.
-    const cost = (2000 * 3 + 5000 * 0.3 + 1000 * 3.75 + 500 * 6 + 400 * 15) / 1e6;
     expect(rows[0]).toMatchObject({
       user_id: userId, at: NOW.toISOString(), task: "fill", site: "jobs.example.com", run_id: "run-1",
-      provider: "bedrock", model: "test-sonnet", region: "global", tier: "Strongest", plugin_version: "test-bedrock-1",
+      provider: "openrouter", model: "test-sonnet", region: "global", tier: "Strongest", plugin_version: "test-openrouter-1",
       status: 200, fallback: 0, fallback_reason: null, input_tokens: 2000, cached_input_tokens: 5000,
-      cache_write_tokens: 1000, cache_write_1h_tokens: 500, output_tokens: 400, long_prompt: 0, costed_conservatively: null,
+      cache_write_tokens: 0, cache_write_1h_tokens: 500, output_tokens: 400, long_prompt: 0, costed_conservatively: null,
+      cost_usd: 0.0123, cost_source: "reported", provider_call_id: "gen-abc",
     });
-    expect(await recentAlerts(env.DB)).toEqual([]);
-    expect(rows[0]!.cost_usd).toBeCloseTo(cost, 12);
-    expect(typeof rows[0]!.duration_ms).toBe("number");
+    expect(await monthSpend(env.DB, userId, "openrouter", NOW)).toBe(0.0123);
   });
 
-  it("costs a call billed at long-prompt rates at the long-prompt rows", async () => {
-    bedrock.replies.push(ok({ input: 250_000, cachedInput: 10_000, cacheWrite: 2000, output: 1000, longPrompt: true }));
-    await callModel(env.DB, { bedrock, vertex }, call(), clock);
+  it("prices a reply that reports no cost from the table, at its own rows", async () => {
+    openrouter.replies.push(ok({ input: 2000, cachedInput: 5000, cacheWrite: 1000, cacheWrite1h: 500, output: 400 }));
+    await callModel(env.DB, plugins(), call(), clock);
+    const [row] = await ledger();
+    expect(row).toMatchObject({ cost_source: "list_price", provider_call_id: null });
+    expect(row!.cost_usd).toBeCloseTo((2000 * 3 + 5000 * 0.3 + 1000 * 3.75 + 500 * 6 + 400 * 15) / 1e6, 12);
+    expect(await recentAlerts(env.DB)).toEqual([]);
+  });
+
+  it("prices a long prompt at the long-prompt rows when no cost is reported", async () => {
+    openrouter.replies.push(ok({ input: 250_000, cachedInput: 10_000, cacheWrite: 2000, output: 1000, longPrompt: true }));
+    await callModel(env.DB, plugins(), call(), clock);
     const [row] = await ledger();
     expect(row).toMatchObject({ input_tokens: 250_000, long_prompt: 1 });
     expect(row!.cost_usd).toBeCloseTo((250_000 * 6 + 10_000 * 0.6 + 2000 * 7.5 + 1000 * 22.5) / 1e6, 12);
   });
 
-  it("costs a kind with no row of its own never below the vendor: cached input at input, else the dearest listed rate", () => {
-    const at = (usdPerMTok: number) => ({ usdPerMTok, source: "azure-retail", dateRead: "", stale: false }) as const;
+  it("costs a kind with no row of its own never below the provider: cached input at input, else the dearest listed rate", () => {
+    const at = (usdPerMTok: number) => ({ usdPerMTok, source: "openrouter-models", dateRead: "", stale: false }) as const;
     const short = { input: at(1), cache_write: at(1.25), output: at(4) };
     const long = { input: at(2), output: at(6) };
     const usage = { input: 1e6, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 1e6, longPrompt: false };
-    expect(costOf(usage, short, long)).toEqual({ usd: 5, conservative: {} });
-    expect(costOf({ ...usage, cachedInput: 1e6 }, short, long)).toEqual({ usd: 6, conservative: { cached_input: 1 } });
-    expect(costOf({ ...usage, cacheWrite1h: 1e6 }, short, long)).toEqual({ usd: 11, conservative: { cache_write_1h: 6 } });
-    expect(costOf({ ...usage, cachedInput: 1e6, cacheWrite: 1e6, longPrompt: true }, short, long)).toEqual({
-      usd: 2 + 2 + 6 + 6,
-      conservative: { cached_input: 2, cache_write: 6 },
-    });
+    expect(costOf(usage, short, long)).toEqual({ usd: 5, source: "list_price", conservative: {} });
+    expect(costOf({ ...usage, cachedInput: 1e6 }, short, long)).toEqual({ usd: 6, source: "list_price", conservative: { cached_input: 1 } });
+    expect(costOf({ ...usage, cacheWrite1h: 1e6 }, short, long)).toEqual({ usd: 11, source: "list_price", conservative: { cache_write_1h: 6 } });
+    expect(costOf({ ...usage, reportedCostUsd: 0.5 }, short, long)).toEqual({ usd: 0.5, source: "reported", conservative: {} });
   });
 
-  it("costs a long-prompt 1-hour cache write the table lacks at the dearest rate, marks the row and alerts the maintainers", async () => {
-    // test-sonnet lists no long-prompt 1-hour cache write; its dearest rate is the long-prompt output, $22.50.
-    bedrock.replies.push(ok({ input: 250_000, cacheWrite1h: 4000, output: 1000, longPrompt: true }));
-    expect(await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
-    const [row] = await ledger();
-    expect(row).toMatchObject({ cache_write_1h_tokens: 4000, long_prompt: 1, costed_conservatively: '{"cache_write_1h":22.5}' });
-    expect(row!.cost_usd).toBeCloseTo((250_000 * 6 + 4000 * 22.5 + 1000 * 22.5) / 1e6, 12);
-    expect(await recentAlerts(env.DB)).toEqual([
-      expect.objectContaining({
-        kind: "price_missing",
-        detail: expect.stringContaining("test-sonnet at Amazon Bedrock (global) has no long-prompt list price for cache_write_1h"),
-      }),
-    ]);
-
-    expect(await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
-    expect(bedrock.calls).toHaveLength(2);
+  it("adds the fee per call to a call that used tokens, and never prices a missing kind at it", () => {
+    const at = (usdPerMTok: number) => ({ usdPerMTok, source: "openrouter-models", dateRead: "", stale: false }) as const;
+    const short = { input: at(1), output: at(4), request: at(20_000) };
+    const usage = { input: 1e6, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 1e6, longPrompt: false };
+    expect(costOf(usage, short, {}).usd).toBeCloseTo(5.02, 12);
+    expect(costOf({ ...usage, cacheWrite1h: 1e6 }, short, {})).toMatchObject({ conservative: { cache_write_1h: 4 } });
+    expect(costOf({ ...usage, input: 0, output: 0 }, short, {}).usd).toBe(0);
   });
 
-  it("raises one price_missing alert per model, location and token kind a UTC day, however many calls", async () => {
-    const gemini = call({ main: call().fallback!, fallback: undefined });
-    const kinds = async () => (await recentAlerts(env.DB)).map((a) => /for (\w+);/.exec(a.detail)?.[1]).sort();
+  it("alerts the maintainers once a UTC day for a kind priced conservatively", async () => {
+    const miniCall = call({ main: mini, fallback: undefined });
     for (let i = 0; i < 3; i++) {
-      vertex.replies.push(ok({ input: 800, cachedInput: 300, output: 50 }));
-      await callModel(env.DB, { bedrock, vertex }, gemini, clock);
+      openrouter.replies.push(ok({ input: 800, cachedInput: 300, output: 50 }));
+      await callModel(env.DB, plugins(), miniCall, clock);
     }
-    expect(await kinds()).toEqual(["cached_input"]);
-
-    vertex.replies.push(ok({ input: 800, cachedInput: 300, cacheWrite: 200, output: 50 }));
-    await callModel(env.DB, { bedrock, vertex }, gemini, clock);
-    expect(await kinds()).toEqual(["cache_write", "cached_input"]);
-
-    vertex.replies.push(ok({ input: 800, cachedInput: 300, output: 50 }));
-    await callModel(env.DB, { bedrock, vertex }, gemini, () => new Date("2026-11-26T00:00:01Z"));
-    expect(await kinds()).toEqual(["cache_write", "cached_input", "cached_input"]);
-    expect(await ledger()).toHaveLength(5);
-  });
-
-  it("costs cache tokens a model lists no price for conservatively, and counts them in the budget", async () => {
-    // test-gemini lists only input ($0.25) and output ($1).
-    vertex.replies.push(ok({ input: 800, cachedInput: 300, cacheWrite: 200, output: 50 }));
-    expect(await callModel(env.DB, { bedrock, vertex }, call({ main: call().fallback!, fallback: undefined }), clock)).toMatchObject({
-      kind: "answered", provider: "vertex",
-    });
+    const alerts = await recentAlerts(env.DB);
+    expect(alerts).toEqual([expect.objectContaining({ kind: "price_missing", detail: expect.stringContaining("test-mini at OpenRouter (global) has no list price for cached_input") })]);
     const [row] = await ledger();
-    expect(JSON.parse(row!.costed_conservatively as string)).toEqual({ cached_input: 0.25, cache_write: 1 });
-    const cost = (800 * 0.25 + 300 * 0.25 + 200 * 1 + 50 * 1) / 1e6;
-    expect(row!.cost_usd).toBeCloseTo(cost, 12);
-    expect(await monthSpend(env.DB, userId, "vertex", NOW)).toBeCloseTo(cost, 12);
+    expect(JSON.parse(row!.costed_conservatively as string)).toEqual({ cached_input: 0.25 });
   });
 
   it("sends the request untouched with a freshly minted credential", async () => {
-    await callModel(env.DB, { bedrock, vertex }, call(), clock);
-    expect(bedrock.calls).toEqual([{ credential: bedrock.minted[0], model: "test-sonnet", location: "global", request: { prompt: PROMPT } }]);
+    await callModel(env.DB, plugins(), call(), clock);
+    expect(openrouter.calls[0]).toMatchObject({ model: "test-sonnet", location: "global", request: { prompt: PROMPT } });
+    expect(openrouter.calls[0]!.credential).toBe(openrouter.minted[0]);
   });
 });
 
 describe("refusals before any provider is called", () => {
-  it("refuses a model with no price, and writes no row", async () => {
-    const outcome = await callModel(env.DB, { bedrock, vertex }, call({ main: { provider: "bedrock", model: "unpriced", location: "global", request: {} }, fallback: undefined }), clock);
-    expect(outcome).toMatchObject({ kind: "refused", reason: "no_price" });
-    expect(bedrock.calls).toHaveLength(0);
-    expect(await ledger()).toHaveLength(0);
+  it("refuses a model with no price, one the plug-in cannot call, and writes no row", async () => {
+    expect(await callModel(env.DB, plugins(), call({ main: { ...sonnet, model: "unpriced" }, fallback: undefined }), clock)).toMatchObject({ kind: "refused", reason: "no_price" });
+    const cannot = testPlugin("openrouter", { cannotCall: ["test-sonnet"] });
+    expect(await callModel(env.DB, { openrouter: cannot }, call({ fallback: undefined }), clock)).toMatchObject({ kind: "refused", reason: "not_callable" });
+    expect(await ledger()).toEqual([]);
   });
 
-  it("refuses a provider whose monthly budget is not set, and does not fall back", async () => {
-    await env.DB.prepare("DELETE FROM provider_budgets WHERE provider = 'bedrock'").run();
-    const outcome = await callModel(env.DB, { bedrock, vertex }, call(), clock);
-    expect(outcome).toMatchObject({ kind: "refused", provider: "bedrock", reason: "no_budget" });
-    expect(vertex.calls).toHaveLength(0);
+  it("refuses a provider whose monthly budget is not set, and a user not connected", async () => {
+    await env.DB.prepare("DELETE FROM provider_budgets").run();
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "refused", reason: "no_budget", fallback: false });
+    const other = (await userFor("friend-sub")).id;
+    await setBudget(env.DB, other, "openrouter", 5, "typed", NOW);
+    expect(await callModel(env.DB, plugins(), call({ userId: other }), clock)).toMatchObject({ kind: "refused", reason: "not_connected" });
   });
 
-  it("refuses a provider not connected, and one with no plug-in", async () => {
-    await env.DB.prepare("DELETE FROM provider_connections WHERE provider = 'bedrock'").run();
-    expect(await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock)).toMatchObject({ reason: "not_connected" });
-    expect(await callModel(env.DB, { vertex }, call({ fallback: undefined }), clock)).toMatchObject({ reason: "no_plugin" });
-  });
-
-  it("refuses a fallback on the same provider", async () => {
-    await expect(
-      callModel(env.DB, { bedrock, vertex }, call({ fallback: { provider: "bedrock", model: "test-sonnet", location: "global", request: {} } }), clock),
-    ).rejects.toThrow(/another provider/);
+  it("refuses a fallback that is the main model itself", async () => {
+    await expect(callModel(env.DB, plugins(), call({ fallback: sonnet }), clock)).rejects.toThrow(/another model/);
   });
 });
 
-describe("the monthly budget per provider", () => {
-  const spend = (user: string, provider: string, at: string, cost: number) =>
-    env.DB.prepare(
-      `INSERT INTO model_calls (user_id, at, task, provider, model, region, plugin_version, status, fallback, duration_ms, cost_usd)
-       VALUES (?, ?, 'fill', ?, 'm', 'global', 't', 200, 0, 1, ?)`,
-    ).bind(user, at, provider, cost).run();
-
-  it("stops calls once the month's spend reaches it, until the 1st", async () => {
-    await spend(userId, "bedrock", "2026-11-03T00:00:00Z", 30);
-    const outcome = await callModel(env.DB, { bedrock, vertex }, call({ fallback: undefined }), clock);
-    expect(outcome).toMatchObject({ kind: "refused", reason: "budget_spent", resumesOn: "1 December" });
-    expect(outcome.kind === "refused" && outcome.detail).toBe("model budget for Amazon Bedrock this month reached. Resumes 1 December");
-    expect(bedrock.calls).toHaveLength(0);
-  });
-
-  it("counts from the 1st: last month's spend does not count", async () => {
-    await spend(userId, "bedrock", "2026-10-31T23:59:59Z", 1000);
-    expect(await monthSpend(env.DB, userId, "bedrock", NOW)).toBe(0);
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
-  });
-
-  it("is per provider: one provider's spend does not stop another", async () => {
-    await spend(userId, "vertex", "2026-11-03T00:00:00Z", 10);
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
+describe("the monthly budget", () => {
+  it("stops calls once the month's spend reaches it, until the 1st, and the fallback with them", async () => {
+    await setBudget(env.DB, userId, "openrouter", 0.01, "typed", NOW);
+    openrouter.replies.push(ok({ input: 1000, output: 100, reportedCostUsd: 0.02 }));
+    await callModel(env.DB, plugins(), call(), clock);
+    // The fallback shares the provider's budget, so it is not tried.
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "refused", reason: "budget_spent", resumesOn: "1 December", fallback: false });
+    expect(openrouter.calls).toHaveLength(1);
+    expect(await callModel(env.DB, plugins(), call(), () => new Date("2026-12-01T00:00:00Z"))).toMatchObject({ kind: "answered" });
   });
 
   it("is each user's own: another user's spend does not count", async () => {
     const other = (await userFor("friend-sub")).id;
-    await spend(other, "bedrock", "2026-11-03T00:00:00Z", 500);
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({ kind: "answered", provider: "bedrock" });
-    expect(await monthSpend(env.DB, other, "bedrock", NOW)).toBe(500);
-  });
-
-  it("hands a spent provider's call to the fallback, within the fallback's own budget", async () => {
-    await spend(userId, "bedrock", "2026-11-03T00:00:00Z", 31);
-    const outcome = await callModel(env.DB, { bedrock, vertex }, call(), clock);
-    expect(outcome).toMatchObject({ kind: "answered", provider: "vertex", model: "test-gemini", fallback: true });
-    const rows = await ledger();
-    expect(rows.filter((r) => r.model !== "m")).toEqual([
-      expect.objectContaining({ provider: "vertex", fallback: 1, fallback_reason: "budget_spent", status: 200 }),
-    ]);
-
-    await spend(userId, "vertex", "2026-11-04T00:00:00Z", 10);
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({
-      kind: "refused", provider: "vertex", fallback: true, reason: "budget_spent",
-    });
+    await env.DB.prepare("INSERT INTO model_calls (user_id, at, task, provider, model, region, plugin_version, status, fallback, duration_ms, cost_usd) VALUES (?, ?, 'fill', 'openrouter', 'test-sonnet', 'global', 'x', 200, 0, 1, 1000)")
+      .bind(other, NOW.toISOString())
+      .run();
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "answered" });
   });
 });
 
-describe("one fallback across providers", () => {
-  it("answers a 429 with the fallback, both calls in the ledger and the fallback named", async () => {
-    bedrock.replies.push(refused(429));
-    vertex.replies.push(ok({ input: 800, cachedInput: 0, cacheWrite: 0, output: 50 }));
-    const outcome = await callModel(env.DB, { bedrock, vertex }, call(), clock);
-    expect(outcome).toMatchObject({ kind: "answered", provider: "vertex", fallback: true });
-    const rows = await ledger();
-    expect(rows).toEqual([
-      expect.objectContaining({ provider: "bedrock", status: 429, fallback: 0, input_tokens: 0, cost_usd: 0 }),
-      expect.objectContaining({ provider: "vertex", status: 200, fallback: 1, fallback_reason: "refused", input_tokens: 800, output_tokens: 50 }),
+describe("one fallback: another model on the same provider", () => {
+  it("answers a 429 with the fallback model, both calls in the ledger and the fallback named", async () => {
+    openrouter.replies.push(refused(429), ok({ input: 10, output: 1, reportedCostUsd: 0.000001 }));
+    const outcome = await callModel(env.DB, plugins(), call(), clock);
+    expect(outcome).toMatchObject({ kind: "answered", model: "test-mini", fallback: true });
+    expect((await ledger()).map((r) => [r.model, r.status, r.fallback, r.fallback_reason])).toEqual([
+      ["test-sonnet", 429, 0, null],
+      ["test-mini", 200, 1, "refused"],
     ]);
-    expect(rows[1]!.cost_usd).toBeCloseTo((800 * 0.25 + 50 * 1) / 1e6, 12);
   });
 
-  it("answers a 5xx, no reply at all, and a failed credential with the fallback", async () => {
-    bedrock.replies.push(refused(503));
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({ provider: "vertex", fallback: true });
-    bedrock.replies.push(new Error("socket hang up"));
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({ provider: "vertex", fallback: true });
-    const revoked = testPlugin("bedrock", { failMint: true });
-    expect(await callModel(env.DB, { bedrock: revoked, vertex }, call(), clock)).toMatchObject({ provider: "vertex", fallback: true });
+  it("answers a 5xx and no reply at all with the fallback", async () => {
+    openrouter.replies.push(refused(502), ok({ input: 1, output: 1 }));
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "answered", fallback: true });
+    openrouter.replies.push(new Error("network"), ok({ input: 1, output: 1 }));
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "answered", fallback: true });
   });
 
-  it("passes the request's own fault (400) back without falling back", async () => {
-    bedrock.replies.push(refused(400, { error: "ValidationException" }));
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({
-      kind: "provider_error", provider: "bedrock", status: 400, body: { error: "ValidationException" },
-    });
-    expect(vertex.calls).toHaveLength(0);
+  it("passes the request's own fault, no credits, and a missing key back without falling back", async () => {
+    openrouter.replies.push(refused(400));
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "provider_error", status: 400, fallback: false });
+    openrouter.replies.push(refused(402));
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "provider_error", status: 402, fallback: false });
+    const noKey = testPlugin("openrouter", { refuseMint: true });
+    expect(await callModel(env.DB, { openrouter: noKey }, call(), clock)).toMatchObject({ kind: "refused", reason: "credential_failed", fallback: false });
   });
 
   it("runs the fallback once: a refused fallback is the answer", async () => {
-    bedrock.replies.push(refused(429));
-    vertex.replies.push(refused(429));
-    expect(await callModel(env.DB, { bedrock, vertex }, call(), clock)).toMatchObject({ kind: "provider_error", provider: "vertex", status: 429, fallback: true });
-    expect(bedrock.calls).toHaveLength(1);
-    expect(vertex.calls).toHaveLength(1);
+    openrouter.replies.push(refused(429), refused(429));
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "provider_error", status: 429, model: "test-mini", fallback: true });
+    expect(openrouter.calls).toHaveLength(2);
   });
 });
 
 describe("what is never kept", () => {
   it("logs and stores no prompt, reply or credential", async () => {
-    const logged: unknown[] = [];
-    for (const level of ["log", "info", "warn", "error", "debug"] as const) {
-      vi.spyOn(console, level).mockImplementation((...args) => void logged.push(...args));
-    }
-    bedrock.replies.push(refused(429, { error: "busy", echo: PROMPT }));
-    vertex.replies.push(ok({ input: 10, cachedInput: 0, cacheWrite: 0, output: 5 }, { reply: "REPLY-BODY-never-stored" }));
-    await callModel(env.DB, { bedrock, vertex }, call(), clock);
-
-    const secrets = [PROMPT, "REPLY-BODY-never-stored", ...bedrock.minted, ...vertex.minted];
-    expect(secrets.length).toBe(4);
-    const dump = JSON.stringify(await dumpEveryTable());
-    for (const s of secrets) {
-      expect(dump).not.toContain(s);
-      expect(JSON.stringify(logged)).not.toContain(s);
-    }
+    const logged: string[] = [];
+    for (const level of ["log", "warn", "error", "info", "debug"] as const) vi.spyOn(console, level).mockImplementation((...a) => void logged.push(a.join(" ")));
+    openrouter.replies.push(ok({ input: 1, cachedInput: 5, output: 1 }, { reply: "REPLY-BODY-never-stored" }));
+    await callModel(env.DB, plugins(), call({ main: mini, fallback: undefined }), clock);
+    const stored = JSON.stringify(await dumpEveryTable()) + logged.join("\n");
+    for (const secret of [PROMPT, "REPLY-BODY-never-stored", ...openrouter.minted]) expect(stored).not.toContain(secret);
   });
 });

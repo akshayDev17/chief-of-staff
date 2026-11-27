@@ -56,25 +56,25 @@ describe("the per-user vault", () => {
 });
 
 describe("provider connections hold nothing secret", () => {
-  const plugin = testPlugin("bedrock");
+  const plugin = testPlugin();
 
   it("keep only the plug-in's declared fields, and only for their user", async () => {
-    await writeConnection(env.DB, owner, plugin, { account: "123456789012", region: "global" }, NOW);
-    expect(await readConnection(env.DB, owner, "bedrock")).toEqual({ account: "123456789012", region: "global" });
-    expect(await readConnection(env.DB, friend, "bedrock")).toBeUndefined();
+    await writeConnection(env.DB, owner, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
+    expect(await readConnection(env.DB, owner, "openrouter")).toEqual({ method: "oauth_pkce", key_hash: "a".repeat(64) });
+    expect(await readConnection(env.DB, friend, "openrouter")).toBeUndefined();
   });
 
   it("refuse a field the plug-in does not declare, such as a key", async () => {
     await expect(
-      writeConnection(env.DB, owner, plugin, { account: "123456789012", region: "global", apiKey: PASTED }, NOW),
+      writeConnection(env.DB, owner, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64), apiKey: PASTED }, NOW),
     ).rejects.toThrow(/no field "apiKey"/);
-    await expect(writeConnection(env.DB, owner, plugin, { account: "123456789012" }, NOW)).rejects.toThrow(/needs region/);
+    await expect(writeConnection(env.DB, owner, plugin, { method: "oauth_pkce" }, NOW)).rejects.toThrow(/needs key_hash/);
     expect(JSON.stringify(await dumpEveryTable())).not.toContain(PASTED);
   });
 
   it("leave no minted credential in any stored row", async () => {
-    await writeConnection(env.DB, owner, plugin, { account: "123456789012", region: "global" }, NOW);
-    const credential = (await plugin.mintCredential((await readConnection(env.DB, owner, "bedrock"))!, { userId: owner })) as string;
+    await writeConnection(env.DB, owner, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
+    const credential = (await plugin.mintCredential((await readConnection(env.DB, owner, "openrouter"))!, { userId: owner })) as string;
     expect(JSON.stringify(await dumpEveryTable())).not.toContain(credential);
   });
 });

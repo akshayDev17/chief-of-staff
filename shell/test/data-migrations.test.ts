@@ -23,7 +23,7 @@ const job = (ran: string[], failFor?: string): DataMigrationJob => ({
       async run(db, userId) {
         ran.push(`insert:${userId}`);
         return [
-          db.prepare("INSERT INTO provider_budgets (user_id, provider, monthly_usd, set_how, set_at) VALUES (?, 'bedrock', 10, 'typed', ?)")
+          db.prepare("INSERT INTO provider_budgets (user_id, provider, monthly_usd, set_how, set_at) VALUES (?, 'openrouter', 10, 'typed', ?)")
             .bind(userId, NOW.toISOString()),
         ];
       },

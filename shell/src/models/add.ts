@@ -1,57 +1,61 @@
-// Choosing a model (design-v3 1.5, T17): on each provider's Connect screen
+// Choosing a model (design-v3 1.5, T17): on the provider's Connect screen
 // (providers/models-panel.ts), the user picks a model from the app's list of
-// every chat model a connected provider sells at a listed price, and the
-// model's test call runs once. The model is added only when that
-// call passes.
+// every model the connected provider lists, and the model's test call runs
+// once. The model is added only when that call passes.
 //
 //   listOffer(db, plugins, userId, provider) -> OfferRow[]
-//   addModel(db, plugins, { userId, provider, model, deployment?, now }) -> AddOutcome
+//   addModel(db, plugins, { userId, provider, model, now }) -> AddOutcome
 //   readUserModels(db, userId) -> UserModel[]     what T18's picker offers
+//   saveUserModel(db, userId, model)               also written by Add on Test all models' results
 //
-// Each row of the list carries the model's list price at the location the
-// app calls it (the region the user chose on Providers where the model is
-// offered there, else the app's default for it), the source and date read,
-// and its tier from that price (lookupTier, T11). A model the plug-in knows
-// but the table has no input and output price for shows "no price yet" and
-// cannot be added, because the budget stop needs a real price; the proxy
-// refuses a call to it too.
+// The list is every model OpenRouter's own model list names (the owner,
+// 2026-11-27: "i would like to list all models and then choose"), read with
+// the price table (src/prices/openrouter.ts), and every model the user added
+// that it no longer names. Each row carries the model's list price, the
+// source and date read, and its tier from that price (tiers.ts). A model the
+// plug-in cannot call shows why and cannot be chosen; one with no input and
+// output price shows "no price yet" and cannot be added, because the budget
+// stop needs a real price; the proxy refuses a call to either. A free model
+// ($0 in and out, such as OpenRouter's `:free` ones) carries FREE_NOTE; it is
+// never proposed for a task (models/tasks.ts).
 //
 // The test call goes through the proxy's one pipeline (`sendTestCall`), which
 // prices it and writes its ledger row. Where the reply names its model, a
 // reply naming another model than the one picked is refused with a plain
 // reason, and nothing is added.
 
-import { lookupTier } from "../prices/lookup";
-import type { Tier } from "../prices/tiers";
-import { currentSnapshot } from "../prices/store";
-import type { Provider, SourceId } from "../prices/types";
-import { readCheck, refreshSetupVersion } from "../providers/check";
+import { readCurrentCatalog, currentSnapshot, readSnapshotRows } from "../prices/store";
+import { modelTier, type Tier } from "../prices/tiers";
+import { isProvider, type PriceRow, type Provider, type SourceId } from "../prices/types";
+import { reasonText } from "../providers/check";
 import { readConnection } from "../proxy/connections";
 import type { Link, PlainReason, PluginRegistry, ProviderPlugin, Usage } from "../proxy/plugin";
-import { listPrices, sendTestCall } from "../proxy/proxy";
+import { sendTestCall } from "../proxy/proxy";
+import { readAccountList } from "./account-list";
 
 export interface OfferRow {
   model: string;
+  // The provider's own name for it ("OpenAI: GPT-6 Luna"), where it gives one.
+  name?: string;
   location: string;
-  // Who chose the location: the app, from what the model supports, or the
-  // user, on Providers.
-  locationSetBy: "app" | "user";
-  price?: { input: number; output: number; source: SourceId; dateRead: string; stale: boolean };
+  // `request`: the provider's fee per call, in USD per million calls, when it lists one.
+  price?: { input: number; output: number; request?: number; source: SourceId; dateRead: string; stale: boolean };
   tier?: Tier;
-  // The plug-in can call it: it knows the provider's own ID for the model.
+  // The plug-in can call it; otherwise `notCallableReason` says why.
   callable: boolean;
-  // Where the model is known to make no tool call, the check that found it
-  // (connect.noToolUse).
+  // The user's own account leaves it out (models/account-list.ts).
+  accountLeftOut: boolean;
+  // Where the provider lists no tool support for it, the plug-in's words.
   noToolUse?: string;
-  // Foundry only: the deployment name filled in (the user's own, once added).
-  deployment?: string;
+  // The plug-in's plain notes for the entry (a retirement date, a price
+  // that rises with the prompt's length).
+  notes: string[];
   added?: UserModel;
 }
 
 // The passed test call, as shown to the user who made it.
 export interface TestResult {
   at: string;
-  modelId: string;
   location: string;
   status: number;
   // The model the reply named, in the provider's words, where it names one.
@@ -65,21 +69,17 @@ export interface UserModel {
   provider: Provider;
   model: string;
   location: string;
-  deployment?: string;
   addedAt: string;
   test?: TestResult;
 }
 
 // Why a model was not added, each a plain sentence on the page.
-export type AddRefusal =
-  | PlainReason
-  | "not_connected"
-  | "not_offered"
-  | "no_price"
-  | "cannot_call"
-  | "bad_deployment"
-  | "wrong_model"
-  | "budget_spent";
+export type AddRefusal = PlainReason | "not_connected" | "not_offered" | "no_price" | "cannot_call" | "wrong_model" | "budget_spent" | "not_passed";
+
+export const FREE_NOTE = "free: rate-limited, and the provider may log prompts";
+
+// $0 in and out.
+export const isFree = (price: { input?: number; output?: number } | undefined): boolean => price?.input === 0 && price?.output === 0;
 
 export type AddOutcome =
   | { kind: "added"; model: UserModel }
@@ -93,120 +93,109 @@ export type AddOutcome =
       note?: string;
       fix?: string;
       links?: Link[];
-      modelId?: string;
       location?: string;
     };
 
 interface UserModelRecord {
-  provider: Provider;
+  provider: string;
   model: string;
   location: string;
-  deployment: string | null;
   added_at: string;
   test_result: string | null;
 }
 
-const toUserModel = (r: UserModelRecord): UserModel => ({
-  provider: r.provider,
-  model: r.model,
-  location: r.location,
-  deployment: r.deployment ?? undefined,
-  addedAt: r.added_at,
-  test: r.test_result ? (JSON.parse(r.test_result) as TestResult) : undefined,
-});
-
-// The signed-in user's added models, every provider: what the per-task
-// picker (T18) offers. Scoped to the user.
+// The signed-in user's added models at every provider a plug-in can serve:
+// what the per-task picker (T18) offers. Models added at a removed provider
+// (Bedrock, Vertex AI, Foundry) stay in D1 and are left out. Scoped to the user.
 export async function readUserModels(db: D1Database, userId: string): Promise<UserModel[]> {
   const { results } = await db
-    .prepare("SELECT provider, model, location, deployment, added_at, test_result FROM user_models WHERE user_id = ? ORDER BY provider, model")
+    .prepare("SELECT provider, model, location, added_at, test_result FROM user_models WHERE user_id = ? ORDER BY provider, model")
     .bind(userId)
     .all<UserModelRecord>();
-  return results.map(toUserModel);
+  return results.flatMap((r) =>
+    isProvider(r.provider)
+      ? [{ provider: r.provider, model: r.model, location: r.location, addedAt: r.added_at, test: r.test_result ? (JSON.parse(r.test_result) as TestResult) : undefined }]
+      : [],
+  );
 }
 
-async function saveUserModel(db: D1Database, userId: string, m: UserModel): Promise<void> {
+export async function saveUserModel(db: D1Database, userId: string, m: UserModel): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO user_models (user_id, provider, model, location, deployment, added_at, test_result) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-       ON CONFLICT (user_id, provider, model) DO UPDATE SET location = excluded.location, deployment = excluded.deployment,
-         test_result = excluded.test_result`,
+      `INSERT INTO user_models (user_id, provider, model, location, added_at, test_result) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT (user_id, provider, model) DO UPDATE SET location = excluded.location, test_result = excluded.test_result`,
     )
-    .bind(userId, m.provider, m.model, m.location, m.deployment ?? null, m.addedAt, m.test ? JSON.stringify(m.test) : null)
+    .bind(userId, m.provider, m.model, m.location, m.addedAt, m.test ? JSON.stringify(m.test) : null)
     .run();
 }
 
-// The location the app calls a model at: the region the user chose on
-// Providers where the model is offered there, else the app's default for it.
-async function locationFor(db: D1Database, userId: string, plugin: ProviderPlugin, model: string): Promise<{ location: string; setBy: "app" | "user" }> {
-  const locations = plugin.connect.locations(model);
-  const check = await readCheck(db, userId, plugin.provider);
-  if (check?.regionSetBy === "user" && check.region && locations.includes(check.region)) return { location: check.region, setBy: "user" };
-  return { location: locations[0]!, setBy: "app" };
-}
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-// The models the current price table lists at the provider, by name.
-async function tableModels(db: D1Database, provider: Provider): Promise<string[]> {
-  const snapshot = await currentSnapshot(db);
-  if (!snapshot) return [];
-  const { results } = await db
-    .prepare("SELECT DISTINCT model FROM price_rows WHERE snapshot_id = ? AND provider = ? AND batch = 0")
-    .bind(snapshot.id, provider)
-    .all<{ model: string }>();
-  return results.map((r) => r.model);
-}
-
-async function offerRow(db: D1Database, userId: string, plugin: ProviderPlugin, model: string, added: UserModel | undefined): Promise<OfferRow> {
-  const { location, setBy } = await locationFor(db, userId, plugin, model);
-  const prices = await listPrices(db, { provider: plugin.provider, model, location, request: undefined }, false);
-  const { input, output } = prices;
+// The price and tier of each model at its location, from one read of the
+// current snapshot: the dearest standard row of each kind there, so the
+// shown price is never below what the provider can charge.
+function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price" | "tier"> {
+  const at = rows.filter((r) => !r.longPrompt && !r.batch && (r.region === location || r.deployment === location));
+  const dearest = (kind: PriceRow["tokenKind"]) => at.filter((r) => r.tokenKind === kind).sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];
+  const input = dearest("input");
+  const output = dearest("output");
+  const request = dearest("request");
+  if (!input || !output) return {};
   return {
-    model,
-    location,
-    locationSetBy: setBy,
-    price:
-      input && output
-        ? {
-            input: input.usdPerMTok,
-            output: output.usdPerMTok,
-            source: input.source,
-            // The older of the two dates: neither price was read before it.
-            dateRead: input.dateRead < output.dateRead ? input.dateRead : output.dateRead,
-            stale: input.stale || output.stale,
-          }
-        : undefined,
-    tier: input && output ? await lookupTier(db, { provider: plugin.provider, model }) : undefined,
-    callable: plugin.connect.canCall(model),
-    noToolUse: plugin.connect.noToolUse?.(model),
-    deployment: added?.deployment ?? plugin.connect.deploymentName?.(model),
-    added,
+    price: {
+      input: input.usdPerMTok,
+      output: output.usdPerMTok,
+      ...(request ? { request: request.usdPerMTok } : {}),
+      source: input.source,
+      // The older of the two dates: neither price was read before it.
+      dateRead: input.dateRead < output.dateRead ? input.dateRead : output.dateRead,
+      stale: input.stale || output.stale,
+    },
+    tier: modelTier(input.provider, rows),
   };
 }
 
-// Every chat model the provider sells at a listed price, and every model the
-// plug-in knows that the table has no price for yet, by name. A model the
-// provider no longer offers (`connect.listed`) is left out, unless the user
-// added it, so they still see why it cannot be picked again.
+// Every model the provider's own list names, every model the price table
+// prices there, and every model the user added there, by ID.
 export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<OfferRow[]> {
   const plugin = plugins[provider];
   if (!plugin) return [];
+  const snapshot = await currentSnapshot(db);
+  const rows = snapshot ? (await readSnapshotRows(db, snapshot.id)).filter((r) => r.provider === provider) : [];
+  const rowsByModel = new Map<string, PriceRow[]>();
+  for (const r of rows) rowsByModel.set(r.model, [...(rowsByModel.get(r.model) ?? []), r]);
+  const catalog = await readCurrentCatalog(db);
+  const names = new Map((catalog?.models ?? []).map((m) => [m.id, m.name]));
   const added = new Map((await readUserModels(db, userId)).filter((m) => m.provider === provider).map((m) => [m.model, m]));
-  const names = [...new Set([...(await tableModels(db, provider)), ...plugin.connect.knownModels])]
-    .filter((model) => added.has(model) || (plugin.connect.listed?.(model) ?? true))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return Promise.all(names.map((model) => offerRow(db, userId, plugin, model, added.get(model))));
+  const account = await readAccountList(db, userId, provider);
+  const ids = [...new Set([...names.keys(), ...rowsByModel.keys(), ...added.keys()])].sort(byText);
+  return ids.map((model) => {
+    const location = added.get(model)?.location ?? plugin.connect.locations(model)[0] ?? "global";
+    const name = names.get(model);
+    const priced = priceOf(rowsByModel.get(model) ?? [], location);
+    return {
+      model,
+      ...(name && name !== model ? { name } : {}),
+      location,
+      ...priced,
+      callable: plugin.connect.canCall(model),
+      accountLeftOut: account !== undefined && !account.models.has(model),
+      noToolUse: plugin.connect.noToolUse?.(model),
+      notes: [...(isFree(priced.price) ? [FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
+      added: added.get(model),
+    };
+  });
 }
 
 // A provider's model ID in one comparable form: lower case, with the
-// publisher prefix and the separators the vendors vary ("anthropic.",
-// "publishers/google/models/", dots, spaces, underscores) taken out.
+// publisher prefix ("openai/"), a variant suffix (":batch", ":nitro") and
+// the separators the vendors vary (dots, spaces, underscores) taken out.
 const comparable = (id: string): string =>
   id
     .trim()
     .toLowerCase()
     .replace(/^.*\//, "")
-    .replace(/^(?:global|us|eu|apac|au|jp|ca)\.(?=anthropic\.)/, "")
-    .replace(/^anthropic\./, "")
+    .replace(/:[a-z0-9-]+$/, "")
     .replace(/[\s._]+/g, "-");
 
 // A date or version stamp a provider puts after a model's ID: "20261001",
@@ -215,128 +204,116 @@ const STAMP_PART = String.raw`(?:\d{8}|\d{4}-\d{2}-\d{2}|\d{4}|\d{3}|v\d+(?::\d+
 const STAMP = new RegExp(`^${STAMP_PART}(?:-${STAMP_PART})*$`);
 
 // Whether the model a reply names is the one picked: its ID, or that ID with
-// a date or version stamp after it ("claude-haiku-5-5-20261001",
-// "gemini-3.5-flash-001"), but never a longer name ("gemini-3.5-flash-lite"
-// is not "gemini-3.5-flash", "claude-opus-5-5-20261101" is not
-// "claude-opus-5") and never another listed model's ID (`otherIds`) that
-// extends it. A reply that only echoes the user's own deployment name names
-// no model, unless that name is another listed model's ID.
-export function namesPickedModel(replied: string, modelId: string, deployment?: string, otherIds: readonly string[] = []): boolean {
+// a date or version stamp after it ("claude-haiku-5.5-20261001"), but never a
+// longer name ("gpt-6-luna-pro" is not "gpt-6-luna") and never another listed
+// model's ID (`otherIds`) that extends it.
+export function namesPickedModel(replied: string, modelId: string, otherIds: readonly string[] = []): boolean {
   const said = comparable(replied);
   const id = comparable(modelId);
   const isModel = (candidate: string): boolean => said === candidate || (said.startsWith(`${candidate}-`) && STAMP.test(said.slice(candidate.length + 1)));
   const others = otherIds.map(comparable).filter((o) => o !== id);
-  if (isModel(id)) return !others.some((o) => o.length > id.length && isModel(o));
-  return Boolean(deployment && said === comparable(deployment) && !others.some(isModel));
+  return isModel(id) && !others.some((o) => o.length > id.length && isModel(o));
 }
 
-// A Foundry deployment name: letters, digits, hyphens, dots and underscores,
-// as Foundry allows them, at most 64.
-const DEPLOYMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// Why an entry cannot be chosen, or undefined when it can.
+export function blockedReason(row: OfferRow, plugin: ProviderPlugin): string | undefined {
+  if (!row.callable) return `not offered: ${plugin.connect.notCallableReason(row.model)}`;
+  if (row.accountLeftOut) return `not offered for your account: your ${plugin.connect.guide.short} settings (provider preferences, privacy or guardrails) leave it out`;
+  if (!row.price) return `no price yet: not in ${plugin.connect.guide.short}'s price list yet`;
+  return undefined;
+}
 
-export async function addModel(
+// One test call on `model` through the proxy, and what it proved: the model
+// to add, or the plain refusal. Used by Choose and by Test all models.
+export async function testModel(
   db: D1Database,
+  plugin: ProviderPlugin,
   plugins: PluginRegistry,
-  input: { userId: string; provider: Provider; model: string; deployment?: string; now: Date },
+  input: { userId: string; model: string; location: string; otherIds: readonly string[]; now: Date; task?: string },
 ): Promise<AddOutcome> {
-  const { userId, provider, model, now } = input;
-  const plugin = plugins[provider];
+  const { userId, model, location, now } = input;
+  const provider = plugin.provider;
   const refuse = (reason: AddRefusal, extra: Omit<Extract<AddOutcome, { kind: "refused" }>, "kind" | "model" | "reason"> = {}): AddOutcome => ({
     kind: "refused",
     model,
     reason,
+    location,
     ...extra,
   });
-  if (!plugin || !(await readConnection(db, userId, provider))) return refuse("not_connected");
-  const offers = await listOffer(db, plugins, userId, provider);
-  const offer = offers.find((r) => r.model === model);
-  if (!offer) return refuse("not_offered");
-  if (!offer.price) return refuse("no_price", { location: offer.location });
-  const modelId = plugin.connect.modelId(model, offer.location);
-  if (!offer.callable || !modelId) return refuse("cannot_call", { location: offer.location });
-
-  let deployment: string | undefined;
-  if (plugin.connect.deploymentName) {
-    deployment = (input.deployment ?? "").trim() || (plugin.connect.deploymentName(model) ?? "");
-    if (!DEPLOYMENT.test(deployment)) return refuse("bad_deployment", { location: offer.location });
-  }
-  const { location } = offer;
-  const outcome = await sendTestCall(
-    db,
-    plugins,
-    userId,
-    { provider, model, location, deployment, request: plugin.connect.testRequest(model, location) },
-    () => now,
-  );
-  const at = { modelId, location };
-
+  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, request: plugin.connect.testRequest(model) }, () => now, input.task);
   if (outcome.kind === "answered") {
     const repliedModel = plugin.connect.replyModel(outcome.body);
-    const otherIds = offers.filter((r) => r.model !== model).flatMap((r) => plugin.connect.modelId(r.model, r.location) ?? []);
-    if (repliedModel && !namesPickedModel(repliedModel, modelId, deployment, otherIds)) {
-      return refuse("wrong_model", { ...at, reply: { status: outcome.status, repliedModel } });
+    if (repliedModel && !namesPickedModel(repliedModel, model, input.otherIds)) {
+      return refuse("wrong_model", { reply: { status: outcome.status, repliedModel } });
     }
-    const added: UserModel = {
-      provider,
-      model,
-      location,
-      deployment,
-      addedAt: now.toISOString(),
-      test: {
-        at: now.toISOString(),
-        modelId: deployment ?? modelId,
+    return {
+      kind: "added",
+      model: {
+        provider,
+        model,
         location,
-        status: outcome.status,
-        repliedModel,
-        text: plugin.connect.replyText(outcome.body),
-        usage: outcome.usage,
-        costUsd: outcome.costUsd,
+        addedAt: now.toISOString(),
+        test: {
+          at: now.toISOString(),
+          location,
+          status: outcome.status,
+          repliedModel,
+          // A reasoning model can spend its few tokens thinking and give no
+          // text: its 200 still proves it answers.
+          text: plugin.connect.replyText(outcome.body),
+          usage: outcome.usage,
+          costUsd: outcome.costUsd,
+        },
       },
     };
-    await saveUserModel(db, userId, added);
-    return { kind: "added", model: added };
   }
-  if (outcome.kind === "provider_error" && outcome.failure) {
+  const connection = await readConnection(db, userId, provider);
+  if (outcome.failure) {
     const { failure } = outcome;
-    // The stack's template version read now, so a stack just updated is
-    // known as updated (Bedrock).
-    const connection = await readConnection(db, userId, provider);
-    const setupVersion = connection ? await refreshSetupVersion(db, plugin, userId, connection, await readCheck(db, userId, provider)) : undefined;
-    const plain = plugin.connect.classify(failure, connection, setupVersion);
+    const plain = plugin.connect.classify(failure, connection);
     return refuse(plain.reason, {
-      ...at,
-      reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
+      reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,
       fix: plain.fix,
       links: plain.links,
     });
   }
-  if (outcome.kind === "provider_error") return refuse("no_reply", { ...at, note: `${plugin.connect.guide.short} did not answer the test call.` });
+  if (outcome.kind === "provider_error") return refuse("no_reply", { note: `${plugin.connect.guide.short} did not answer the test call.` });
   switch (outcome.reason) {
     case "not_callable":
-      return refuse("cannot_call", at);
+      return refuse("cannot_call");
     case "no_price":
-      return refuse("no_price", at);
+      return refuse("no_price");
     case "budget_spent":
-      return refuse("budget_spent", { ...at, note: `Resumes ${outcome.resumesOn}.` });
+      return refuse("budget_spent", { note: `Resumes ${outcome.resumesOn}.` });
     case "credential_failed":
-      if (outcome.missing) return refuse("app_not_configured", { ...at, note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` });
-      if (outcome.failure) {
-        const plain = plugin.connect.classify(outcome.failure, await readConnection(db, userId, provider), (await readCheck(db, userId, provider))?.templateVersion);
-        return refuse(plain.reason, {
-          ...at,
-          reply: { status: outcome.failure.status, errorName: outcome.failure.errorName, message: outcome.failure.message },
-          fix: plain.fix,
-          links: plain.links,
-        });
-      }
-      return refuse("no_reply", { ...at, note: `No answer from ${plugin.connect.guide.short} while connecting.` });
+      return outcome.missing
+        ? refuse("app_not_configured", { note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` })
+        : refuse("no_reply", { note: `No answer from ${plugin.connect.guide.short} while connecting.` });
     default:
-      return refuse("not_connected", at);
+      return refuse("not_connected");
   }
 }
 
+export async function addModel(
+  db: D1Database,
+  plugins: PluginRegistry,
+  input: { userId: string; provider: Provider; model: string; now: Date },
+): Promise<AddOutcome> {
+  const { userId, provider, model, now } = input;
+  const plugin = plugins[provider];
+  if (!plugin || !(await readConnection(db, userId, provider))) return { kind: "refused", model, reason: "not_connected" };
+  const offers = await listOffer(db, plugins, userId, provider);
+  const offer = offers.find((r) => r.model === model);
+  if (!offer) return { kind: "refused", model, reason: "not_offered" };
+  if (!offer.callable || offer.accountLeftOut) return { kind: "refused", model, reason: "cannot_call", location: offer.location };
+  if (!offer.price) return { kind: "refused", model, reason: "no_price", location: offer.location };
+  const outcome = await testModel(db, plugin, plugins, { userId, model, location: offer.location, otherIds: offers.map((r) => r.model), now });
+  if (outcome.kind === "added") await saveUserModel(db, userId, outcome.model);
+  return outcome;
+}
+
 // The plain sentence for a refusal: the first of the result's lines.
-export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin: ProviderPlugin | undefined, viewer: "owner" | "friend"): string {
+export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin: ProviderPlugin | undefined): string {
   const name = plugin?.connect.guide.name ?? "That provider";
   const short = plugin?.connect.guide.short ?? "The provider";
   switch (o.reason) {
@@ -347,38 +324,17 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
     case "no_price":
       return `${o.model} has no price yet, so it cannot be added: the budget stop needs a real price.`;
     case "cannot_call":
-      return `${o.model} is not offered at ${name} yet: ${plugin?.connect.notCallableReason(o.model) ?? "the app cannot call it"}.`;
-    case "bad_deployment":
-      return viewer === "friend"
-        ? "Foundry's name for a model is letters, digits, hyphens, dots or underscores, at most 64."
-        : "A deployment name is letters, digits, hyphens, dots or underscores, at most 64.";
+      return plugin?.connect.canCall(o.model)
+        ? `${o.model} is not offered for your account: your ${short} settings leave it out.`
+        : `${o.model} is not offered at ${name}: ${plugin?.connect.notCallableReason(o.model) ?? "the app cannot call it"}.`;
     case "wrong_model":
       return `${short}'s reply names another model${o.reply?.repliedModel ? ` (${o.reply.repliedModel})` : ""}, not ${o.model}, so ${o.model} was not added.`;
     case "budget_spent":
       return `This month's budget for ${name} is spent, so the test call waits until the 1st.`;
-    case "switching_on":
-      return `${plugin?.connect.guide.vendor ?? short} is still switching this on: try again in 15 minutes.`;
-    case "not_set_up":
-      return "The connection isn't set up yet, or was removed.";
-    case "not_allowed_yet":
-      return "Your account isn't allowed to use this model yet.";
-    case "no_such_model":
-      // Friend screens never say "deployment name" (design-v3 1.6).
-      return viewer === "friend" ? "That name or model ID doesn't exist here." : "That deployment name or model ID doesn't exist here.";
-    case "region_unavailable":
-      return "This region doesn't offer that model.";
-    case "no_permission":
-      return "Your provider account lacks permission.";
-    case "data_retention":
-      return "Your subscription blocks data retention this model needs.";
-    case "busy":
-      return "Busy or out of quota, not a setup fault.";
-    case "app_not_configured":
-      return `The app's own side of ${name} isn't set up yet.`;
-    case "no_reply":
-      return `No reply from ${short}.`;
+    case "not_passed":
+      return `${o.model} did not pass in your latest Test all models run, so it cannot be added from it.`;
     default:
-      return `${short} refused the test call.`;
+      return plugin ? reasonText(o.reason, plugin, o.model) : `${short} refused the test call.`;
   }
 }
 
@@ -387,13 +343,13 @@ export function refusalFix(o: Extract<AddOutcome, { kind: "refused" }>, plugin: 
   if (o.fix) return o.fix;
   switch (o.reason) {
     case "wrong_model":
-      return plugin?.connect.deploymentName
-        ? `That name calls a deployment of another model: type the name of the one that runs ${o.model}, or deploy ${o.model} and keep its suggested name.`
-        : `Pick ${o.model} again; if the reply still names another model, ${plugin?.connect.guide.name ?? "the provider"} is answering with it.`;
+      return `Pick ${o.model} again; if the reply still names another model, ${plugin?.connect.guide.name ?? "the provider"} is answering with it.`;
     case "budget_spent":
       return `Raise the budget on Budgets, then pick ${o.model} again.`;
     case "not_connected":
       return "Open Providers and connect it.";
+    case "not_passed":
+      return `Choose ${o.model} in the list above to run its own test call.`;
     default:
       return "";
   }

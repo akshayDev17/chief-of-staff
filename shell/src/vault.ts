@@ -7,11 +7,15 @@
 // the seal as additional data, so a row copied to another user or another
 // name does not open.
 //
-// What goes in: pasted keys (none for the three v1 providers, whose
-// connection records hold nothing secret), and later the portal passwords,
-// the Gmail token and the owner's NodeMaven details. Nothing in it is shown
-// again after entry: openItem is for the code that uses the secret, never for
-// a screen. Provider credentials minted by the proxy are never stored at all.
+// What goes in: the key a model provider issued the app when the user
+// authorized it at the provider (OpenRouter's OAuth PKCE; never a key the
+// user pasted, which the app never asks for) and its PKCE verifier while the
+// user is on the provider's page (src/providers/secrets.ts), and later the
+// portal passwords, the Gmail token and the owner's NodeMaven details.
+// Nothing in it is shown again after entry: openItem is for the code that
+// uses the secret, never for a screen.
+//
+// The vault key is the Worker secret VAULT_KEY (README "Releasing the shell").
 
 const AES = { name: "AES-GCM", length: 256 } as const;
 const IV_BYTES = 12;
@@ -95,4 +99,9 @@ export async function openItem(db: D1Database, vaultKey: CryptoKey, userId: stri
   const { iv, data } = splitSealed(row.sealed);
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: encode(itemAad(userId, name)) }, key, data);
   return new TextDecoder().decode(plain);
+}
+
+// Removes one item; nothing to do when there is none.
+export async function deleteItem(db: D1Database, userId: string, name: string): Promise<void> {
+  await db.prepare("DELETE FROM vault_items WHERE user_id = ? AND name = ?").bind(userId, name).run();
 }

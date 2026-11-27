@@ -1,7 +1,7 @@
 // The price table in D1: dated snapshots kept beside each other. The current
 // table is the newest snapshot not rolled back.
 
-import type { BedrockCatalog } from "../providers/bedrock-catalog";
+import type { OpenRouterCatalog } from "./openrouter";
 import { ROLL_BACK_REFUSED, ROLL_BACK_STATEMENTS } from "./rollback";
 import type { PriceRow, SourceResult } from "./types";
 
@@ -40,19 +40,18 @@ export async function listSnapshots(db: D1Database): Promise<Snapshot[]> {
   return results.map(toSnapshot);
 }
 
-// The header, its rows, Bedrock's model list read beside them (T17,
-// src/providers/bedrock-catalog.ts) and the pruning go in one batch, which D1
-// runs as one transaction: a write that fails leaves the previous snapshot
-// current.
+// The header, its rows, OpenRouter's model list read with them
+// (src/prices/openrouter.ts) and the pruning go in one batch, which D1 runs as
+// one transaction: a write that fails leaves the previous snapshot current.
 export async function writeSnapshot(
   db: D1Database,
-  s: { takenAt: string; status: "good" | "partial"; results: SourceResult[]; rows: PriceRow[]; bedrockCatalog?: BedrockCatalog },
+  s: { takenAt: string; status: "good" | "partial"; results: SourceResult[]; rows: PriceRow[]; catalog?: OpenRouterCatalog },
 ): Promise<number> {
   const header = db
     .prepare("INSERT INTO price_snapshots (taken_at, status, results) VALUES (?, ?, ?) RETURNING id")
     .bind(s.takenAt, s.status, JSON.stringify(s.results));
   const insert = db.prepare(
-    `INSERT INTO price_rows (snapshot_id, provider, model, deployment, region, token_kind, long_prompt, batch,
+    `INSERT INTO model_price_rows (snapshot_id, provider, model, deployment, region, token_kind, long_prompt, batch,
        usd_per_mtok, source, date_read, stale, disagreement)
      SELECT (SELECT max(id) FROM price_snapshots), j.value ->> 0, j.value ->> 1, j.value ->> 2, j.value ->> 3,
        j.value ->> 4, j.value ->> 5, j.value ->> 6, j.value ->> 7, j.value ->> 8, j.value ->> 9, j.value ->> 10, j.value ->> 11
@@ -66,17 +65,23 @@ export async function writeSnapshot(
     ]);
     statements.push(insert.bind(JSON.stringify(chunk)));
   }
-  if (s.bedrockCatalog) {
+  if (s.catalog) {
     statements.push(
       db
-        .prepare("INSERT INTO bedrock_catalogs (snapshot_id, region, read_at, catalog) SELECT max(id), ?1, ?2, ?3 FROM price_snapshots")
-        .bind(s.bedrockCatalog.region, s.bedrockCatalog.readAt, JSON.stringify(s.bedrockCatalog)),
+        .prepare("INSERT INTO openrouter_catalogs (snapshot_id, read_at, catalog) SELECT max(id), ?1, ?2 FROM price_snapshots")
+        .bind(s.catalog.readAt, JSON.stringify(s.catalog)),
     );
   }
-  // Older snapshots beyond the kept number go, with their rows and lists.
+  // Older snapshots beyond the kept number go, with their rows and lists. The
+  // tables the previous Worker wrote (price_rows, bedrock_catalogs) are
+  // pruned with them too, until a later release drops those tables.
+  const prune = (table: string) =>
+    db.prepare(`DELETE FROM ${table} WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?`).bind(SNAPSHOTS_KEPT);
   statements.push(
-    db.prepare("DELETE FROM price_rows WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
-    db.prepare("DELETE FROM bedrock_catalogs WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
+    prune("model_price_rows"),
+    prune("openrouter_catalogs"),
+    prune("price_rows"),
+    prune("bedrock_catalogs"),
     db.prepare("DELETE FROM price_snapshots WHERE id <= (SELECT max(id) FROM price_snapshots) - ?").bind(SNAPSHOTS_KEPT),
   );
   const [created] = await db.batch<{ id: number }>(statements);
@@ -96,30 +101,20 @@ const toRow = (r: RowRecord): PriceRow => ({
   dateRead: r.date_read, stale: r.stale === 1, disagreement: r.disagreement === 1,
 });
 
-// Bedrock's model list stored with a snapshot, if one was.
-export async function readStoredBedrockCatalog(db: D1Database, snapshotId: number): Promise<BedrockCatalog | undefined> {
-  const r = await db.prepare("SELECT catalog FROM bedrock_catalogs WHERE snapshot_id = ?").bind(snapshotId).first<{ catalog: string }>();
-  return r ? (JSON.parse(r.catalog) as BedrockCatalog) : undefined;
+// OpenRouter's model list stored with a snapshot, if one was.
+export async function readStoredCatalog(db: D1Database, snapshotId: number): Promise<OpenRouterCatalog | undefined> {
+  const r = await db.prepare("SELECT catalog FROM openrouter_catalogs WHERE snapshot_id = ?").bind(snapshotId).first<{ catalog: string }>();
+  return r ? (JSON.parse(r.catalog) as OpenRouterCatalog) : undefined;
 }
 
-// Bedrock's model list read again now (Refresh model list), kept with the
-// current snapshot in place of the one read with it; false when there is no
-// snapshot yet to keep it with.
-export async function saveBedrockCatalog(db: D1Database, catalog: BedrockCatalog): Promise<boolean> {
+// The current snapshot's OpenRouter model list, if it has one.
+export async function readCurrentCatalog(db: D1Database): Promise<OpenRouterCatalog | undefined> {
   const snapshot = await currentSnapshot(db);
-  if (!snapshot) return false;
-  await db
-    .prepare(
-      `INSERT INTO bedrock_catalogs (snapshot_id, region, read_at, catalog) VALUES (?1, ?2, ?3, ?4)
-       ON CONFLICT (snapshot_id) DO UPDATE SET region = excluded.region, read_at = excluded.read_at, catalog = excluded.catalog`,
-    )
-    .bind(snapshot.id, catalog.region, catalog.readAt, JSON.stringify(catalog))
-    .run();
-  return true;
+  return snapshot ? readStoredCatalog(db, snapshot.id) : undefined;
 }
 
 export async function readSnapshotRows(db: D1Database, snapshotId: number): Promise<PriceRow[]> {
-  const { results } = await db.prepare("SELECT * FROM price_rows WHERE snapshot_id = ?").bind(snapshotId).all<RowRecord>();
+  const { results } = await db.prepare("SELECT * FROM model_price_rows WHERE snapshot_id = ?").bind(snapshotId).all<RowRecord>();
   return results.map(toRow);
 }
 
@@ -129,7 +124,7 @@ export async function readModelRows(
   key: { provider: string; model: string },
 ): Promise<PriceRow[]> {
   const { results } = await db
-    .prepare("SELECT * FROM price_rows WHERE snapshot_id = ? AND provider = ? AND model = ?")
+    .prepare("SELECT * FROM model_price_rows WHERE snapshot_id = ? AND provider = ? AND model = ?")
     .bind(snapshotId, key.provider, key.model)
     .all<RowRecord>();
   return results.map(toRow);
@@ -140,10 +135,10 @@ export async function readRow(
   snapshotId: number,
   key: { provider: string; model: string; location: string; tokenKind: string; longPrompt: boolean; batch: boolean },
 ): Promise<PriceRow | undefined> {
-  // The location names a region ("us-east-1") or a deployment type ("global").
+  // The location names a region or a deployment type (`global` on OpenRouter).
   const r = await db
     .prepare(
-      `SELECT * FROM price_rows WHERE snapshot_id = ?1 AND provider = ?2 AND model = ?3 AND token_kind = ?4
+      `SELECT * FROM model_price_rows WHERE snapshot_id = ?1 AND provider = ?2 AND model = ?3 AND token_kind = ?4
          AND long_prompt = ?5 AND batch = ?6 AND (region = ?7 OR deployment = ?7)
        ORDER BY usd_per_mtok DESC LIMIT 1`,
     )

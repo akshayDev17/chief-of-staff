@@ -1,48 +1,23 @@
 // A model's tier is worked out from its input list price per 1M tokens, never
 // set by hand (the owner, 2026-11-24; bands from the price report of that day).
 //
-// One tier per model at each provider, from its input price where the app runs
-// it by default (design-v3 1.2, decision 5): Global on Foundry and Bedrock where
-// the model is offered there, a specific region on Vertex AI. The first
-// deployment type below that prices the model gives its input price; within
-// it, the highest price, so the tier never rests on a price lower than the
-// vendor can charge there. Every other row of the model carries that tier.
-//
-// On Vertex AI the price is the one at the app's default location for the
-// model (src/providers/vertex-locations.ts, T16), then Global. A model the app
-// names no default location for keeps the conservative rule: the highest
-// regional price, then Global.
+// One tier per model at each provider, from its standard input price (not a
+// long-prompt or batch one): the highest such price the table lists for the
+// model, so the tier never rests on a price lower than the provider can
+// charge. Every row of the model carries that tier.
 
-import { vertexDefaultLocation } from "../providers/vertex-locations";
-import type { Deployment, PriceRow, Provider } from "./types";
+import type { PriceRow, Provider } from "./types";
 
 export type Tier = "Smallest" | "Middle" | "Strongest";
 
 export const tierFromInputPrice = (usdPerMTok: number): Tier =>
   usdPerMTok < 0.5 ? "Smallest" : usdPerMTok < 2.5 ? "Middle" : "Strongest";
 
-export const TIER_DEPLOYMENTS: Record<Provider, readonly Deployment[]> = {
-  foundry: ["global", "data-zone", "regional"],
-  bedrock: ["global", "cross-region", "regional"],
-  vertex: ["regional", "global"],
-};
-
 // `rows` are one provider's rows for one model; undefined when none of them
 // is a standard input price.
 export function modelTier(provider: Provider, rows: PriceRow[]): Tier | undefined {
-  const inputs = rows.filter((r) => r.provider === provider && r.tokenKind === "input" && !r.longPrompt && !r.batch);
-  const home = provider === "vertex" && inputs[0] ? vertexDefaultLocation(inputs[0].model) : undefined;
-  if (home) {
-    for (const region of [home, "global"]) {
-      const prices = inputs.filter((r) => r.region === region).map((r) => r.usdPerMTok);
-      if (prices.length) return tierFromInputPrice(Math.max(...prices));
-    }
-  }
-  for (const deployment of TIER_DEPLOYMENTS[provider]) {
-    const prices = inputs.filter((r) => r.deployment === deployment).map((r) => r.usdPerMTok);
-    if (prices.length) return tierFromInputPrice(Math.max(...prices));
-  }
-  return undefined;
+  const inputs = rows.filter((r) => r.provider === provider && r.tokenKind === "input" && !r.longPrompt && !r.batch).map((r) => r.usdPerMTok);
+  return inputs.length ? tierFromInputPrice(Math.max(...inputs)) : undefined;
 }
 
 export const tierKey = (provider: Provider, model: string): string => `${provider}|${model}`;

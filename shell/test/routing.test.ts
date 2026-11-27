@@ -7,19 +7,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import worker from "../src/index";
 import { clearAccessKeyCache } from "../src/access";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
-import { APP_ORIGIN, issuerKey, issuerKeys } from "./issuer-fixture";
+const APP_ORIGIN = "https://cos.example.com";
 
 let accessKey: TestKey;
-let keys: string;
 
 beforeAll(async () => {
   accessKey = await generateKey("kid-routing");
-  keys = issuerKeys("issuer-routing", [await issuerKey("issuer-routing")]);
 });
 beforeEach(() => clearAccessKeyCache());
 afterEach(() => vi.restoreAllMocks());
 
-const send = (request: Request) => worker.fetch(request, { ...ENV, DB: env.DB, APP_ORIGIN, ISSUER_KEYS: keys });
+const send = (request: Request) => worker.fetch(request, { ...ENV, DB: env.DB, APP_ORIGIN });
 
 const signedIn = async (path: string, init: RequestInit = {}) => {
   serveCerts(() => [accessKey]);
@@ -57,30 +55,24 @@ describe("under /chief-of-staff", () => {
     expect(await response.json()).toEqual({ status: "ok" });
   });
 
-  it("serves the issuer's two documents without a token, naming the prefixed issuer and key set", async () => {
-    const discovery = await send(new Request(`${APP_ORIGIN}/chief-of-staff/oidc/.well-known/openid-configuration`));
-    expect(discovery.status).toBe(200);
-    expect(await discovery.json()).toMatchObject({
-      issuer: "https://cos.example.com/chief-of-staff/oidc",
-      jwks_uri: "https://cos.example.com/chief-of-staff/oidc/jwks.json",
-    });
-    const jwks = await send(new Request(`${APP_ORIGIN}/chief-of-staff/oidc/jwks.json`));
-    expect(jwks.status).toBe(200);
-    expect(((await jwks.json()) as { keys: unknown[] }).keys).toHaveLength(1);
+  it("refuses the removed issuer's two former documents without a token, as any path", async () => {
+    for (const path of ["/chief-of-staff/oidc/.well-known/openid-configuration", "/chief-of-staff/oidc/jwks.json"]) {
+      expect((await send(new Request(`${APP_ORIGIN}${path}`))).status, path).toBe(403);
+    }
   });
 
   it("leads the old Add a model page to the providers' Connect screens, and nothing else under it", async () => {
     for (const [path, to] of [
       ["/chief-of-staff/models/setup/add", "/chief-of-staff/models/setup/providers"],
-      ["/chief-of-staff/models/setup/add?provider=foundry", "/chief-of-staff/models/setup/providers?provider=foundry"],
+      ["/chief-of-staff/models/setup/add?provider=openrouter", "/chief-of-staff/models/setup/providers?provider=openrouter"],
     ]) {
       const response = await signedIn(path!);
       expect(response.status, path).toBe(303);
       expect(new URL(response.headers.get("location")!).pathname + new URL(response.headers.get("location")!).search, path).toBe(to);
     }
-    const form = { method: "POST", body: new URLSearchParams({ model: "Nova 2.0 Lite" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } };
-    expect((await signedIn("/chief-of-staff/models/setup/add/vertex/pick")).status).toBe(404);
-    expect((await signedIn("/chief-of-staff/models/setup/add/bedrock/pick", form)).status).toBe(404);
+    const form = { method: "POST", body: new URLSearchParams({ model: "openai/gpt-6-luna" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } };
+    expect((await signedIn("/chief-of-staff/models/setup/add/openrouter/pick")).status).toBe(404);
+    expect((await signedIn("/chief-of-staff/models/setup/add/openrouter/choose", form)).status).toBe(404);
     expect((await signedIn("/chief-of-staff/models/setup/add", form)).status).toBe(404);
   });
 

@@ -9,9 +9,6 @@
 // same choices. Each row carries its model's one tier at that provider
 // (tiers.ts), not one worked out from that row's own price.
 
-import type { MaintainerEntry } from "./maintainer";
-import { entriesDueForReading } from "./maintainer";
-import { QUOTAS } from "./quotas";
 import { SOURCES } from "./sources";
 import type { Snapshot } from "./store";
 import { modelTiers, tierKey } from "./tiers";
@@ -20,7 +17,7 @@ import type { PriceRow, Provider } from "./types";
 export type SortColumn = "provider" | "model" | "input" | "output";
 export type SortDir = "asc" | "desc";
 
-const PROVIDER_NAMES: Record<Provider, string> = { foundry: "Foundry", bedrock: "Bedrock", vertex: "Vertex AI" };
+const PROVIDER_NAMES: Record<Provider, string> = { openrouter: "OpenRouter" };
 
 export interface DisplayRow {
   provider: Provider;
@@ -115,13 +112,6 @@ const usd = (n: number | undefined) => {
 };
 export const nbDate = (d: string) => d.replace(/-/g, "&#8209;");
 
-function regionsLabel(r: DisplayRow): string {
-  const shown = r.regions.slice(0, 3).join(", ");
-  const more = r.regions.length > 3 ? ` +${r.regions.length - 3} more` : "";
-  const where = r.regions.length === 1 && r.regions[0] === r.deployment ? "" : ` (${shown}${more})`;
-  return `<span title="${esc(r.regions.join(", "))}">${esc(r.deployment)}${esc(where)}</span>`;
-}
-
 function extras(r: DisplayRow): string {
   const parts: string[] = [];
   if (r.cachedInput !== undefined) parts.push(`cached ${usd(r.cachedInput)}`);
@@ -150,13 +140,20 @@ function header(label: string, column: SortColumn, sort: { column: SortColumn; d
   return `<th aria-sort="${ariaSort}"><a class="th-sort" href="?sort=${column}:${next}">${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span></a></th>`;
 }
 
+// OpenRouter's own limits page, read and dated; it states no number for paid
+// models, and the note says so rather than guessing.
+export const RATE_LIMITS = {
+  limits:
+    "OpenRouter names no default rate limit for paid models (\"We do however have different rate limits for different models\"). Free (:free) models, which the app does not offer, allow 20 requests a minute and 50 a day (1,000 once $10 of credits are bought).",
+  page: "https://openrouter.ai/docs/api_reference/limits.md",
+  read: "2026-11-27 (no date on the page)",
+};
+
 export interface PageInput {
   snapshot: Snapshot | undefined;
   rows: PriceRow[];
   alerts: Array<{ createdAt: string; kind: string; detail: string }>;
-  maintainerEntries: MaintainerEntry[];
   sort: { column: SortColumn; dir: SortDir };
-  today: string;
 }
 
 function refreshBanner(snapshot: Snapshot | undefined): string {
@@ -165,7 +162,7 @@ function refreshBanner(snapshot: Snapshot | undefined): string {
   const parts = snapshot.results.map((r) => {
     const name = SOURCES[r.source].label;
     return r.ok
-      ? `${esc(name)}: ok (${r.rows} rows, ${r.added} added and ${r.dropped} dropped against the previous snapshot${r.unmapped ? `, ${r.unmapped} meters not mapped` : ""})`
+      ? `${esc(name)}: ok (${r.rows} rows, ${r.added} added and ${r.dropped} dropped against the previous snapshot${r.unmapped ? `, ${r.unmapped} listed models that cannot be chosen, so have no price rows` : ""})`
       : `${esc(name)}: <strong>failed</strong> (${esc(r.error ?? "")}; rows keep their last good price and date; the maintainers were alerted)`;
   });
   const failed = snapshot.results.some((r) => !r.ok);
@@ -175,7 +172,6 @@ function refreshBanner(snapshot: Snapshot | undefined): string {
 export function renderPriceTablePage(input: PageInput): string {
   const rows = sortRows(displayRows(input.rows), input.sort.column, input.sort.dir);
   const tiers = modelTiers(input.rows);
-  const due = entriesDueForReading(input.maintainerEntries, input.today);
   const body = rows
     .map((r) => {
       const tier = tiers.get(tierKey(r.provider, r.model)) ?? "–";
@@ -187,7 +183,6 @@ export function renderPriceTablePage(input: PageInput): string {
       return `<tr>
 <td data-l="Provider">${PROVIDER_NAMES[r.provider]}</td>
 <td data-l="Model">${esc(r.model)}</td>
-<td data-l="Region or deployment type">${regionsLabel(r)}</td>
 <td data-l="Input / M">${r.input === undefined ? `<span class="pill warn">no price yet</span>` : usd(r.input)}</td>
 <td data-l="Output / M">${usd(r.output)}</td>
 <td data-l="Cached, cache write, long prompt, batch / M">${extras(r)}</td>
@@ -205,13 +200,6 @@ export function renderPriceTablePage(input: PageInput): string {
         .map((a) => `<li><span class="pill warn">${esc(a.kind.replace(/_/g, " "))}</span> ${nbDate(a.createdAt.slice(0, 10))}: ${esc(a.detail)}</li>`)
         .join("")}</ul></section>`
     : "";
-  const reading = due.length
-    ? `<div class="banner warn">Maintainer readings over a week old: ${due.map((e) => `<a href="${esc(e.listing)}">${esc(e.model)}</a> (${nbDate(e.date_read)})`).join(", ")}. Read each listing again and update shell/prices/maintainer-read.json through a pull request.</div>`
-    : "";
-  const quotas = QUOTAS.map(
-    (q) => `<tr><td data-l="Provider">${esc(q.provider)}</td><td data-l="Default rate limits">${esc(q.limits)}</td><td data-l="Read from"><a href="${esc(q.page)}">${esc(new URL(q.page).hostname)}</a>, ${esc(q.read)}</td></tr>`,
-  ).join("");
-
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -225,7 +213,6 @@ export function renderPriceTablePage(input: PageInput): string {
 <h1>Admin</h1>
 <h2>Price table</h2>
 ${refreshBanner(input.snapshot)}
-${reading}
 <form class="sort-by" method="get">
 <label class="small" for="price-sort">Sort by</label>
 <select id="price-sort" name="sort" onchange="this.form.submit()">${options}</select>
@@ -235,7 +222,6 @@ ${reading}
 <thead><tr>
 ${header("Provider", "provider", input.sort)}
 ${header("Model", "model", input.sort)}
-<th>Region or deployment type</th>
 ${header("Input / M", "input", input.sort)}
 ${header("Output / M", "output", input.sort)}
 <th>Cached, cache write, long prompt, batch / M</th>
@@ -244,13 +230,12 @@ ${header("Output / M", "output", input.sort)}
 <th>Date read</th>
 </tr></thead>
 <tbody>
-${body || `<tr><td colspan="9">No prices yet.</td></tr>`}
+${body || `<tr><td colspan="8">No prices yet.</td></tr>`}
 </tbody></table></div>
-<p class="small muted">Prices are list prices in USD per million tokens. Where two of a vendor's sources disagree, the row keeps the higher price and the maintainers are alerted. Each request's region is chosen from this table's regions. Each model's strength at a provider comes from its input price where the app runs it by default (Global on Foundry and Bedrock where offered, a region on Vertex AI): Smallest under $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up; every row of the model shows that one strength, and nobody sets it by hand.</p>
+<p class="small muted">Prices are OpenRouter's list prices in USD per million tokens, from its models API. OpenRouter routes each call itself, so every row is global. Where OpenRouter prices a model higher above a prompt length or at some times of day, the long-prompt column and the standard columns show the dearest of those prices: a call is costed from this table only when OpenRouter's reply reports no cost, and then never below what OpenRouter can charge. Each model's strength comes from its standard input price: Smallest under $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up; nobody sets it by hand.</p>
 ${alerts}
-<section class="card"><h2>Quotas, beside the table</h2>
-<div class="tbl-wrap"><table class="stackable"><thead><tr><th>Provider</th><th>Default rate limits</th><th>Read from</th></tr></thead>
-<tbody>${quotas}</tbody></table></div></section>
+<section class="card"><h2>Rate limits, beside the table</h2>
+<p class="small">${esc(RATE_LIMITS.limits)} <a href="${esc(RATE_LIMITS.page)}">${esc(new URL(RATE_LIMITS.page).hostname)}</a>, read ${esc(RATE_LIMITS.read)}.</p></section>
 </main>
 </body>
 </html>`;

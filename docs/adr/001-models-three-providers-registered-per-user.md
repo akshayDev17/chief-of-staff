@@ -4,7 +4,7 @@ Source: [design-v3](../design-v3.md), section 1.9 (decision record ADR-001).
 
 ## Status
 
-Accepted (2026-11-24)
+Superseded by [ADR-018](018-openrouter-the-only-model-provider.md) (2026-11-27). Accepted 2026-11-24. On 2026-11-27 the owner removed Foundry, Bedrock and Vertex AI and made OpenRouter the only model provider (the owner, 2026-11-27: "so delete all the three: bedrock, gcp and foundry, and only have openrouter."). This record is kept as history; it no longer describes the app.
 
 ## Context
 

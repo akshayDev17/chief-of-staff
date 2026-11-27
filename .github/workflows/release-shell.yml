@@ -7,7 +7,7 @@ name: Release shell
 # rollback and the restore steps.
 #
 # Its Cloudflare and GitHub setup is the portfolio-app tool's, as for every
-# app on akshayprabhakant.com: the route's two Access applications and the
+# app on akshayprabhakant.com: the route's Access application and the
 # GitHub environment `production` (README "Cloudflare Access"). Until that
 # environment holds the deploy token and the Access application's AUD tag,
 # the release stops after the tests with a plain message naming what is
@@ -18,10 +18,10 @@ name: Release shell
 # puts there; variables ACCESS_AUD and ACCESS_TEAM_DOMAIN, which the tool
 # also writes there (ACCESS_TEAM_DOMAIN as the bare host
 # `<team>.cloudflareaccess.com`; the Worker also accepts it with https://).
-# The owner adds the provider plug-ins' variables there too
-# (shell/src/providers/README.md, "What the owner sets up"); each one set is
-# deployed as a Worker variable, each one unset is left out and never blocks
-# the release. A deploy replaces the Worker's variables, so a value set only
+# No model provider needs a variable (OpenRouter's PKCE needs no client
+# secret, and its callback is built from APP_ORIGIN); the Worker's one secret
+# (VAULT_KEY) is set with `wrangler secret put` and kept by
+# every release. A deploy replaces the Worker's variables, so a value set only
 # in the Cloudflare dashboard does not survive the next release.
 
 on:
@@ -114,14 +114,6 @@ jobs:
           TAG: ${{ steps.gate.outputs.tag }}
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ vars.ACCESS_AUD }}
-          # The provider plug-ins' variables; each one unset here is left out.
-          AWS_APP_ROLE_ARN: ${{ vars.AWS_APP_ROLE_ARN }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          BEDROCK_TEMPLATE_URL: ${{ vars.BEDROCK_TEMPLATE_URL }}
-          ENTRA_CLIENT_ID: ${{ vars.ENTRA_CLIENT_ID }}
-          ENTRA_CERT_THUMBPRINT: ${{ vars.ENTRA_CERT_THUMBPRINT }}
-          FOUNDRY_CREDENTIAL: ${{ vars.FOUNDRY_CREDENTIAL }}
-          GOOGLE_WIF_PROVIDER: ${{ vars.GOOGLE_WIF_PROVIDER }}
         run: scripts/release-deploy.sh
 
       - name: Record the release

@@ -3,10 +3,10 @@
 //   lookupPrice(db, { provider, model, location, tokenKind, longPrompt?, batch? })
 //     -> { usdPerMTok, source, dateRead, stale } | undefined
 //
-// `location` is the request's region ("us-east-1", "eastus2") or deployment
-// type ("global", "data-zone"). `undefined` means "no price yet": the proxy
-// refuses the call and the picker (T17) cannot offer the model, because the
-// budget stop needs a real price. Prices come from the current snapshot only.
+// `location` is the request's region or deployment type: `global` for every
+// OpenRouter model, which OpenRouter routes itself. `undefined` means "no
+// price yet": the proxy refuses the call and the picker (T17) cannot offer
+// the model, because the budget stop needs a real price. Prices come from the current snapshot only.
 //
 //   lookupTier(db, { provider, model }) -> "Smallest" | "Middle" | "Strongest" | undefined
 //

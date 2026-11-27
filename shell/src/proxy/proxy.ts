@@ -8,7 +8,7 @@
 // - no plug-in serves the provider (`no_plugin`);
 // - the plug-in cannot call the model, or not at its location
 //   (`not_callable`, with the plug-in's reason): a model the user added that
-//   the provider's list now drops, refuses or no longer offers there;
+//   the provider's list now drops;
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price;
 // - the user has set no monthly budget for the provider (`no_budget`), except
@@ -18,30 +18,39 @@
 // - the user has not connected the provider (`not_connected`), or the
 //   connection gave no credential (`credential_failed`).
 //
-// One fallback on another provider: when the main model's provider is spent
-// (`budget_spent`), its credential fails, or the provider refuses or fails
-// the call (429, 408 or 5xx, see plugin.ts), the task's fallback runs once,
-// under all the same checks and within its own provider's budget. Any other
-// outcome is returned as it is.
+// One fallback, another model: when the provider refuses or fails the main
+// model's call (429, 408 or 5xx, or no reply; see plugin.ts), the task's
+// fallback runs once, under all the same checks. A fallback on another
+// provider also answers a spent budget or a failed credential at the main
+// model's provider; with one provider (OpenRouter today) those stop the
+// fallback too, which shares the budget and the key. Any other outcome is
+// returned as it is.
 //
-// Every call sent to a provider writes one ledger row, answered or not, its
-// tokens costed at the price table's list price: at the long-prompt rows
-// when the provider billed the call at them, and each cache write at its own
-// 5-minute or 1-hour row. A kind the call used with no row of its own is
-// costed so it can never be below what the vendor charges: cached input at
-// the input price, anything else at the dearest rate the table lists for the
-// model there. The row names each such kind and its rate, and the
-// maintainers get a `price_missing` alert. The
-// request and reply bodies pass through untouched and are never logged or
-// stored; the credential lives only for the call.
+// Every call sent to a provider writes one ledger row, answered or not. Its
+// cost is the cost the provider's reply reports (OpenRouter's `usage.cost`),
+// what the user is billed (`cost_source` `reported`). Only when the reply
+// reports none are its tokens costed at the price table's list price
+// (`list_price`): at the long-prompt rows when the prompt reached them, and
+// each cache write at its own 5-minute or 1-hour row. A kind the call used
+// with no row of its own is then costed so it can never be below what the
+// provider charges: cached input at the input price, anything else at the
+// dearest token rate the table lists for the model there. A call that used
+// tokens also pays the model's fee per call (`request`), where it lists one. The row names each such
+// kind and its rate, and the maintainers get a `price_missing` alert. The
+// row also keeps the provider's own ID for the call (OpenRouter's generation
+// ID), so it can be checked against the provider's own record. The request
+// and reply bodies pass through untouched and are never logged or stored;
+// the credential lives only for the call.
 //
 // A refusal the plug-in reads as the grant removed on the provider's side
 // (`connect.classify` says `not_set_up`), whether minting the credential or
 // in the call itself, stops the provider at once and is recorded for T49's
 // alert.
 
-import { AppNotConfigured } from "../issuer";
-import { lookupPrice, lookupTier, type PriceAnswer } from "../prices/lookup";
+import { AppNotConfigured } from "../app-config";
+import type { PriceAnswer } from "../prices/lookup";
+import { currentSnapshot, readModelRows } from "../prices/store";
+import { modelTier, type Tier } from "../prices/tiers";
 import { addAlertOncePerDay } from "../prices/store";
 import type { Provider, TokenKind } from "../prices/types";
 import { readBudget } from "./budgets";
@@ -53,15 +62,9 @@ import { fallbackAnswers, ProviderRefusal, type Failure, type ModelRequest, type
 export interface ModelChoice {
   provider: Provider;
   model: string;
-  // The region or deployment type, as the price table names it.
+  // The region or deployment type, as the price table names it (`global`
+  // on OpenRouter).
   location: string;
-  // Foundry only: the user's deployment name for the model (the model list,
-  // T17); the plug-in's own default, the model ID, when absent.
-  deployment?: string;
-  // The Connect test call only: the plug-in's own ID for its test model at
-  // `location` (connect.testModelIds), called whatever the provider's list
-  // says of the model.
-  modelId?: string;
   // The request in this provider's own format.
   request: ModelRequest;
 }
@@ -73,7 +76,7 @@ export interface ModelCall {
   company?: string;
   runId?: string;
   main: ModelChoice;
-  // The task's fallback, on another provider.
+  // The task's fallback: another model, on the same provider or another.
   fallback?: ModelChoice;
 }
 
@@ -101,7 +104,7 @@ export type ProxyOutcome =
     };
 
 // Each usage count and the price-table row it is costed at.
-const USAGE_KINDS: ReadonlyArray<readonly [Exclude<keyof Usage, "longPrompt">, TokenKind]> = [
+const USAGE_KINDS: ReadonlyArray<readonly [Exclude<keyof Usage, "longPrompt" | "reportedCostUsd">, TokenKind]> = [
   ["input", "input"],
   ["cachedInput", "cached_input"],
   ["cacheWrite", "cache_write"],
@@ -113,6 +116,8 @@ type Prices = Partial<Record<TokenKind, PriceAnswer>>;
 
 export interface Cost {
   usd: number;
+  // `reported`: the provider's own reported cost; `list_price`: the table's.
+  source: "reported" | "list_price";
   // Each kind the call used that had no row of its own at the tier billed,
   // and the rate, in USD per million tokens, it was costed at instead.
   conservative: Partial<Record<TokenKind, number>>;
@@ -121,11 +126,14 @@ export interface Cost {
 // Tokens at the price table's list price, each kind at its own row at the
 // tier the provider billed (`short` or `long` prompt). A kind with no row
 // there is never costed lower than the vendor charges: cached input at the
-// input price, any other kind at the dearest rate the model lists at either
-// tier.
+// input price, any other kind at the dearest token rate the model lists at
+// either tier. A call that used tokens adds the fee per call, the dearer of
+// the two tiers' `request` rows.
 export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
+  if (usage.reportedCostUsd !== undefined) return { usd: usage.reportedCostUsd, source: "reported", conservative: {} };
   const billed = usage.longPrompt ? long : short;
-  const ceiling = Math.max(...[...Object.values(short), ...Object.values(long)].map((p) => p?.usdPerMTok ?? 0));
+  const tokenRates = (p: Prices) => Object.entries(p).filter(([kind]) => kind !== "request").map(([, a]) => a?.usdPerMTok ?? 0);
+  const ceiling = Math.max(0, ...tokenRates(short), ...tokenRates(long));
   const conservative: Cost["conservative"] = {};
   let usd = 0;
   for (const [count, kind] of USAGE_KINDS) {
@@ -137,18 +145,31 @@ export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
     }
     usd += usage[count] * rate;
   }
-  return { usd: usd / 1_000_000, conservative };
+  if (USAGE_KINDS.some(([count]) => usage[count] > 0)) usd += Math.max(short.request?.usdPerMTok ?? 0, long.request?.usdPerMTok ?? 0);
+  return { usd: usd / 1_000_000, source: "list_price", conservative };
 }
 
-// The model's list prices at its location, at the short- or long-prompt rows.
-export async function listPrices(db: D1Database, { provider, model, location }: ModelChoice, longPrompt: boolean): Promise<Prices> {
-  const answers = await Promise.all(USAGE_KINDS.map(([, tokenKind]) => lookupPrice(db, { provider, model, location, tokenKind, longPrompt })));
-  return Object.fromEntries(USAGE_KINDS.map(([, kind], i) => [kind, answers[i]]));
+// The model's list prices at its location, at the short- and long-prompt
+// rows, and its tier, from one read of its rows in the current snapshot. Each
+// kind is the dearest row the table has for it there.
+export async function modelPrices(db: D1Database, { provider, model, location }: Pick<ModelChoice, "provider" | "model" | "location">): Promise<{ short: Prices; long: Prices; tier?: Tier }> {
+  const snapshot = await currentSnapshot(db);
+  const rows = snapshot ? await readModelRows(db, snapshot.id, { provider, model }) : [];
+  const at = rows.filter((r) => !r.batch && (r.region === location || r.deployment === location));
+  const pick = (longPrompt: boolean): Prices => {
+    const out: Prices = {};
+    for (const r of at.filter((x) => x.longPrompt === longPrompt)) {
+      const seen = out[r.tokenKind];
+      if (!seen || r.usdPerMTok > seen.usdPerMTok) out[r.tokenKind] = { usdPerMTok: r.usdPerMTok, source: r.source, dateRead: r.dateRead, stale: r.stale };
+    }
+    return out;
+  };
+  return { short: pick(false), long: pick(true), tier: modelTier(provider, rows) };
 }
 
 const RESUMES = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", timeZone: "UTC" });
 
-export const PROVIDER_NAMES: Record<Provider, string> = { foundry: "Microsoft Foundry", bedrock: "Amazon Bedrock", vertex: "Google Vertex AI" };
+export const PROVIDER_NAMES: Record<Provider, string> = { openrouter: "OpenRouter" };
 
 async function attempt(
   db: D1Database,
@@ -171,12 +192,10 @@ async function attempt(
 
   const plugin = plugins[provider];
   if (!plugin) return refuse("no_plugin", `${PROVIDER_NAMES[provider]} is not available yet`);
-  if (!choice.modelId) {
-    if (!plugin.connect.canCall(model)) return refuse("not_callable", `${model} is not offered at ${PROVIDER_NAMES[provider]} yet: ${plugin.connect.notCallableReason(model)}`);
-    if (!plugin.connect.locations(model).includes(location)) return refuse("not_callable", `${PROVIDER_NAMES[provider]} does not offer ${model} at ${location} any more`);
-  }
+  if (!plugin.connect.canCall(model)) return refuse("not_callable", `${model} is not offered at ${PROVIDER_NAMES[provider]}: ${plugin.connect.notCallableReason(model)}`);
+  if (!plugin.connect.locations(model).includes(location)) return refuse("not_callable", `${PROVIDER_NAMES[provider]} does not offer ${model} at ${location} any more`);
 
-  const prices = await listPrices(db, choice, false);
+  const { short: prices, long: longPrices, tier } = await modelPrices(db, choice);
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);
 
   const budget = await readBudget(db, call.userId, provider);
@@ -213,11 +232,13 @@ async function attempt(
   let status: number;
   let body: unknown;
   let failure: Failure | undefined;
+  let callId: string | undefined;
   let usage: Usage = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, longPrompt: false };
   try {
-    const reply = await plugin.call({ credential, connection, model, location, deployment: choice.deployment, modelId: choice.modelId, request: choice.request });
+    const reply = await plugin.call({ credential, connection, model, location, request: choice.request });
     status = reply.status;
     body = reply.body;
+    callId = reply.callId;
     if (reply.usage) usage = reply.usage;
     if (status < 200 || status >= 300) failure = { step: "call", status, errorName: reply.error?.name ?? `HTTP ${status}`, message: reply.error?.message ?? "" };
   } catch {
@@ -226,7 +247,7 @@ async function attempt(
     body = { error: `no reply from ${PROVIDER_NAMES[provider]}` };
   }
   const durationMs = Date.now() - t0;
-  const cost = costOf(usage, prices, await listPrices(db, choice, true));
+  const cost = costOf(usage, prices, longPrices);
 
   await writeLedgerRow(db, {
     userId: call.userId,
@@ -238,7 +259,7 @@ async function attempt(
     provider,
     model,
     region: location,
-    tier: await lookupTier(db, { provider, model }),
+    tier,
     pluginVersion: plugin.version,
     status,
     fallbackReason,
@@ -250,6 +271,8 @@ async function attempt(
     longPrompt: usage.longPrompt,
     durationMs,
     costUsd: cost.usd,
+    costSource: cost.source,
+    providerCallId: callId,
     costedConservatively: cost.conservative,
   });
   for (const tokenKind of Object.keys(cost.conservative)) {
@@ -268,10 +291,11 @@ async function attempt(
 }
 
 // Why the main model's outcome hands the call to the fallback, or undefined
-// when it does not: a spent budget, a failed credential, or the provider
-// refusing or failing (no reply at all counts as failing).
-export const handOver = (o: ProxyOutcome): "refused" | "budget_spent" | undefined => {
-  if (o.kind === "refused") return o.reason === "budget_spent" ? "budget_spent" : o.reason === "credential_failed" ? "refused" : undefined;
+// when it does not: the provider refusing or failing (no reply at all counts
+// as failing), and, for a fallback on another provider only, a spent budget
+// or a failed credential at the main model's provider.
+export const handOver = (o: ProxyOutcome, fallbackElsewhere: boolean): "refused" | "budget_spent" | undefined => {
+  if (o.kind === "refused" && fallbackElsewhere) return o.reason === "budget_spent" ? "budget_spent" : o.reason === "credential_failed" ? "refused" : undefined;
   if (o.kind === "provider_error") return o.status === 0 || fallbackAnswers(o.status) ? "refused" : undefined;
   return undefined;
 };
@@ -282,11 +306,11 @@ export async function callModel(
   call: ModelCall,
   now: () => Date = () => new Date(),
 ): Promise<ProxyOutcome> {
-  if (call.fallback && call.fallback.provider === call.main.provider) {
-    throw new Error("a task's fallback must be on another provider");
+  if (call.fallback && call.fallback.provider === call.main.provider && call.fallback.model === call.main.model) {
+    throw new Error("a task's fallback must be another model");
   }
   const main = await attempt(db, plugins, call, call.main, undefined, now);
-  const reason = handOver(main);
+  const reason = call.fallback ? handOver(main, call.fallback.provider !== call.main.provider) : undefined;
   if (!reason || !call.fallback) return main;
   return attempt(db, plugins, call, call.fallback, reason, now);
 }
@@ -295,6 +319,7 @@ export async function callModel(
 // every check above except that no budget need be set yet (budgets come after
 // providers on the setup checklist); a budget set and spent still stops it.
 // Its ledger row's task is `test_call`, and it has no fallback.
-export async function sendTestCall(db: D1Database, plugins: PluginRegistry, userId: string, choice: ModelChoice, now: () => Date): Promise<ProxyOutcome> {
-  return attempt(db, plugins, { userId, task: TEST_TASK, main: choice }, choice, undefined, now, true);
+// Test all models' calls are the same, under their own task name.
+export async function sendTestCall(db: D1Database, plugins: PluginRegistry, userId: string, choice: ModelChoice, now: () => Date, task = TEST_TASK): Promise<ProxyOutcome> {
+  return attempt(db, plugins, { userId, task, main: choice }, choice, undefined, now, true);
 }

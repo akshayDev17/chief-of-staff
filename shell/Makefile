@@ -6,7 +6,7 @@
 NPM := npx --yes npm@11.21.3
 INSTALLED := node_modules/.package-lock.json
 
-.PHONY: test check migrations rollback-check roll-back-prices provider-setup-check release-deploy-check
+.PHONY: test check migrations rollback-check roll-back-prices release-deploy-check
 
 $(INSTALLED): package.json package-lock.json
 	$(NPM) ci
@@ -15,7 +15,7 @@ $(INSTALLED): package.json package-lock.json
 check: $(INSTALLED)
 	$(NPM) run typecheck
 
-test: $(INSTALLED) migrations rollback-check provider-setup-check release-deploy-check
+test: $(INSTALLED) migrations rollback-check release-deploy-check
 	$(NPM) test
 
 # Apply every migration, in order, to a fresh local D1 database holding only
@@ -33,12 +33,6 @@ rollback-check: $(INSTALLED)
 	rm -rf $(ROLLBACK_CHECK_DB)
 	CI=1 npx wrangler d1 migrations apply chief-of-staff --local --persist-to $(ROLLBACK_CHECK_DB) < /dev/null
 	node scripts/check-price-rollback.mjs $(ROLLBACK_CHECK_DB)
-
-# Run the owner's provider setup script for real in a temporary directory
-# and check its keys, certificate, printout and issuer-key rotation
-# (scripts/check-provider-setup.mjs). Touches no account.
-provider-setup-check:
-	node scripts/check-provider-setup.mjs
 
 # Run the release's deploy step with a stand-in for npx and check which
 # variables it passes to `wrangler deploy` (scripts/check-release-deploy.mjs).
