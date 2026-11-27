@@ -19,37 +19,41 @@ const memorySecrets = (key?: string): SecretStore => {
 };
 
 describe("Connect OpenRouter: OAuth PKCE", () => {
-  it("sends the user to OpenRouter's own page with an S256 challenge, the state, the label and the credit limit", async () => {
+  it("sends the user to OpenRouter's own page with an S256 challenge, the state, the dated label and the credit limit", async () => {
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch());
-    const { open, verifier } = await plugin.connect.start({ callbackUrl: "https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented", consentState: "s1", creditLimitUsd: 31 });
+    const { open, verifier, pending } = await plugin.connect.start({ callbackUrl: "https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented", consentState: "s1", creditLimitUsd: 31, now: new Date("2026-11-27T14:05:59Z") });
     const url = new URL(open);
     expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
     expect(url.searchParams.get("callback_url")).toBe("https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("code_challenge")).toBe(await challengeOf(verifier));
     expect(url.searchParams.get("state")).toBe("s1");
-    expect(url.searchParams.get("key_label")).toBe("Chief of staff");
+    // Each Connect mints a new key, so each label names when it was made.
+    expect(url.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 14:05 UTC");
+    expect(pending).toEqual({ key_label: "Chief of staff · 2026-11-27 14:05 UTC" });
     expect(url.searchParams.get("limit")).toBe("31.00");
     // RFC 7636: 43 to 128 characters of the unreserved set; never sent to the browser.
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
     expect(open).not.toContain(verifier);
   });
 
-  it("trades the code and verifier for the key, and keeps only its hash on the record", async () => {
+  it("trades the code and verifier for the key, and keeps only its hash and label on the record", async () => {
     const fetcher = fakeFetch();
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fetcher);
-    const issued = await plugin.connect.finish("the-verifier", new URLSearchParams({ code: "c1", state: "s1" }));
+    const issued = await plugin.connect.finish("the-verifier", new URLSearchParams({ code: "c1", state: "s1" }), { key_label: "Chief of staff · 2026-11-27 14:05 UTC" });
     expect(fetcher.sent[0]).toMatchObject({ url: "https://openrouter.ai/api/v1/auth/keys", method: "POST", body: { code: "c1", code_verifier: "the-verifier", code_challenge_method: "S256" } });
     expect(issued.secret).toBe(ISSUED_KEY);
-    expect(issued.fields).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY) });
+    expect(issued.fields).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY), key_label: "Chief of staff · 2026-11-27 14:05 UTC" });
     expect(JSON.stringify(issued.fields)).not.toContain(ISSUED_KEY);
     expect(plugin.connect.guide.revokeLinks(issued.fields).map((l) => l.href)).toEqual(["https://openrouter.ai/settings/keys", `https://openrouter.ai/keys/${issued.fields.key_hash}`]);
+    // A consent opened before labels were dated gets the plain label.
+    expect((await plugin.connect.finish("v", new URLSearchParams({ code: "c2" }), {})).fields.key_label).toBe("Chief of staff");
   });
 
   it("refuses a return with no code, and an exchange OpenRouter refuses, in plain words", async () => {
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch({ keys: () => Response.json({ error: { code: 403, message: "Invalid code or code_verifier" } }, { status: 403 }) }));
-    await expect(plugin.connect.finish("v", new URLSearchParams({ state: "s" }))).rejects.toThrow(ConnectProblem);
-    await expect(plugin.connect.finish("v", new URLSearchParams({ code: "c" }))).rejects.toThrow(/403 Invalid code or code_verifier.*10 minutes/);
+    await expect(plugin.connect.finish("v", new URLSearchParams({ state: "s" }), {})).rejects.toThrow(ConnectProblem);
+    await expect(plugin.connect.finish("v", new URLSearchParams({ code: "c" }), {})).rejects.toThrow(/403 Invalid code or code_verifier.*10 minutes/);
   });
 });
 

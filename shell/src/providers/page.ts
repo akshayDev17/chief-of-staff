@@ -3,7 +3,7 @@
 // one provider since 2026-11-27), each with its action lines, its
 // connection, its account line and, once connected, the model test.
 //
-//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1|&disconnected=1][&test-all=confirm][&tests=all|works|fails]
+//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1|&disconnected=1[&key=<hash>]][&test-all=confirm][&tests=all|works|fails]
 //   POST /chief-of-staff/models/setup/providers/<id>/connect      to the provider's own consent page
 //   GET  /chief-of-staff/models/setup/providers/<id>/consented    back from it: the key into the vault, then to #test
 //   POST /chief-of-staff/models/setup/providers/<id>/disconnect
@@ -31,6 +31,13 @@
 // (the owner, 2026-11-27, of the old three-paragraph guide: "why not make it
 // even more verbose ... so that the users learn to read a book in
 // 30seconds?"). The Usage page, not built yet, is named but not linked.
+//
+// The app cannot delete the key on OpenRouter (openrouter.ts, "Revoking"), so
+// Disconnect's confirmation, and the page it returns to, open that exact
+// key's page there, named by the SHA-256 hash the record holds; the key
+// itself never reaches the browser. The hash rides the return address
+// (`&key=`), since the record is gone by then, and is shown only when it is
+// 64 hex characters.
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
 import { addModel, listOffer, readUserModels, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
@@ -79,8 +86,10 @@ export interface ProvidersPageInput {
   panels: ProviderPanel[];
   selected: Provider;
   confirmDisconnect: boolean;
-  // Back from Disconnect: the key is gone from the vault.
+  // Back from Disconnect: the key is gone from the vault; the removed
+  // connection's key hash, when it had one.
   disconnected: boolean;
+  disconnectedKeyHash?: string;
   confirmTestAll: boolean;
   testsFilter: TestsFilter;
   problem?: string;
@@ -150,8 +159,24 @@ function connectForm(panel: ProviderPanel): string {
 function aboutConnect(plugin: ProviderPlugin): string {
   const g = plugin.connect.guide;
   const pages = g.pages.map((p) => `<a href="${esc(p.href)}" rel="noopener noreferrer">${esc(p.label)}</a>`).join(" · ");
-  return `<details class="more"><summary>What this does</summary><ul class="small about">${g.about.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+  const newGrant = g.newGrantEachTime ? `<details class="more"><summary>Why a new key each time</summary><p class="small">${esc(g.newGrantEachTime)}</p></details>` : "";
+  return `${newGrant}<details class="more"><summary>What this does</summary><ul class="small about">${g.about.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
 <p class="small muted">Checked on ${nbDate(g.checkedOn)} · ${pages}</p></details>`;
+}
+
+const newTab = (href: string, label: string, cls: string) => `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+
+// "Also delete this key on OpenRouter. [Open its page]": the key's own page
+// when the connection names it (revokeLinks puts it last, after the general
+// page), else the provider's list of keys.
+function alsoDeleteLine(plugin: ProviderPlugin, connection: ConnectionFields | undefined): string {
+  const short = esc(plugin.connect.guide.short);
+  const general = plugin.connect.guide.revokeLinks(undefined);
+  const links = plugin.connect.guide.revokeLinks(connection);
+  const own = links.length > general.length ? links.at(-1) : undefined;
+  if (own) return `<p class="small also">Also delete this key on ${short}. ${newTab(own.href, "Open its page", "btn small")}</p>`;
+  const list = general.at(-1);
+  return `<p class="small also">Also delete the key on ${short}.${list ? ` ${newTab(list.href, list.label, "btn small")}` : ""}</p>`;
 }
 
 function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
@@ -160,8 +185,8 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const steps = `<ol class="steps">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>`;
   const help = input.viewer === "friend" ? postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
   const gone = input.disconnected
-    ? `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Disconnected. Delete the key on ${esc(g.short)} too.</strong></p>
-<div class="row">${g.revokeLinks(undefined).map((l) => `<a class="btn small" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join("")}</div>
+    ? `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Disconnected.</strong></p>
+${alsoDeleteLine(plugin, input.disconnectedKeyHash ? { key_hash: input.disconnectedKeyHash } : undefined)}
 <details class="more"><summary>Details</summary><p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p></details></div>`
     : "";
   if (!connection) return `${gone}${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
@@ -169,10 +194,12 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
   const revokeLinks = g.revokeLinks(connection).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
   const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
+  const label = connection.key_label ? `<li>This key is “${esc(connection.key_label)}” on ${esc(g.short)}.</li>` : "";
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
 <p class="small">The app deletes the key from your vault.</p>
-<details class="more"><summary>Details</summary><ul class="small about"><li>Its models stop answering for you at once.</li><li>The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</li></ul></details>
+${alsoDeleteLine(plugin, connection)}
+<details class="more"><summary>Details</summary><ul class="small about">${label}<li>Its models stop answering for you at once.</li><li>The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</li></ul></details>
 <div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
   const passed = panel.passedModels ?? 0;
@@ -183,7 +210,7 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
       : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
   const budget = panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
   const keyDetails = `<details class="more"><summary>Key and budget</summary><ul class="small about">
-<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
+${connection.key_label ? `<li>Key on ${esc(g.short)}: “${esc(connection.key_label)}”</li>` : ""}<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
 <li>To revoke the key on ${esc(g.short)}: ${esc(g.revoke)} ${revokeLinks}</li>
 </ul></details>`;
   const note = input.viewer === "friend" ? `<p class="small muted">Only you see ${esc(g.short)}'s replies.</p>${passed ? "" : postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small")}` : "";
@@ -298,11 +325,13 @@ label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
 .dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
 .dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; max-width: 420px; width: 100%; }
 .dialog h2 { margin-top: 0; }
+.dialog > .row { margin-top: 12px; }
 ol.steps { padding-left: 22px; margin: 6px 0; overflow-wrap: anywhere; }
 ol.steps li + li { margin-top: 2px; }
 .status { margin: 8px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .acct { margin: 4px 0; overflow-wrap: anywhere; }
 .acct .btn { margin-left: 4px; }
+.also { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
 .tc-fix { overflow-wrap: anywhere; }
 `;
 // The account behind the user's key, read live with the key from the vault.
@@ -358,6 +387,7 @@ async function pageInput(
     selected,
     confirmDisconnect: url.searchParams.get("disconnect") === "1",
     disconnected: url.searchParams.get("disconnected") === "1",
+    disconnectedKeyHash: url.searchParams.get("key") ?? undefined,
     confirmTestAll: url.searchParams.get("test-all") === "confirm",
     testsFilter,
     problem: extra.problem,
@@ -449,9 +479,11 @@ export async function handleProviders(
       if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
       return "open" in outcome ? Response.redirect(outcome.open, 303) : back(provider);
     }
-    case "disconnect":
-      await disconnectProvider(db, secrets, userId, provider);
-      return back(provider, "&disconnected=1");
+    case "disconnect": {
+      const removed = await disconnectProvider(db, secrets, userId, provider);
+      const hash = removed?.key_hash && /^[0-9a-f]{64}$/.test(removed.key_hash) ? `&key=${removed.key_hash}` : "";
+      return back(provider, `&disconnected=1${hash}`);
+    }
     case "choose": {
       if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
       const outcome = await addModel(db, plugins, { userId, provider, model: field("model"), now });
