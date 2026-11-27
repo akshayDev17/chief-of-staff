@@ -1,17 +1,18 @@
 // Models › Usage: the month's OpenRouter spend from the ledger, per model and
 // per task, against the budget as the shared budget bar shows it; names from
 // OpenRouter's live list; honest labels on estimated costs; one next action
-// when something is missing; and sorting in the page with no request.
+// when something is missing; and both tables dearest first, ties by name.
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { clearAccessKeyCache } from "../src/access";
-import { handleUsage, nameModels, nextSort, parseUsageSort, SORT_JS, sortLines, taskName, type NamedLine } from "../src/models/usage-page";
+import { handleUsage, nameModels, taskName } from "../src/models/usage-page";
 import { readMonthUsage, summariseUsage } from "../src/models/usage";
 import { handleTaskModels } from "../src/models/picker-page";
 import { USAGE_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../src/paths";
 import { CATALOG_VERSION } from "../src/prices/openrouter";
 import { writeSnapshot } from "../src/prices/store";
+import { disconnectProvider } from "../src/providers/check";
 import { handleProviders } from "../src/providers/page";
 import { setBudget } from "../src/proxy/budgets";
 import { handleBudgets } from "../src/proxy/budgets-page";
@@ -19,7 +20,6 @@ import { writeConnection } from "../src/proxy/connections";
 import { monthSpend, writeLedgerRow, type LedgerRow } from "../src/proxy/ledger";
 import { ENV, generateKey, serveCerts, signToken } from "./access-fixture";
 import { fakeFetch, ISSUED_KEY, keyReply } from "./fake-sources";
-import { runScript, type Sent } from "./script-dom";
 import { seedPrices, TEST_CATALOG, testPlugin, testSecrets, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:41:00Z");
@@ -52,8 +52,8 @@ async function seedMonth() {
   await call({ userId: other, costUsd: 7 });
 }
 
-const page = async (query = "", fetcher = fakeFetch({ currentKey: () => keyReply({ usage_monthly: 1.5 }) })) => {
-  const response = await handleUsage(new Request(`${ORIGIN}${USAGE_PATH}${query}`), { db: env.DB, userId, now: NOW, secrets: testSecrets(), fetcher });
+const page = async (fetcher = fakeFetch({ currentKey: () => keyReply({ usage_monthly: 1.5 }) })) => {
+  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), fetcher });
   return { html: await response.text(), fetcher, response };
 };
 
@@ -65,7 +65,7 @@ const connect = async () => {
 // The rows of one table, in order, by their names.
 const rowNames = (html: string, table: "models" | "tasks") => {
   const t = html.match(new RegExp(`<table class="usage" id="by-${table}"[\\s\\S]*?</table>`))![0];
-  return [...t.matchAll(/<tr data-name="([^"]*)"/g)].map((m) => m[1]);
+  return [...t.matchAll(/<tr>\n<td><span class="u-name">([^<]*)<\/span>/g)].map((m) => m[1]);
 };
 
 describe("the month's usage, from the ledger", () => {
@@ -141,11 +141,11 @@ describe("the page", () => {
     expect(html).toContain('<span class="u-name">Test Sonnet</span><span class="u-sub mono">test-sonnet</span><span class="u-sub u-phone">2 calls · 2,700 tokens</span>');
     expect(html).toContain('<span class="u-name">Test Luna</span><span class="u-sub mono">test-luna</span><span class="u-sub u-phone">2 calls · 1,100 tokens · 1 refused</span>');
     // Luna's only cost is at list price: all of it estimated.
-    expect(html).toMatch(/<tr data-name="test luna"[\s\S]*?\$0\.10 <span class="pill warn">estimated<\/span>/);
+    expect(html).toMatch(/<span class="u-name">Test Luna<\/span>[\s\S]*?\$0\.10 <span class="pill warn">estimated<\/span>/);
     // Filling forms is part reported, part list price.
-    expect(html).toMatch(/<tr data-name="filling forms"[\s\S]*?\$0\.47<span class="u-sub">\$0\.10 of it estimated<\/span>/);
-    expect(html).toMatch(/<tr data-name="test sonnet"[\s\S]*?<td class="num">\$1\.62<\/td>/);
-    expect(html).toMatch(/<tr data-name="test luna"[\s\S]*?<td class="num wide">2<span class="u-sub">1 refused<\/span><\/td>\n<td class="num wide">1,000<\/td>\n<td class="num wide">100<\/td>/);
+    expect(html).toMatch(/<span class="u-name">Filling forms<\/span>[\s\S]*?\$0\.47<span class="u-sub">\$0\.10 of it estimated<\/span>/);
+    expect(html).toMatch(/<span class="u-name">Test Sonnet<\/span>[\s\S]*?<td class="num">\$1\.62<\/td>/);
+    expect(html).toMatch(/<span class="u-name">Test Luna<\/span>[\s\S]*?<td class="num wide">2<span class="u-sub">1 refused<\/span><\/td>\n<td class="num wide">1,000<\/td>\n<td class="num wide">100<\/td>/);
     expect(html).toContain("1,100 tokens · 1 refused");
     expect(html).not.toContain('class="pill free"');
   });
@@ -163,21 +163,16 @@ describe("the page", () => {
     expect(html).toContain(`<span class="u-name">test-sonnet</span><span class="u-sub mono">test-sonnet · not in OpenRouter's list now</span><span class="u-sub u-phone">`);
   });
 
-  it("sorts dearest first, and by the address without a script", async () => {
+  it("lists both tables dearest first, ties by name, under plain headers", async () => {
     await connect();
-    await seedMonth();
-    expect(rowNames((await page()).html, "models")).toEqual(["test sonnet", "test luna"]);
-    expect(rowNames((await page()).html, "tasks")).toEqual(["cover letters", "filling forms", "model tests"]);
-    const { html } = await page("?models=name:asc&tasks=calls:desc");
-    expect(rowNames(html, "models")).toEqual(["test luna", "test sonnet"]);
-    expect(rowNames(html, "tasks")).toEqual(["filling forms", "cover letters", "model tests"]);
-    // Each header links to its next order, keeping the other table's.
-    expect(html).toContain('<th scope="col" aria-sort="ascending"><a class="th-sort" href="?models=name:desc&tasks=calls:desc" data-sort="name">Model');
-    expect(html).toContain('<th scope="col" class="num" aria-sort="none"><a class="th-sort" href="?models=cost:desc&tasks=calls:desc" data-sort="cost">Cost');
-    expect(parseUsageSort("bogus:up")).toEqual({ column: "cost", dir: "desc" });
-    expect(nextSort({ column: "cost", dir: "desc" }, "cost")).toEqual({ column: "cost", dir: "asc" });
-    expect(nextSort({ column: "cost", dir: "desc" }, "name")).toEqual({ column: "name", dir: "asc" });
-    expect(nextSort({ column: "name", dir: "asc" }, "calls")).toEqual({ column: "calls", dir: "desc" });
+    await call({ model: "test-sonnet", task: "cover_letter", costUsd: 0.2 });
+    await call({ model: "test-luna", task: "fill_form", costUsd: 0.2 });
+    await call({ model: "aaa/zzz", task: "test_call", costUsd: 0.5 });
+    const { html } = await page();
+    expect(rowNames(html, "models")).toEqual(["aaa/zzz", "Test Luna", "Test Sonnet"]);
+    expect(rowNames(html, "tasks")).toEqual(["Model tests", "Cover letters", "Filling forms"]);
+    expect(html).toContain('<thead><tr><th scope="col">Model</th><th scope="col" class="num wide">Calls</th><th scope="col" class="num wide">Input tokens</th><th scope="col" class="num wide">Output tokens</th><th scope="col" class="num">Cost</th></tr></thead>');
+    expect(html).toContain('<thead><tr><th scope="col">Task</th>');
   });
 
   it("links Setup and Usage both ways", async () => {
@@ -219,76 +214,26 @@ describe("with nothing to show yet, the one next action", () => {
   it("is Test a model, with a budget and no call this month, in each table's frame", async () => {
     await connect();
     await setBudget(env.DB, userId, "openrouter", 30, "accepted", NOW);
-    const { html } = await page("", fakeFetch({ currentKey: () => keyReply({ usage_monthly: 0 }) }));
+    const { html } = await page(fakeFetch({ currentKey: () => keyReply({ usage_monthly: 0 }) }));
     expect(next(html)).toEqual([[`${PROVIDERS_PATH}#test`, "Test a model"]]);
     expect(html).toContain('<tr class="empty"><td colspan="5">No model calls this month yet.</td></tr>');
     expect(html).toContain('<span class="big">$0.00</span><span class="of">/ $30 (0%)</span>');
     expect(html).toContain('<div class="bb" data-budget-bar>');
     expect(html).not.toContain("<tfoot>");
   });
-});
 
-describe("sorting in the page", () => {
-  // A stand-in table: header links and rows, as the page renders them.
-  function table(id: "models" | "tasks", rows: Array<[string, number, number]>, sorted: string) {
-    const listeners: Record<string, Array<(e: { preventDefault: () => void }) => void>> = {};
-    const links = (["name", "calls", "cost"] as const).map((column) => {
-      const th = { attrs: { "aria-sort": column === sorted ? "descending" : "none" } as Record<string, string>, getAttribute(n: string) { return this.attrs[n] ?? null; }, setAttribute(n: string, v: string) { this.attrs[n] = v; } };
-      const arrow = { textContent: column === sorted ? "▼" : "" };
-      const link = {
-        column, attrs: { "data-sort": column, href: "" } as Record<string, string>, parentElement: th, arrow,
-        getAttribute(n: string) { return this.attrs[n] ?? null; }, setAttribute(n: string, v: string) { this.attrs[n] = v; },
-        querySelector: () => arrow,
-        addEventListener: (type: string, fn: (e: { preventDefault: () => void }) => void) => { (listeners[`${column}:${type}`] ??= []).push(fn); },
-      };
-      Object.assign(th, { querySelector: () => link });
-      return link;
-    });
-    const order = rows.map(([name, calls, cost]) => ({ attrs: { "data-name": name, "data-calls": String(calls), "data-cost": String(cost) } as Record<string, string>, getAttribute(n: string) { return this.attrs[n] ?? null; } }));
-    const body = {
-      rows: [...order],
-      querySelectorAll: () => body.rows,
-      appendChild(r: (typeof order)[number]) { body.rows = [...body.rows.filter((x) => x !== r), r]; },
-    };
-    const el = {
-      getAttribute: (n: string) => (n === "data-sort-table" ? id : null),
-      querySelector: (s: string) => (s === "tbody" ? body : s.startsWith("th[aria-sort") ? links.find((l) => l.parentElement.attrs["aria-sort"] !== "none")?.parentElement : null),
-      querySelectorAll: () => links,
-    };
-    let prevented = 0;
-    const click = (column: string) => listeners[`${column}:click`]!.forEach((fn) => fn({ preventDefault: () => { prevented++; } }));
-    return { el, body, links, click, names: () => body.rows.map((r) => r.attrs["data-name"]), prevented: () => prevented };
-  }
-
-  it("reorders the rows, marks the column and keeps the order in the address, loading nothing", () => {
-    const models = table("models", [["test sonnet", 2, 1.62], ["test luna", 5, 0.1], ["aurora", 5, 0.4]], "cost");
-    const tasks = table("tasks", [["cover letters", 1, 1.25]], "cost");
-    const sent: Sent = [];
-    const replaced: string[] = [];
-    const document = { querySelectorAll: () => [models.el, tasks.el] };
-    const history = { replaceState: (_s: unknown, _t: string, u: string) => replaced.push(u) };
-    runScript(SORT_JS, document, `${ORIGIN}${USAGE_PATH}`, sent, { window: { history } });
-    models.click("name");
-    expect(models.names()).toEqual(["aurora", "test luna", "test sonnet"]);
-    expect(models.links.map((l) => l.parentElement.attrs["aria-sort"])).toEqual(["ascending", "none", "none"]);
-    expect(models.links[0]!.arrow.textContent).toBe("▲");
-    expect(models.links[0]!.attrs.href).toBe("?models=name:desc&tasks=cost:desc");
-    expect(tasks.links[2]!.attrs.href).toBe("?models=name:asc&tasks=cost:asc");
-    models.click("calls");
-    // Largest first; ties by name.
-    expect(models.names()).toEqual(["aurora", "test luna", "test sonnet"]);
-    models.click("calls");
-    expect(models.names()).toEqual(["test sonnet", "aurora", "test luna"]);
-    expect(replaced).toEqual([`${USAGE_PATH}?models=name:asc&tasks=cost:desc`, `${USAGE_PATH}?models=calls:desc&tasks=cost:desc`, `${USAGE_PATH}?models=calls:asc&tasks=cost:desc`]);
-    expect(models.prevented()).toBe(3);
-    expect(sent).toEqual([]);
-  });
-
-  it("sorts on the server as the script does", () => {
-    const l = (name: string, calls: number, costUsd: number): NamedLine => ({ key: name, name, calls, costUsd, refused: 0, inputTokens: 0, outputTokens: 0, estimatedUsd: 0 });
-    const lines = [l("test sonnet", 2, 1.62), l("test luna", 5, 0.1), l("aurora", 5, 0.4)];
-    expect(sortLines(lines, { column: "calls", dir: "desc" }).map((x) => x.name)).toEqual(["aurora", "test luna", "test sonnet"]);
-    expect(sortLines(lines, { column: "calls", dir: "asc" }).map((x) => x.name)).toEqual(["test sonnet", "aurora", "test luna"]);
+  it("is Connect OpenRouter after a Disconnect, saying the month's figures are from before it", async () => {
+    await connect();
+    await setBudget(env.DB, userId, "openrouter", 30, "accepted", NOW);
+    await seedMonth();
+    await disconnectProvider(env.DB, testSecrets(), userId, "openrouter");
+    const { html, fetcher } = await page();
+    expect(html).toContain('<div class="banner next" role="note"><p>OpenRouter is disconnected. These figures are from before you disconnected.</p><a class="btn" href="/chief-of-staff/models/setup/providers" data-next>Connect OpenRouter</a></div>');
+    expect(next(html)).toEqual([[PROVIDERS_PATH, "Connect OpenRouter"]]);
+    expect(html).not.toContain("Its spend shows here once it is.");
+    expect(html).toContain('<span class="big">$1.72</span><span class="of">/ $30 (6%)</span>');
+    expect(rowNames(html, "models")).toEqual(["Test Sonnet", "Test Luna"]);
+    expect(fetcher.sent).toHaveLength(0);
   });
 });
 

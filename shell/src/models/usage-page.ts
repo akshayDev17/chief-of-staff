@@ -4,7 +4,7 @@
 // › Budgets, proxy/budget-bar.ts), then the spend per model and per task,
 // from the usage ledger (usage.ts).
 //
-//   GET /chief-of-staff/models/usage[?models=<column>:<dir>][&tasks=<column>:<dir>]
+//   GET /chief-of-staff/models/usage
 //
 // Every figure on the page comes from one read of the ledger: the month's
 // total is the app's own count the bar shows, and each table's foot is that
@@ -16,13 +16,12 @@
 // its own. A model that list marks free (prices/openrouter.ts
 // isTrulyFreeTextModel) carries "free"; every other one is paid.
 //
-// Sorting a table is in the page: the script reorders the rows and keeps the
-// order in the address without loading anything. Without a script each
-// header is a plain link, and the server sorts.
+// Both tables list the dearest first, ties by name: where the money went.
 //
 // With nothing to show yet, the page says what is missing and puts its one
 // next action where the figures will appear: Connect OpenRouter, then Set a
-// budget, then Test a model.
+// budget, then Test a model. After a Disconnect the month's figures stay, and
+// the page says they are from before it.
 
 import { BUDGETS_PATH, PROVIDERS_PATH, USAGE_PATH } from "../paths";
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
@@ -30,7 +29,7 @@ import type { OpenRouterCatalog } from "../prices/openrouter";
 import { readCurrentCatalog } from "../prices/store";
 import { OPENROUTER_ACTIVITY_URL } from "../providers/openrouter";
 import type { SecretStore } from "../providers/secrets";
-import { BAR_CSS, BAR_JS, barParts, money, readKeyFigure, renderBudgetBar, type KeyFigure } from "../proxy/budget-bar";
+import { BAR_CSS, BAR_JS, barParts, budgetText, money, readKeyFigure, renderBudgetBar, type KeyFigure } from "../proxy/budget-bar";
 import { readBudget } from "../proxy/budgets";
 import { connectedProviders, readConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
@@ -40,32 +39,6 @@ import { modelsSubtabs } from "./setup-tabs";
 import { taskById } from "./tasks";
 import { TEST_ALL_TASK } from "./test-all";
 import { readMonthUsage, type MonthUsage, type UsageLine } from "./usage";
-
-export type UsageColumn = "name" | "calls" | "cost";
-export type SortDir = "asc" | "desc";
-export interface UsageSort {
-  column: UsageColumn;
-  dir: SortDir;
-}
-export type TableId = "models" | "tasks";
-export type Sorts = Record<TableId, UsageSort>;
-
-// Dearest first, the question the tables answer: where the money went.
-export const DEFAULT_SORT: UsageSort = { column: "cost", dir: "desc" };
-
-// "<column>:<dir>" from the address; the default for anything else.
-export function parseUsageSort(raw: string | null): UsageSort {
-  const [c, d] = (raw ?? "").split(":");
-  if ((c !== "name" && c !== "calls" && c !== "cost") || (d !== "asc" && d !== "desc")) return DEFAULT_SORT;
-  return { column: c, dir: d };
-}
-
-// A header's next sort: its own column the other way round, or a new column
-// from A to Z for names and from the largest for figures.
-export function nextSort(current: UsageSort, column: UsageColumn): UsageSort {
-  if (current.column === column) return { column, dir: current.dir === "asc" ? "desc" : "asc" };
-  return { column, dir: column === "name" ? "asc" : "desc" };
-}
 
 // A line with the name the page shows for it.
 export interface NamedLine extends UsageLine {
@@ -77,13 +50,7 @@ export interface NamedLine extends UsageLine {
 
 const byName = (a: NamedLine, b: NamedLine) => a.name.localeCompare(b.name, "en", { numeric: true, sensitivity: "base" }) || a.key.localeCompare(b.key);
 
-// Ties go by name, so the order is the same on the server and in the page.
-export function sortLines(lines: NamedLine[], sort: UsageSort): NamedLine[] {
-  const sign = sort.dir === "asc" ? 1 : -1;
-  const primary = (a: NamedLine, b: NamedLine) =>
-    sort.column === "name" ? byName(a, b) : (sort.column === "calls" ? a.calls - b.calls : a.costUsd - b.costUsd);
-  return [...lines].sort((a, b) => primary(a, b) * sign || byName(a, b));
-}
+const sortDearestFirst = (lines: NamedLine[]): NamedLine[] => [...lines].sort((a, b) => b.costUsd - a.costUsd || byName(a, b));
 
 // The test calls are tasks of their own in the ledger; every other task is
 // named as Model for each task names it.
@@ -110,7 +77,6 @@ export interface UsagePageInput {
   usage: MonthUsage;
   models: NamedLine[];
   tasks: NamedLine[];
-  sorts: Sorts;
 }
 
 // The one next action the page highlights: the first thing missing.
@@ -124,19 +90,6 @@ export function nextStep(input: Pick<UsagePageInput, "connected" | "budgetUsd" |
 
 const dayMonth = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" });
 const count = (n: number) => n.toLocaleString("en-US");
-const dollars = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
-
-const sortQuery = (sorts: Sorts) => `?models=${sorts.models.column}:${sorts.models.dir}&tasks=${sorts.tasks.column}:${sorts.tasks.dir}`;
-
-function header(label: string, table: TableId, column: UsageColumn, sorts: Sorts, numeric: boolean): string {
-  const cls = column === "calls" ? "num wide" : numeric ? "num" : "";
-  const sort = sorts[table];
-  const on = sort.column === column;
-  const next = nextSort(sort, column);
-  const ariaSort = on ? (sort.dir === "asc" ? "ascending" : "descending") : "none";
-  const arrow = on ? (sort.dir === "asc" ? "▲" : "▼") : "";
-  return `<th scope="col"${cls ? ` class="${cls}"` : ""} aria-sort="${ariaSort}"><a class="th-sort" href="${sortQuery({ ...sorts, [table]: next })}" data-sort="${column}">${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span></a></th>`;
-}
 
 function costCell(l: NamedLine): string {
   const all = l.estimatedUsd > 0 && l.estimatedUsd >= l.costUsd - 0.000_000_5;
@@ -145,12 +98,12 @@ function costCell(l: NamedLine): string {
   return `${figure}${note}`;
 }
 
-function row(l: NamedLine, table: TableId): string {
+function row(l: NamedLine, table: "models" | "tasks"): string {
   const id = table === "models" ? `<span class="u-sub mono">${esc(l.key)}${l.listed ? "" : " · not in OpenRouter's list now"}</span>` : "";
   const free = l.free ? ` <span class="pill free">free</span>` : "";
   const refused = l.refused ? `${count(l.refused)} refused` : "";
   const phone = [`${count(l.calls)} call${l.calls === 1 ? "" : "s"}`, `${count(l.inputTokens + l.outputTokens)} tokens`, refused].filter(Boolean).join(" · ");
-  return `<tr data-name="${esc(l.name.toLowerCase())}" data-calls="${l.calls}" data-cost="${l.costUsd}">
+  return `<tr>
 <td><span class="u-name">${esc(l.name)}</span>${free}${id}<span class="u-sub u-phone">${phone}</span></td>
 <td class="num wide">${count(l.calls)}${refused ? `<span class="u-sub">${refused}</span>` : ""}</td>
 <td class="num wide">${count(l.inputTokens)}</td>
@@ -159,16 +112,16 @@ function row(l: NamedLine, table: TableId): string {
 </tr>`;
 }
 
-function table(table: TableId, lines: NamedLine[], input: UsagePageInput, emptyRow: string): string {
+function table(table: "models" | "tasks", lines: NamedLine[], input: UsagePageInput, emptyRow: string): string {
   const label = table === "models" ? "Model" : "Task";
-  const sorted = sortLines(lines, input.sorts[table]);
+  const sorted = sortDearestFirst(lines);
   const { total } = input.usage;
   const body = sorted.length ? sorted.map((l) => row(l, table)).join("\n") : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
   const foot = sorted.length
     ? `<tfoot><tr><th scope="row">This month<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
     : "";
-  return `<div class="tbl-wrap"><table class="usage" id="by-${table}" data-sort-table="${table}" aria-labelledby="by-${table}-h">
-<thead><tr>${header(label, table, "name", input.sorts, false)}${header("Calls", table, "calls", input.sorts, true)}<th scope="col" class="num wide">Input tokens</th><th scope="col" class="num wide">Output tokens</th>${header("Cost", table, "cost", input.sorts, true)}</tr></thead>
+  return `<div class="tbl-wrap"><table class="usage" id="by-${table}" aria-labelledby="by-${table}-h">
+<thead><tr><th scope="col">${label}</th><th scope="col" class="num wide">Calls</th><th scope="col" class="num wide">Input tokens</th><th scope="col" class="num wide">Output tokens</th><th scope="col" class="num">Cost</th></tr></thead>
 <tbody>
 ${body}
 </tbody>${foot}</table></div>`;
@@ -192,7 +145,7 @@ function spendCard(input: UsagePageInput, step: NextStep): string {
   const pctText = p.spent > 0 && pct < 1 ? "under 1%" : `${Math.round(pct)}%`;
   const bar = renderBudgetBar({ budgetUsd: input.budgetUsd, ledgerUsd, key: input.key, connection: input.connection });
   return `<section class="card lead" aria-labelledby="spend-h"><h2 id="spend-h">Model spend this month</h2>
-<p class="fig"><span class="big">${money(p.spent)}</span><span class="of">/ ${dollars(input.budgetUsd)} (${pctText})</span></p>
+<p class="fig"><span class="big">${money(p.spent)}</span><span class="of">/ ${budgetText(input.budgetUsd)} (${pctText})</span></p>
 <p class="small muted">${resets}</p>
 ${bar}
 </section>`;
@@ -200,8 +153,11 @@ ${bar}
 
 export function renderUsagePage(input: UsagePageInput): string {
   const step = nextStep(input);
+  const disconnected = input.usage.total.calls
+    ? "OpenRouter is disconnected. These figures are from before you disconnected."
+    : "OpenRouter is not connected. Its spend shows here once it is.";
   const connect = !input.connected
-    ? `<div class="banner next" role="note"><p>OpenRouter is not connected. Its spend shows here once it is.</p><a class="btn" href="${PROVIDERS_PATH}" data-next>Connect OpenRouter</a></div>`
+    ? `<div class="banner next" role="note"><p>${disconnected}</p><a class="btn" href="${PROVIDERS_PATH}" data-next>Connect OpenRouter</a></div>`
     : "";
   const testLink = `<a class="btn${step === "test" ? "" : " secondary"} small" href="${PROVIDERS_PATH}#test"${step === "test" ? " data-next" : ""}>Test a model</a>`;
   // The next action goes once, in the first table's frame.
@@ -238,7 +194,7 @@ ${table("tasks", input.tasks, input, noCalls)}
 <li>OpenRouter's own record: <a href="${OPENROUTER_ACTIVITY_URL}" target="_blank" rel="noopener noreferrer">its Activity page</a>, filtered by the “Chief of staff” key.</li>
 </ul></details>
 </main>
-<script>${BAR_JS}${SORT_JS}
+<script>${BAR_JS}
 </script>
 </body>
 </html>`;
@@ -264,7 +220,6 @@ table.usage th, table.usage td { padding: 8px 6px; }
 table.usage th:first-child, table.usage td:first-child { padding-left: 0; }
 table.usage th:last-child, table.usage td:last-child { padding-right: 0; }
 table.usage .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-table.usage th.num .th-sort { justify-content: flex-end; }
 table.usage tbody tr:last-child td { border-bottom: 0; }
 table.usage tfoot th, table.usage tfoot td { border-top: 1px solid var(--line); border-bottom: 0; font-weight: 600; font-size: .9rem; color: var(--text); }
 table.usage tr.empty td { color: var(--muted); }
@@ -284,70 +239,6 @@ table.usage .num .u-sub { white-space: nowrap; }
 .pill { white-space: nowrap; }
 `;
 
-// Sorting in the page: a header's click reorders the rows, marks the column
-// and puts the order in the address (history.replaceState: nothing loads).
-// The header links stay real links, so a page without this script sorts on
-// the server.
-export const SORT_JS = `
-(function () {
-  var tables = Array.prototype.slice.call(document.querySelectorAll("table[data-sort-table]"));
-  if (!tables.length) return;
-  var state = {};
-  function read(t) {
-    var th = t.querySelector("th[aria-sort=ascending], th[aria-sort=descending]");
-    var a = th && th.querySelector("a[data-sort]");
-    return a ? { column: a.getAttribute("data-sort"), dir: th.getAttribute("aria-sort") === "ascending" ? "asc" : "desc" } : { column: "cost", dir: "desc" };
-  }
-  function next(cur, column) {
-    if (cur.column === column) return { column: column, dir: cur.dir === "asc" ? "desc" : "asc" };
-    return { column: column, dir: column === "name" ? "asc" : "desc" };
-  }
-  function query(over) {
-    var parts = [];
-    ["models", "tasks"].forEach(function (id) {
-      var s = (over && over.id === id) ? over.sort : state[id];
-      if (s) parts.push(id + "=" + s.column + ":" + s.dir);
-    });
-    return "?" + parts.join("&");
-  }
-  function byName(a, b) { return a.getAttribute("data-name").localeCompare(b.getAttribute("data-name"), "en", { numeric: true, sensitivity: "base" }); }
-  function apply(t) {
-    var id = t.getAttribute("data-sort-table"), s = state[id], sign = s.dir === "asc" ? 1 : -1;
-    var body = t.querySelector("tbody");
-    var rows = Array.prototype.slice.call(body.querySelectorAll("tr[data-name]"));
-    rows.sort(function (a, b) {
-      var p = s.column === "name" ? byName(a, b) : Number(a.getAttribute("data-" + s.column)) - Number(b.getAttribute("data-" + s.column));
-      return p * sign || byName(a, b);
-    });
-    rows.forEach(function (r) { body.appendChild(r); });
-  }
-  function mark() {
-    tables.forEach(function (t) {
-      var id = t.getAttribute("data-sort-table"), s = state[id];
-      t.querySelectorAll("a[data-sort]").forEach(function (a) {
-        var column = a.getAttribute("data-sort"), on = column === s.column;
-        a.parentElement.setAttribute("aria-sort", on ? (s.dir === "asc" ? "ascending" : "descending") : "none");
-        a.querySelector(".sort-arrow").textContent = on ? (s.dir === "asc" ? "\\u25B2" : "\\u25BC") : "";
-        a.setAttribute("href", query({ id: id, sort: next(s, column) }));
-      });
-    });
-  }
-  tables.forEach(function (t) { state[t.getAttribute("data-sort-table")] = read(t); });
-  tables.forEach(function (t) {
-    var id = t.getAttribute("data-sort-table");
-    t.querySelectorAll("a[data-sort]").forEach(function (a) {
-      a.addEventListener("click", function (e) {
-        e.preventDefault();
-        state[id] = next(state[id], a.getAttribute("data-sort"));
-        apply(t);
-        mark();
-        try { window.history.replaceState(null, "", location.pathname + query()); } catch (err) {}
-      });
-    });
-  });
-})();
-`;
-
 export interface UsageDeps {
   db: D1Database;
   userId: string;
@@ -356,7 +247,7 @@ export interface UsageDeps {
   fetcher?: typeof fetch;
 }
 
-export async function usagePageInput(url: URL, deps: UsageDeps): Promise<UsagePageInput> {
+export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
   const { db, userId, now } = deps;
   const [providers, budget, usage, connection, catalog] = await Promise.all([
     connectedProviders(db, userId),
@@ -374,13 +265,12 @@ export async function usagePageInput(url: URL, deps: UsageDeps): Promise<UsagePa
     usage,
     models: nameModels(usage.byModel, catalog),
     tasks: nameTasks(usage.byTask),
-    sorts: { models: parseUsageSort(url.searchParams.get("models")), tasks: parseUsageSort(url.searchParams.get("tasks")) },
   };
 }
 
 // GET only; scoped to the signed-in user throughout.
-export async function handleUsage(request: Request, deps: UsageDeps): Promise<Response> {
-  const html = renderUsagePage(await usagePageInput(new URL(request.url), deps));
+export async function handleUsage(deps: UsageDeps): Promise<Response> {
+  const html = renderUsagePage(await usagePageInput(deps));
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 

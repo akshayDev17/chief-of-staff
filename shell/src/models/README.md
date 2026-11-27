@@ -140,8 +140,8 @@ price, where the reply reported none, is marked estimated, and so is a row
 written before the ledger recorded how it was costed. The test calls appear
 as the tasks "Model tests" and "Test all models".
 
-Sorting a table runs in the page and keeps the order in the address
-(`?models=<column>:<dir>&tasks=<column>:<dir>`); without a script the header
-links sort on the server. With nothing to show yet, the page highlights one
-next action, the first missing: Connect OpenRouter, then Set a budget, then
-Test a model.
+Both tables list the dearest first, ties by name. With nothing to show yet,
+the page highlights one next action, the first missing: Connect OpenRouter,
+then Set a budget, then Test a model. After a Disconnect the month's figures
+stay, and the page says they are from before it, with Connect OpenRouter as
+its next action.

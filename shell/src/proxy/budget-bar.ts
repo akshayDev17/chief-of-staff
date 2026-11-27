@@ -75,7 +75,7 @@ export function barParts(budgetUsd: number, ledgerUsd: number, key: KeyFigure): 
 }
 
 export const money = (usd: number): string => (usd > 0 && usd < 0.005 ? "under $0.01" : `$${usd.toFixed(2)}`);
-const budgetText = (usd: number) => `$${usd.toLocaleString("en-US", { minimumFractionDigits: usd % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
+export const budgetText = (usd: number): string => `$${usd.toLocaleString("en-US", { minimumFractionDigits: usd % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
 const hhmm = (iso: string) => `${iso.slice(11, 16)} UTC`;
 
 export interface BudgetBarInput {
