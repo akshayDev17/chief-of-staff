@@ -32,7 +32,7 @@ proxy (`sendTestCall`, task `test_call`), capped at 16 reply tokens. The model
 is added (a `user_models` row, with the passed call's reply, tokens and cost)
 only when the call passes and the reply names that model (`namesPickedModel`:
 the same ID, or with a date stamp or a variant such as `:batch`, never a
-longer ID such as `gpt-6-luna-pro` for `gpt-6-luna`). Otherwise the plain
+longer ID, such as `<model>-pro` for `<model>`). Otherwise the plain
 reason shows under the list with OpenRouter's own reply.
 
 **Test all models** (`test-all.ts`) tests every model the user can choose, to
@@ -58,7 +58,11 @@ run.
 
 A free model ($0 in and out, such as OpenRouter's `:free` ones) reads "free:
 rate-limited, and the provider may log prompts" in the model list and in the
-picker.
+picker, and both show the plug-in's terms for free models under them
+(`freeModelTerms`: OpenRouter's request limits and the privacy setting that
+can refuse them, with links). A $0 account can do the whole flow: Connect
+passes on a free model, Test all models shows its paid models as needing
+credit on OpenRouter, and its free models can be added and used for tasks.
 
 `readUserModels(db, userId)` returns the user's added models at every
 provider a plug-in serves (rows left from Bedrock, Vertex AI or Foundry are
@@ -90,7 +94,11 @@ models join the same lists (`task_routes` names each by provider and model).
   `accepted`); an accepted task follows its proposal until the next tap, and
   a task the user changed is never overwritten;
 - a free model is never proposed, as main or fallback: a task uses it only
-  once the user chooses it with Change;
+  once the user chooses it, with Change or with **Use my free models for every
+  task** (`useFreeModels`), the one tap the page offers, and explains, for the
+  tasks with no model and no proposal (a $0 account's passed models are all
+  free). It picks by the proposal's own rule among the free models and saves
+  the tasks as the user's choice (`set_how` `changed`);
 - any task can be changed to any passed model, the Strongest included, with
   a fallback that is another model, or none.
 

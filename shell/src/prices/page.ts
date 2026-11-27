@@ -144,7 +144,7 @@ function header(label: string, column: SortColumn, sort: { column: SortColumn; d
 // models, and the note says so rather than guessing.
 export const RATE_LIMITS = {
   limits:
-    "OpenRouter names no default rate limit for paid models (\"We do however have different rate limits for different models\"). Free (:free) models, which the app does not offer, allow 20 requests a minute and 50 a day (1,000 once $10 of credits are bought).",
+    "OpenRouter names no default rate limit for paid models (\"We do however have different rate limits for different models\"). Free (:free) models, which a $0 account can use, allow 20 requests a minute and 50 a day (1,000 once $10 of credits are bought).",
   page: "https://openrouter.ai/docs/api_reference/limits.md",
   read: "2026-11-27 (no date on the page)",
 };

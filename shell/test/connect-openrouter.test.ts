@@ -92,7 +92,9 @@ describe("Connect OpenRouter", () => {
     expect(back.status).toBe(303);
     expect(await readConnection(env.DB, userId, "openrouter")).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY) });
     const check = await readCheck(env.DB, userId, "openrouter");
-    expect(check).toMatchObject({ state: "passed", result: { verdict: "passed", model: "openai/gpt-6-luna", reply: { status: 200, text: "OK" } } });
+    // The cheapest paid model on the account's own live list (the captured
+    // fixture), since the key's figures cannot tell the account's credit.
+    expect(check).toMatchObject({ state: "passed", result: { verdict: "passed", model: "mistralai/mistral-nemo", why: "cheapest paid model your OpenRouter account offers", reply: { status: 200, text: "OK" } } });
     expect(check?.consentState).toBeUndefined();
     // The test call went out with the issued key.
     expect(fetcher.sent.find((s) => s.url.endsWith("/chat/completions"))!.headers.authorization).toBe(`Bearer ${ISSUED_KEY}`);

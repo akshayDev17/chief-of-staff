@@ -8,6 +8,14 @@
 //   disconnectProvider()  the key, the record and the check go
 //   runDueChecks(...)     the cron, every minute: the checks whose next try is due
 //
+// The test call's model is never the app's own: each check reads the
+// user's live model list with their key (and saves it as the account's list),
+// reads the account's credit where the provider reports it, and picks the
+// model by the rule in test-model.ts, the cheapest paid model or, with no
+// credit, the cheapest free one. The result names the model and why. When the
+// list cannot be read, the check fails with that plain reason: there is no
+// built-in list to fall back to.
+//
 // A test call is a real call to the user's own provider account, sent
 // through the proxy (`sendTestCall`), which prices it, writes its ledger row
 // (task `test_call`) and records a removed grant, as for every call. It needs
@@ -23,10 +31,11 @@ import type { Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
 import { connectedProviders, deleteConnection, readConnection, writeConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
-import { ConnectProblem, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
+import { ConnectProblem, ProviderRefusal, type AccountCredit, type AccountModel, type ConnectionFields, type Failure, type Link, type PlainReason, type PluginRegistry, type ProviderPlugin, type Usage } from "../proxy/plugin";
 import { PROVIDER_NAMES, sendTestCall } from "../proxy/proxy";
-import { deleteAccountList, refreshAccountList } from "../models/account-list";
+import { deleteAccountList, saveAccountList } from "../models/account-list";
 import type { SecretStore } from "./secrets";
+import { firstPick, freeAfterNoCredit, MAX_TEST_CALLS, nextInGroup, rankForTest, type TestPick } from "./test-model";
 
 export const RETRY_MINUTES = 15;
 
@@ -39,12 +48,23 @@ export type CheckState = "checking" | "passed" | "failed" | "revoked";
 // What waited instead of a test call.
 export type Waiting = "budget_spent" | "no_price";
 
+// Why no test model could be chosen: the account's list could not be read,
+// or it offers no model the test can use.
+export type NoTestModel = "no_model_list" | "no_test_model";
+
 // The test call's three lines, for the user who made it only.
 export interface CheckResult {
   at: string;
   verdict: "passed" | "failed";
-  reason?: PlainReason | Waiting;
-  model: string;
+  reason?: PlainReason | Waiting | NoTestModel;
+  // The model the test call went to, chosen from the account's live list;
+  // absent when none could be chosen.
+  model?: string;
+  // Why that model, by the stated rule ("cheapest free model, because your
+  // OpenRouter account has no credit").
+  why?: string;
+  // The account's free-model requests today, where the provider reports them.
+  freeDaily?: AccountCredit["freeDaily"];
   location: string;
   // The provider's own answer: status, error name and message verbatim, or
   // its reply text on a pass. Absent when nothing reached the provider.
@@ -119,13 +139,13 @@ const minutesAfter = (now: Date, minutes: number): string => new Date(now.getTim
 
 // The plain sentence for a reason, the first of the result's three lines.
 // Shared with the model list (models/add.ts) and Test all models.
-export function reasonText(reason: PlainReason | Waiting | undefined, plugin: ProviderPlugin, model: string): string {
+export function reasonText(reason: PlainReason | Waiting | NoTestModel | undefined, plugin: ProviderPlugin, model: string | undefined): string {
   const { guide } = plugin.connect;
   switch (reason) {
     case "not_set_up":
       return "The connection isn't set up yet, or was removed.";
     case "no_credits":
-      return `Your ${guide.name} account or this key is out of credits.`;
+      return `Needs credit on ${guide.name}: your account or this key has none left for this paid model.`;
     case "no_such_model":
       return "That model ID doesn't exist here.";
     case "no_permission":
@@ -139,7 +159,11 @@ export function reasonText(reason: PlainReason | Waiting | undefined, plugin: Pr
     case "budget_spent":
       return `This month's budget for ${guide.name} is spent, so the test call waits until the 1st.`;
     case "no_price":
-      return `${model} has no list price at ${guide.name} yet, so the test call waits for the price table.`;
+      return `${model ?? "The test model"} has no list price at ${guide.name} yet, so the test call waits for the price table.`;
+    case "no_model_list":
+      return `${guide.short} did not give your account's model list, so no test model can be chosen from it.`;
+    case "no_test_model":
+      return `Your ${guide.short} account's model list has no model the test call can use.`;
     default:
       return `${guide.short} refused the test call.`;
   }
@@ -150,64 +174,152 @@ export function verdictText(result: CheckResult, plugin: ProviderPlugin): string
   return result.verdict === "passed" ? "Test call passed" : reasonText(result.reason, plugin, result.model);
 }
 
-// Makes the test call through the proxy, on the plug-in's own test model
-// (never a model the user picked), then records the result.
+// The account's live model list, read with the user's own key, or why it
+// could not be read.
+type ListRead = { credential: unknown; models: AccountModel[] } | { failure: Failure } | { missing: string[] } | { unread: Failure | undefined };
+
+async function readList(plugin: ProviderPlugin, connection: ConnectionFields, userId: string): Promise<ListRead> {
+  let credential: unknown;
+  try {
+    credential = await plugin.mintCredential(connection, { userId });
+  } catch (error) {
+    if (error instanceof AppNotConfigured) return { missing: error.missing };
+    const r = error instanceof ProviderRefusal ? error.refusal : undefined;
+    return { failure: { step: "credential", exchange: r?.step, status: r?.status ?? 0, errorName: r?.errorName ?? "error", message: r?.message ?? "" } };
+  }
+  try {
+    return { credential, models: await plugin.connect.readAccountModels(credential) };
+  } catch (error) {
+    const r = error instanceof ProviderRefusal ? error.refusal : undefined;
+    const failure: Failure | undefined = r && { step: "call", status: r.status, errorName: r.errorName, message: r.message };
+    // A key the provider no longer accepts: removed, as on a test call.
+    if (failure?.status === 401) return { failure };
+    return { unread: failure };
+  }
+}
+
+// A refusal that is the model's own (busy, gone, its providers' data
+// policy), so the next model of the same group may accept the test.
+const MODEL_OWN: ReadonlySet<PlainReason> = new Set<PlainReason>(["no_such_model", "busy", "no_reply", "refused", "no_permission"]);
+
+// Makes the test call through the proxy on a model chosen from the user's
+// live model list by test-model.ts's rule (never a model the user picked,
+// never one the app names itself), then records the result.
 export async function runCheck(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date): Promise<Check | undefined> {
   const plugin = plugins[provider];
   const connection = await readConnection(db, userId, provider);
   const before = await readCheck(db, userId, provider);
   if (!plugin || !connection) return before;
-  const model = plugin.connect.testModel;
-  const location = plugin.connect.locations(model)[0] ?? "global";
+  const { name, short } = plugin.connect.guide;
   const base: Check = { ...(before ?? { provider, state: "checking" }), provider, checkedAt: now.toISOString(), consentState: before?.consentState };
-  const head = { at: now.toISOString(), model, location };
+  const location = "global";
+  const at = now.toISOString();
 
-  const wait = async (reason: Waiting, nextTryAt: string): Promise<Check> => {
+  const finish = async (result: CheckResult): Promise<Check> => {
+    let c: Check;
+    if (result.verdict === "passed") {
+      c = { ...base, state: "passed", result, passedAt: now.toISOString(), revokedAt: undefined, nextTryAt: undefined };
+    } else if (result.reason === "not_set_up" && before?.passedAt) {
+      // It had passed: the key was deleted or disabled on the provider's side.
+      c = { ...base, state: "revoked", result, revokedAt: before.revokedAt ?? now.toISOString(), nextTryAt: undefined };
+    } else {
+      c = { ...base, state: before?.state === "revoked" ? "revoked" : "failed", result, nextTryAt: undefined };
+    }
+    await saveCheck(db, userId, c);
+    return c;
+  };
+  const wait = async (head: Omit<CheckResult, "verdict">, reason: Waiting, nextTryAt: string): Promise<Check> => {
     const result: CheckResult = { ...head, verdict: "failed", reason };
     const c: Check = { ...base, state: before?.state === "passed" || before?.state === "revoked" ? before.state : "failed", result, nextTryAt };
     await saveCheck(db, userId, c);
     return c;
   };
-  const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, request: plugin.connect.testRequest(model) }, () => now);
-  if (outcome.kind === "refused" && outcome.reason === "budget_spent") return wait("budget_spent", nextMonthStart(now).toISOString());
-  // No price, or the model list not read yet: the price table fills at the
-  // next refresh.
-  if (outcome.kind === "refused" && (outcome.reason === "no_price" || outcome.reason === "not_callable")) return wait("no_price", minutesAfter(now, RETRY_MINUTES));
-
-  let result: CheckResult;
-  if (outcome.kind === "answered") {
-    result = { ...head, verdict: "passed", reply: { status: outcome.status, text: plugin.connect.replyText(outcome.body) }, usage: outcome.usage, costUsd: outcome.costUsd };
-  } else if (outcome.failure) {
-    const { failure } = outcome;
+  const refusal = (head: Omit<CheckResult, "verdict">, failure: Failure): CheckResult => {
     const plain = plugin.connect.classify(failure, connection);
-    result = {
+    return {
       ...head,
       verdict: "failed",
       reason: plain.reason,
       reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,
-      note: failure.step === "credential" ? `The app holds no ${plugin.connect.guide.short} key for you.` : undefined,
+      note: failure.step === "credential" ? `The app holds no ${short} key for you.` : undefined,
       fix: plain.fix,
       links: plain.links,
     };
-  } else if (outcome.kind === "refused" && outcome.missing) {
-    result = { ...head, verdict: "failed", reason: "app_not_configured", note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` };
-  } else if (outcome.kind === "provider_error") {
-    result = { ...head, verdict: "failed", reason: "no_reply", note: `${plugin.connect.guide.short} did not answer the test call.` };
-  } else {
+  };
+
+  // The account's own list, live: the only place a test model comes from.
+  const read = await readList(plugin, connection, userId);
+  if ("missing" in read) return finish({ at, location, verdict: "failed", reason: "app_not_configured", note: `Admin's one-time setup is missing ${read.missing.join(", ")}.` });
+  if ("failure" in read) return finish(refusal({ at, location }, read.failure));
+  if ("unread" in read) {
+    const r = read.unread;
+    return finish({
+      at,
+      location,
+      verdict: "failed",
+      reason: "no_model_list",
+      ...(r ? { reply: { status: r.status, errorName: r.errorName, message: r.message } } : { note: `${short} did not answer.` }),
+      fix: `Try again in a minute. The test call only ever uses a model from your own ${short} list, so it waits for that list.`,
+    });
+  }
+  await saveAccountList(db, userId, provider, read.models.map((m) => m.id), now);
+  const credit = await plugin.connect.readAccountCredit?.(read.credential);
+  const freeDaily = credit?.freeDaily ? { freeDaily: credit.freeDaily } : {};
+  const ranked = rankForTest(read.models, plugin.connect.canCall);
+  const first = firstPick(ranked, credit, name);
+  if (!first) {
+    // The list names models the test could use, but the price table has
+    // none of them yet: it fills at the next refresh.
+    if (firstPick(rankForTest(read.models, () => true), credit, name)) return wait({ at, location, ...freeDaily }, "no_price", minutesAfter(now, RETRY_MINUTES));
+    const terms = plugin.connect.freeModelTerms;
+    return finish({
+      at,
+      location,
+      ...freeDaily,
+      verdict: "failed",
+      reason: "no_test_model",
+      fix:
+        credit?.paid === "none"
+          ? `${credit.why ? `${credit.why[0]!.toUpperCase()}${credit.why.slice(1)}` : `Your ${name} account has no credit`}, and your list offers no free model the test can use. Add credit on ${name}, or allow free models in your ${short} settings.${terms ? ` ${terms.text}` : ""}`
+          : `It needs a text model with a price, served by more than moderated endpoints and not being retired.`,
+      links: terms?.links ?? [],
+    });
+  }
+
+  let pick: TestPick = first;
+  for (let calls = 1; ; calls++) {
+    const head = { at, model: pick.model, why: pick.why, location, ...freeDaily };
+    const outcome = await sendTestCall(db, plugins, userId, { provider, model: pick.model, location, request: plugin.connect.testRequest(pick.model) }, () => now);
+    if (outcome.kind === "answered") {
+      return finish({ ...head, verdict: "passed", reply: { status: outcome.status, text: plugin.connect.replyText(outcome.body) }, usage: outcome.usage, costUsd: outcome.costUsd });
+    }
+    if (outcome.kind === "refused" && outcome.reason === "budget_spent") return wait(head, "budget_spent", nextMonthStart(now).toISOString());
+    // No price, or the model list not read yet: the price table fills at the
+    // next refresh.
+    if (outcome.kind === "refused" && (outcome.reason === "no_price" || outcome.reason === "not_callable")) return wait(head, "no_price", minutesAfter(now, RETRY_MINUTES));
+    if (outcome.failure) {
+      const { failure } = outcome;
+      const next: TestPick | undefined =
+        failure.step !== "call" || calls >= MAX_TEST_CALLS
+          ? undefined
+          : failure.status === 402
+            ? pick.group === "paid"
+              ? freeAfterNoCredit(ranked, pick.model, name)
+              : undefined
+            : MODEL_OWN.has(plugin.connect.classify(failure, connection).reason)
+              ? nextInGroup(ranked, pick, failure.status)
+              : undefined;
+      if (next) {
+        pick = next;
+        continue;
+      }
+      return finish(refusal(head, failure));
+    }
+    if (outcome.kind === "refused" && outcome.missing) return finish({ ...head, verdict: "failed", reason: "app_not_configured", note: `Admin's one-time setup is missing ${outcome.missing.join(", ")}.` });
+    if (outcome.kind === "provider_error") return finish({ ...head, verdict: "failed", reason: "no_reply", note: `${short} did not answer the test call.` });
     // The connection went while the check ran.
     return before;
   }
-  let c: Check;
-  if (result.verdict === "passed") {
-    c = { ...base, state: "passed", result, passedAt: now.toISOString(), revokedAt: undefined, nextTryAt: undefined };
-  } else if (result.reason === "not_set_up" && before?.passedAt) {
-    // It had passed: the key was deleted or disabled on the provider's side.
-    c = { ...base, state: "revoked", result, revokedAt: before.revokedAt ?? now.toISOString(), nextTryAt: undefined };
-  } else {
-    c = { ...base, state: before?.state === "revoked" ? "revoked" : "failed", result, nextTryAt: undefined };
-  }
-  await saveCheck(db, userId, c);
-  return c;
 }
 
 export type ConnectOutcome = { problem: string } | { open: string } | { check?: Check };
@@ -285,11 +397,9 @@ export async function finishConsent(
   // A new connection: it has not passed yet, whatever an earlier one did. Its
   // check runs here; the cron tries it only if this one never finishes.
   await saveCheck(db, input.userId, { provider: input.provider, state: "checking", nextTryAt: minutesAfter(input.now, RETRY_MINUTES) });
-  const checked = await runCheck(db, plugins, input.userId, input.provider, input.now);
-  // The account's own model list, with the new key; best effort: the public
-  // list stands in until Refresh model list reads it.
-  if (checked?.state === "passed") await refreshAccountList(db, plugins, input.userId, input.provider, input.now);
-  return { check: checked };
+  // The check reads the account's own model list with the new key, saves
+  // it, and tests on a model from it.
+  return { check: await runCheck(db, plugins, input.userId, input.provider, input.now) };
 }
 
 // Saving a budget: a test call waiting for this provider's spent budget

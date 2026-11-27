@@ -99,6 +99,31 @@ export interface Failure {
   message: string;
 }
 
+// One model on the user's own account list, as the provider describes it.
+export interface AccountModel {
+  id: string;
+  // List prices in USD per million tokens, when the list gives numbers.
+  inputUsd?: number;
+  outputUsd?: number;
+  contextLength?: number;
+  // It takes text and gives text.
+  text: boolean;
+  // Only moderated endpoints serve it.
+  moderated: boolean;
+  // The date the provider retires it (YYYY-MM-DD), when it names one.
+  expires?: string;
+}
+
+// The account's credit, as the provider reports it. `paid` is "none" when
+// the provider says no paid call can be billed (`why` says why, in plain
+// words after "because"), "unknown" when the provider's figures cannot tell.
+export interface AccountCredit {
+  paid: "none" | "unknown";
+  why?: string;
+  // The account's free-model requests today, when the provider reports them.
+  freeDaily?: { used: number; limit: number; remaining: number };
+}
+
 export interface Link {
   label: string;
   href: string;
@@ -139,8 +164,6 @@ export interface ConnectMethod {
   // ConnectProblem, with a plain message, when the page refused or its answer
   // cannot be trusted.
   finish(verifier: string, returned: URLSearchParams): Promise<{ fields: ConnectionFields; secret: string }>;
-  // The Connect test call's model, as the price table names it.
-  testModel: string;
   // Whether the plug-in can call the model: the provider still lists it.
   // A model the user added that the provider has dropped is shown as "not
   // offered yet" with `notCallableReason`, never picked.
@@ -154,11 +177,19 @@ export interface ConnectMethod {
   noToolUse?(model: string): string | undefined;
   // Plain notes for the model list's entry ("OpenRouter retires it on …").
   modelNotes?(model: string): string[];
-  // The model IDs the user's own provider account offers, read with the
+  // The models the user's own provider account offers, live, read with the
   // user's credential (OpenRouter's /models/user honours the account's
-  // provider preferences, privacy settings and guardrails). Throws a
-  // ProviderRefusal when the provider refuses.
-  readAccountModels?(credential: unknown): Promise<string[]>;
+  // provider preferences, privacy settings and guardrails). The Connect test
+  // picks its model from this list (providers/test-model.ts); there is no
+  // built-in list to fall back to. Throws a ProviderRefusal when the provider
+  // refuses or sends no list.
+  readAccountModels(credential: unknown): Promise<AccountModel[]>;
+  // What the provider says of the account's credit, read with the user's
+  // credential; undefined when it cannot be read.
+  readAccountCredit?(credential: unknown): Promise<AccountCredit | undefined>;
+  // The provider's own conditions on its free models, in plain words with the
+  // pages that state them, shown wherever free models are offered.
+  freeModelTerms?: { text: string; links: Link[] };
   // The model a reply says answered, in the provider's own words, where the
   // reply names one.
   replyModel(body: unknown): string | undefined;

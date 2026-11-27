@@ -106,10 +106,19 @@ function replyLine(result: CheckResult, plugin: ProviderPlugin): string {
   if (!r) return result.note ? `<p class="tc-reply">${esc(result.note)}</p>` : "";
   if (result.verdict === "passed") {
     const text = r.text ? ` · “${esc(r.text)}”` : "";
-    return `<p class="tc-reply">${esc(short)} replied: ${statusText(r.status)} · ${esc(result.model)}${text}</p>`;
+    return `<p class="tc-reply">${esc(short)} replied: ${statusText(r.status)}${result.model ? ` · ${esc(result.model)}` : ""}${text}</p>`;
   }
   const parts = [statusText(r.status), r.errorName, r.message ? `“${r.message}”` : ""].filter(Boolean).map((p) => esc(p!));
   return `<p class="tc-reply">${esc(short)} replied: ${parts.join(" · ")}</p>`;
+}
+
+// Which model the test call used and why, by the stated rule; and the
+// account's free-model requests left today, where the provider reports them.
+function pickLine(result: CheckResult): string {
+  const tested = result.model ? `Tested on <strong>${esc(result.model)}</strong>${result.why ? `: ${esc(result.why)}` : ""}.` : "";
+  const d = result.freeDaily;
+  const free = d ? ` ${d.remaining.toLocaleString("en-US")} of ${d.limit.toLocaleString("en-US")} free-model requests left today.` : "";
+  return tested || free ? `<p class="tc-pick small">${tested}${free}</p>` : "";
 }
 
 function resultBox(panel: ProviderPanel, viewer: Viewer): string {
@@ -125,6 +134,7 @@ function resultBox(panel: ProviderPanel, viewer: Viewer): string {
     const input = u ? u.input + u.cachedInput + u.cacheWrite + u.cacheWrite1h : 0;
     const spent = u ? `${input} input and ${u.output} output tokens · ${formatCost(result.costUsd ?? 0)} · ` : "";
     return `<div class="tc tc-ok" role="status"><p class="tc-verdict"><strong>Test call passed</strong> (ran by itself)</p>
+${pickLine(result)}
 ${replyLine(result, plugin)}
 <p class="tc-fix small">${spent}connected; a connection has no end date, and the app tells you at once if the key is deleted or disabled on the provider's side.</p></div>`;
   }
@@ -134,12 +144,14 @@ ${replyLine(result, plugin)}
     // A spent budget can be raised on the Budgets page; Try again then calls at once.
     const retry = result.reason === "budget_spent" ? `\n<div class="row">${postButton(action(provider, "retry"), "Try again")}</div>` : "";
     return `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>${esc(verdictText(result, plugin))}</strong></p>
+${pickLine(result)}
 ${replyLine(result, plugin)}
 <p class="tc-fix small">${next}</p>${retry}</div>`;
   }
   const links = (result.links ?? []).map((l) => linkButton(l.href, l.label)).join("");
   const help = viewer === "friend" ? postButton(action(provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
   return `<div class="tc tc-bad" role="alert"><p class="tc-verdict"><strong>${esc(verdictText(result, plugin))}</strong></p>
+${pickLine(result)}
 ${replyLine(result, plugin)}
 <p class="tc-fix small">${esc(result.fix ?? "")}</p>
 <div class="row">${links}${postButton(action(provider, "retry"), "Try again")}${help}</div></div>`;
@@ -284,7 +296,7 @@ label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
 .dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; max-width: 420px; width: 100%; }
 .dialog h2 { margin-top: 0; }
 ol.small { padding-left: 20px; overflow-wrap: anywhere; }
-.tc-fix { overflow-wrap: anywhere; }
+.tc-fix, .tc-pick { overflow-wrap: anywhere; }
 `;
 async function pageInput(
   db: D1Database,

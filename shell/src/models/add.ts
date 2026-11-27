@@ -204,8 +204,8 @@ const STAMP_PART = String.raw`(?:\d{8}|\d{4}-\d{2}-\d{2}|\d{4}|\d{3}|v\d+(?::\d+
 const STAMP = new RegExp(`^${STAMP_PART}(?:-${STAMP_PART})*$`);
 
 // Whether the model a reply names is the one picked: its ID, or that ID with
-// a date or version stamp after it ("claude-haiku-5.5-20261001"), but never a
-// longer name ("gpt-6-luna-pro" is not "gpt-6-luna") and never another listed
+// a date or version stamp after it ("<model>-20261001"), but never a
+// longer name ("<model>-pro" is not "<model>") and never another listed
 // model's ID (`otherIds`) that extends it.
 export function namesPickedModel(replied: string, modelId: string, otherIds: readonly string[] = []): boolean {
   const said = comparable(replied);

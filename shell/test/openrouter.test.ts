@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseModels } from "../src/prices/openrouter";
-import { challengeOf, classify, openrouterPlugin, sha256Hex, TEST_MAX_TOKENS, usageFromReply } from "../src/providers/openrouter";
+import { accountCreditOf, challengeOf, classify, openrouterPlugin, sha256Hex, TEST_MAX_TOKENS, usageFromReply } from "../src/providers/openrouter";
+import { firstPick, rankForTest } from "../src/providers/test-model";
 import type { SecretStore } from "../src/providers/secrets";
-import { ConnectProblem, ProviderRefusal } from "../src/proxy/plugin";
+import { ConnectProblem, ProviderRefusal, type AccountModel } from "../src/proxy/plugin";
 import { chatReply, fakeFetch, ISSUED_KEY, MODELS } from "./fake-sources";
 
 const NOW = new Date("2026-11-27T06:00:00Z");
@@ -85,11 +86,11 @@ describe("the caller", () => {
   it("reads the account's own model list with the user's key", async () => {
     const fetcher = fakeFetch();
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fetcher);
-    const ids = await plugin.connect.readAccountModels!(ISSUED_KEY);
+    const ids = (await plugin.connect.readAccountModels(ISSUED_KEY)).map((m) => m.id);
     expect(fetcher.sent[0]!.url).toBe("https://openrouter.ai/api/v1/models/user?output_modalities=text");
     expect(ids).not.toContain("anthropic/claude-sonnet-5.5");
     expect(ids).toContain("openai/gpt-6-luna");
-    await expect(plugin.connect.readAccountModels!("revoked")).rejects.toThrow(ProviderRefusal);
+    await expect(plugin.connect.readAccountModels("revoked")).rejects.toThrow(ProviderRefusal);
   });
 });
 
@@ -117,10 +118,53 @@ describe("usage and cost from the reply", () => {
 describe("the model list and plain reasons", () => {
   const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch());
 
-  it("tests Connect on a cheap model OpenRouter sells, capped at a few reply tokens", () => {
-    expect(plugin.connect.testModel).toBe("openai/gpt-6-luna");
-    expect(plugin.connect.testRequest("openai/gpt-6-luna")).toMatchObject({ max_tokens: TEST_MAX_TOKENS });
+  it("caps the Connect test call at a few reply tokens", () => {
+    expect(plugin.connect.testRequest("any/model")).toMatchObject({ max_tokens: TEST_MAX_TOKENS });
     expect(TEST_MAX_TOKENS).toBe(16);
+  });
+
+  it("ranks the account's live list for the test: cheapest in plus out, then larger context, then ID; text, priced, unmoderated and not retiring only", async () => {
+    const listed = await plugin.connect.readAccountModels(ISSUED_KEY);
+    const { paid, free } = rankForTest(listed, plugin.connect.canCall);
+    // From the captured list: the router, the alias, the retiring model and
+    // the one the account leaves out are not candidates.
+    expect(paid.map((m) => m.id)).toEqual([
+      "mistralai/mistral-nemo", "openai/gpt-oss-20b:batch", "openai/gpt-6-luna", "anthropic/claude-haiku-5.5", "deepseek/deepseek-v4.1-flash-1017", "mistralai/pixtral-large-2502",
+    ]);
+    expect(free.map((m) => m.id)).toEqual(["inclusionai/ling-3.2-flash:free"]);
+    const m = (id: string, inputUsd: number, outputUsd: number, contextLength?: number, extra: Partial<AccountModel> = {}): AccountModel => ({ id, inputUsd, outputUsd, contextLength, text: true, moderated: false, ...extra });
+    const tie = rankForTest([m("b/z", 0.1, 0.1, 1000), m("a/y", 0.1, 0.1, 1000), m("c/x", 0.1, 0.1, 9000), m("d/w", 0, 0), m("e/v", 0, 0, 5)], () => true);
+    expect(tie.paid.map((x) => x.id)).toEqual(["c/x", "a/y", "b/z"]);
+    expect(tie.free.map((x) => x.id)).toEqual(["e/v", "d/w"]);
+    const out = rankForTest([m("m/mod", 0, 0, 1, { moderated: true }), m("m/old", 0, 0, 1, { expires: "2026-12-01" }), m("m/img", 0, 0, 1, { text: false }), { id: "m/np", text: true, moderated: false }], () => true);
+    expect([...out.paid, ...out.free]).toEqual([]);
+  });
+
+  it("reads the account's credit from its key: never bought credit, a spent key limit, or unknown", () => {
+    expect(accountCreditOf({ data: { is_free_tier: true, free_model_daily_requests: { used: 3, limit: 50, remaining: 47 } } })).toEqual({
+      paid: "none", why: "your OpenRouter account has no credit", freeDaily: { used: 3, limit: 50, remaining: 47 },
+    });
+    expect(accountCreditOf({ data: { is_free_tier: false, limit_remaining: 0 } })).toEqual({ paid: "none", why: "this key's credit limit on OpenRouter is used up" });
+    expect(accountCreditOf({ data: { is_free_tier: false, limit_remaining: null } })).toEqual({ paid: "unknown" });
+    expect(accountCreditOf({})).toBeUndefined();
+  });
+
+  it("picks the cheapest paid model, or the cheapest free one when the account has no credit, and says why", () => {
+    const ranked = { paid: [{ id: "p/1", inputUsd: 1, outputUsd: 1, text: true, moderated: false }], free: [{ id: "f/1", inputUsd: 0, outputUsd: 0, text: true, moderated: false }] };
+    expect(firstPick(ranked, undefined, "OpenRouter")).toEqual({ model: "p/1", group: "paid", why: "cheapest paid model your OpenRouter account offers" });
+    expect(firstPick(ranked, { paid: "none", why: "your OpenRouter account has no credit" }, "OpenRouter")).toEqual({ model: "f/1", group: "free", why: "cheapest free model, because your OpenRouter account has no credit" });
+    expect(firstPick({ paid: [], free: [] }, undefined, "OpenRouter")).toBeUndefined();
+  });
+
+  it("names OpenRouter's free-model refusals plainly: the data policy, with its privacy settings, and the daily free limit", () => {
+    const policy = classify({ step: "call", status: 404, errorName: "HTTP 404", message: "No endpoints found matching your data policy (Free model training). Configure: https://openrouter.ai/settings/privacy" });
+    expect(policy.reason).toBe("no_permission");
+    expect(policy.fix).toContain("privacy settings");
+    expect(policy.links.map((l) => l.href)).toEqual(["https://openrouter.ai/settings/privacy"]);
+    const daily = classify({ step: "call", status: 429, errorName: "HTTP 429", message: "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day" });
+    expect(daily.reason).toBe("busy");
+    expect(daily.fix).toContain("50 a day until your account has bought at least 10 credits");
+    expect(daily.links.map((l) => l.href)).toContain("https://openrouter.ai/docs/api-reference/limits");
   });
 
   it("calls only what OpenRouter lists and the app can price, with notes", () => {
