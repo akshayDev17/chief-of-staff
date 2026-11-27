@@ -37,7 +37,7 @@ import { SOURCES } from "../prices/sources";
 import type { Tier } from "../prices/tiers";
 import { PROVIDERS_PATH } from "../paths";
 import { blockedReason, refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
-import { CONCURRENCY, RUN_GAP_MINUTES, type TestAllPlan, type TestAllRun } from "../models/test-all";
+import { CONCURRENCY, FRESH_LIST_WAIT, RUN_GAP_MINUTES, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { TEST_MAX_TOKENS } from "./openrouter";
 import type { Link, ProviderPlugin } from "../proxy/plugin";
 
@@ -186,8 +186,9 @@ function testAllSection(input: ModelsSectionInput): string {
   const head = `<h4 id="${p}-test-all">Test all models</h4>`;
   let body: string;
   if (run && !run.finishedAt) {
+    const next = plan.wait === FRESH_LIST_WAIT ? FRESH_LIST_WAIT : "You can leave and come back. This page updates by itself.";
     body = `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Testing… ${run.done} of ${run.modelCount} done.</strong></p>
-<p class="tc-fix small">You can leave and come back. This page updates by itself.</p>
+<p class="tc-fix small">${esc(next)}</p>
 ${more("How it runs", `<p class="small">${CONCURRENCY} models at a time, a few dozen a minute.</p>`)}</div>`;
   } else if (input.confirmTestAll && !plan.wait) {
     body = `<div class="tc tc-sw" role="alertdialog" aria-labelledby="${p}-confirm-h"><p class="tc-verdict" id="${p}-confirm-h"><strong>Test all ${count} models for about ${esc(input.formatCost(plan.estimateUsd))}?</strong></p>

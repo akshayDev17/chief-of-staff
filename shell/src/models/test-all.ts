@@ -32,7 +32,7 @@
 // be taken again, so a run always finishes.
 
 import { TEST_MAX_TOKENS } from "../providers/openrouter";
-import { isCurrentCatalog } from "../prices/refresh";
+import { isCurrentCatalog } from "../prices/openrouter";
 import { readCurrentCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
 import { readConnection } from "../proxy/connections";
@@ -97,6 +97,10 @@ async function latestRun(db: D1Database, userId: string, provider: Provider): Pr
   );
 }
 
+// While the stored model list predates parseModels' rules: no run starts,
+// and a queued one waits.
+export const FRESH_LIST_WAIT = "Waiting for a fresh model list: press Refresh model list.";
+
 // `offers`: the model list, when the caller has read it already.
 export async function planTestAll(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date, offers?: OfferRow[]): Promise<TestAllPlan> {
   const plugin = plugins[provider];
@@ -110,7 +114,8 @@ export async function planTestAll(db: D1Database, plugins: PluginRegistry, userI
   const estimateUsd = models.reduce((sum, m) => sum + m.estimateUsd, 0);
   const last = await latestRun(db, userId, provider);
   let wait: string | undefined;
-  if (!(await readConnection(db, userId, provider))) wait = `${plugin.connect.guide.name} is not connected.`;
+  if (!isCurrentCatalog(await readCurrentCatalog(db))) wait = FRESH_LIST_WAIT;
+  else if (!(await readConnection(db, userId, provider))) wait = `${plugin.connect.guide.name} is not connected.`;
   else if (!models.length) wait = "No model can be tested yet: the price table has none.";
   else if (last && !last.finished_at) wait = "A test of all models is running already.";
   else if (last && minutesAfter(last.started_at, RUN_GAP_MINUTES) > now) wait = `You can test all models again from ${hhmm(minutesAfter(last.started_at, RUN_GAP_MINUTES))}.`;
@@ -161,7 +166,8 @@ async function pooled<T>(items: readonly T[], limit: number, job: (item: T) => P
 // throws is recorded as failed with no reply, so a run always finishes. Only
 // the tick holding a test's claim records its result. Nothing is claimed
 // while the model list predates parseModels' rules, so no test runs on an old
-// list's verdicts; the cron reads it again first (index.ts). Returns how many ran.
+// list's verdicts: the tests wait for the daily refresh or Refresh model
+// list (FRESH_LIST_WAIT). Returns how many ran.
 export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, now: Date): Promise<number> {
   const stored = await readCurrentCatalog(db);
   if (!isCurrentCatalog(stored)) return 0;

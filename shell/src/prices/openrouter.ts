@@ -75,14 +75,16 @@ export interface OpenRouterModel {
   free?: true;
 }
 
-// The rules parseModels applies, raised whenever they change: a catalog
-// stored under older rules (with no version before 2) is stale, and is read
-// from OpenRouter again before the Providers routes, Model for each task and
-// the every-minute cron use it (refreshStaleCatalog, prices/refresh.ts).
-// Until then every screen keeps using it, and queued Test all models tests
-// wait (models/test-all.ts). 2: free by isTrulyFreeTextModel, and a model
-// that also gives audio, images or video is blocked (2026-11-27).
+// The rules parseModels applies, raised whenever they change. A catalog
+// stored under older rules (with no version before 2) stays in use by every
+// screen until the daily refresh or Refresh model list reads OpenRouter's
+// list again; meanwhile queued Test all models tests wait
+// (models/test-all.ts). 2: free by isTrulyFreeTextModel, and a model that
+// also gives audio, images or video is blocked (2026-11-27).
 export const CATALOG_VERSION = 2;
+
+// The stored model list follows parseModels' current rules.
+export const isCurrentCatalog = (catalog: OpenRouterCatalog | undefined): boolean => catalog?.version === CATALOG_VERSION;
 
 export interface OpenRouterCatalog {
   version?: number;
