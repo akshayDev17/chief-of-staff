@@ -37,7 +37,8 @@
 // month made before the current key (usage.ts beforeKeyUsd) are not in that
 // key's figure. When those do not account for the difference, the line says
 // only that the two differ. When OpenRouter's figure cannot be read while
-// OpenRouter is connected, the line says that, and why, instead.
+// OpenRouter is connected and no budget is set, the line says that, and why,
+// instead; with a budget set, the bar's own source line says it.
 //
 // With nothing to show yet, the page says what is missing and puts its one
 // next action where the figures will appear: Connect OpenRouter, then Set a

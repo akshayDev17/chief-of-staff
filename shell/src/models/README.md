@@ -125,8 +125,10 @@ signed-in user.
 the month's OpenRouter spend, counted from 00:00 UTC on the 1st:
 
 - the month's figure: the app's own count, labelled as the figure that stops
-  calls at the budget, against the budget and in the budget bar once one is
-  set: the same bar as Models › Setup › Budgets (`src/proxy/budget-bar.ts`).
+  calls at the budget, and against the budget once one is set. With a budget
+  the card also shows the budget bar, the same bar as Models › Setup ›
+  Budgets (`src/proxy/budget-bar.ts`), headed by the larger of the two counts
+  with its source named ("by OpenRouter's figure" or "by the app's count").
   OpenRouter's own figure for the current key is read live, server side, on
   every visit, budget or not, from the same key and endpoint as Providers'
   account line;
