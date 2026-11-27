@@ -155,8 +155,7 @@ then were made with an earlier key and are not in its figure. When those do
 not account for the difference, the line says only that the two differ and
 that the app's count is what stops calls.
 
-With nothing to show yet,
-the page highlights one next action, the first missing: Connect OpenRouter,
-then Set a budget, then Test a model. After a Disconnect the month's figures
-stay, and the page says they are from before it, with Connect OpenRouter as
-its next action.
+With nothing to show yet, the page highlights one next action, the first
+missing: Connect OpenRouter, then Set a budget, then Test a model. After a
+Disconnect the month's figures stay, and the page says they are from before
+it, with Connect OpenRouter as its next action.
