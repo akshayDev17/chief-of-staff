@@ -23,7 +23,8 @@ counts and filters go by the verdict. Each model's latest verdict is one row of
 `model_latest_tests`. A Test all models run that is still testing a model
 does not change it, so tasks keep their models while a run goes on.
 Migration 0013 carried the tests made before it over: each model's newest
-of its latest run result and the passed test it was added with. The old
+of its latest run verdict and the passed test it was added with; a run's
+refusal that says nothing about the model is not carried. The old
 `user_models` table is no longer read or written.
 
 **The list** is every model OpenRouter lists that a test can pass (the owner,
@@ -128,7 +129,12 @@ models join the same lists (`task_routes` names each by provider and model).
   free);
 - a saved choice holds while its main model is usable. Once that model is not
   usable (a later test of it failed, or the provider dropped it), no proposal
-  or one tap replaces the choice by itself. Its calls go to its saved fallback
+  or one tap replaces the choice by itself. The task says why its main model
+  is no longer usable, by the same checks as `readUsableModels`
+  (`readNotUsable`): it failed its last test, it is no longer on OpenRouter's
+  list, the account's settings leave it out (with a link to them), or it
+  needs a price cap (with a link to set one), else that it is no longer
+  usable. Its calls go to its saved fallback
   while that is usable, and the task says it runs on its fallback, named,
   with its Change form open to choose a new main model; with no usable
   fallback the task reads "Choose a model" and its calls are refused with a

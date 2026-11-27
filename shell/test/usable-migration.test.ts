@@ -34,7 +34,7 @@ describe("migration 0013", () => {
     await env.DB.batch([
       // Added with a passed test, no run since.
       env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at, test_result) VALUES (?, 'openrouter', 'test-luna', 'global', ?, ?)").bind(userId, "2026-11-27T08:00:00Z", passed("2026-11-27T08:00:00.000Z")),
-      // Added, then failed in a later run.
+      // Added, then refused as busy in a later run: no verdict on it.
       env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at, test_result) VALUES (?, 'openrouter', 'test-mini', 'global', ?, ?)").bind(userId, "2026-11-27T08:00:00Z", passed("2026-11-27T08:00:00.000Z")),
       // Added with no test recorded: nothing to carry.
       env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'openrouter', 'test-sonnet', 'global', ?)").bind(userId, "2026-11-27T08:00:00Z"),
@@ -48,15 +48,47 @@ describe("migration 0013", () => {
     const latest = await readLatestTests(env.DB, userId, "openrouter");
     expect([...latest.values()].map((t) => [t.model, t.state, t.testedAt])).toEqual([
       ["test-luna", "passed", "2026-11-27T08:00:00.000Z"],
-      ["test-mini", "failed", "2026-11-27T09:50:00Z"],
+      ["test-mini", "passed", "2026-11-27T08:00:00.000Z"],
       ["test-sonnet", "passed", "2026-11-27T09:51:00Z"],
     ].sort());
     expect(latest.get("test-luna")!.result).toMatchObject({ text: "Works now.", test: { status: 200 } });
-    expect((await readUsableModels(env.DB, userId)).map((m) => m.model)).toEqual(["test-luna", "test-sonnet"]);
+    expect((await readUsableModels(env.DB, userId)).map((m) => m.model)).toEqual(["test-luna", "test-mini", "test-sonnet"]);
     // The task's saved choice is untouched and still answers.
     expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-luna" } });
     const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM task_routes").first<{ n: number }>())!;
     expect(n).toBe(1);
+  });
+
+  it("carries a run's failure only when it is the model's verdict", async () => {
+    const add = (user: string, model: string) =>
+      env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at, test_result) VALUES (?, 'openrouter', ?, 'global', ?, ?)").bind(user, model, "2026-11-27T08:00:00Z", passed("2026-11-27T08:00:00.000Z"));
+    const failure = (run: number, user: string, model: string, result: object) =>
+      env.DB.prepare("INSERT INTO model_tests (run_id, user_id, provider, model, state, result, tested_at) VALUES (?, ?, 'openrouter', ?, 'failed', ?, ?)").bind(run, user, model, JSON.stringify(result), "2026-11-27T09:50:00Z");
+    const users = await Promise.all(["a", "b", "c"].map(async (s) => (await userFor(`${s}-sub`)).id));
+    const run = (id: number, user: string) =>
+      env.DB.prepare("INSERT INTO model_test_runs (id, user_id, provider, started_at, finished_at, model_count, estimate_usd) VALUES (?, ?, 'openrouter', ?, ?, 3, 0)").bind(id, user, "2026-11-27T09:49:00Z", "2026-11-27T09:59:00Z");
+    const notVerdicts = [
+      { reason: "busy", text: "Busy." }, { reason: "no_credits", text: "Needs credit." }, { reason: "not_set_up", text: "No key." },
+      { reason: "budget_spent", text: "Spent." }, { reason: "not_connected", text: "Not connected." }, { reason: "app_not_configured", text: "Setup." },
+      { reason: "no_reply", text: "The test could not run." }, { text: "No reason." },
+    ];
+    const statements = [...users.map((u, i) => run(i + 1, u))];
+    // Each kind of refusal on its own user's added model.
+    const owners = await Promise.all(notVerdicts.map(async (_, i) => (await userFor(`nv-${i}-sub`)).id));
+    owners.forEach((u, i) => statements.push(run(10 + i, u), add(u, "test-luna"), failure(10 + i, u, "test-luna", notVerdicts[i]!)));
+    // Verdicts: OpenRouter's own refusal, and no reply where OpenRouter answered with status 0.
+    statements.push(add(users[0]!, "test-luna"), failure(1, users[0]!, "test-luna", { reason: "no_such_model", text: "No such model.", reply: { status: 404 } }));
+    statements.push(add(users[1]!, "test-luna"), failure(2, users[1]!, "test-luna", { reason: "no_reply", text: "No answer.", reply: { status: 0 } }));
+    // A refusal on a model never added carries nothing.
+    statements.push(failure(3, users[2]!, "test-mini", { reason: "busy", text: "Busy." }));
+    await env.DB.batch(statements);
+    await env.DB.prepare(carryOver).run();
+    for (const u of owners) {
+      expect((await readLatestTests(env.DB, u, "openrouter")).get("test-luna")).toMatchObject({ state: "passed", testedAt: "2026-11-27T08:00:00.000Z" });
+      expect((await readUsableModels(env.DB, u)).map((m) => m.model)).toEqual(["test-luna"]);
+    }
+    for (const u of users.slice(0, 2)) expect((await readLatestTests(env.DB, u, "openrouter")).get("test-luna")?.state).toBe("failed");
+    expect((await readLatestTests(env.DB, users[2]!, "openrouter")).size).toBe(0);
   });
 
   it("saves each user's one added model as every task's accepted choice where the task has none, and keeps every existing row", async () => {

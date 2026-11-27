@@ -199,7 +199,9 @@ describe("Test all models", () => {
     const { rows, strip } = modelParts(await tableInput());
     expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="works"[\s\S]*?<span class="pill">Busy<\/span>/);
     expect(rows).toMatch(/data-id="test-mini"[^>]*data-state="works"[\s\S]*?<span class="pill warn">Needs credit<\/span>/);
-    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="works"[\s\S]*?The test could not run\. · <button type="button" class="link" data-det=/);
+    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="works"[\s\S]*?<span class="pill">Couldn't test<\/span>[\s\S]*?The test could not run\. · <button type="button" class="link" data-det=/);
+    // None of them is a verdict, so none reads Doesn't work.
+    expect(rows).not.toContain("Doesn't work");
     expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num good">3<\/span>/);
     // Retest failed covers every row the run failed, verdict or not.
     expect((await planRetest(env.DB, plugins(), userId, "openrouter")).models.map((m) => m.model)).toEqual(["test-luna", "test-mini", "test-sonnet"]);
@@ -222,6 +224,9 @@ describe("Test all models", () => {
     await runQueuedTests(env.DB, plugins(), next);
     expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.every((t) => t.state === "failed" && t.result?.reason === "not_connected")).toBe(true);
     expect(await usable()).toEqual(["test-luna", "test-mini"]);
+    const { rows } = modelParts(await tableInput());
+    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="works"[\s\S]*?<span class="pill">Couldn't test<\/span>/);
+    expect(rows).not.toContain("Doesn't work");
   });
 
   it("runs in the background a few at a time; each result becomes the model's latest test, so the ones that pass are usable", async () => {
@@ -412,9 +417,9 @@ describe("the model for each task", () => {
     expect(routes.find((r) => r.task.id === "score")!.stopped!.fallback).toBeUndefined();
     const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
     expect(html).toMatch(
-      /<td data-l="Task">Matching questions<\/td>[\s\S]*?<td data-l="Main">Runs on its fallback for now: test-luna stopped passing its test\. Choose a new main model with Change\.<\/td><td data-l="Fallback \(another model\)">test-mini · OpenRouter<\/td>\s*<td data-l=""><details class="change" open>/,
+      /<td data-l="Task">Matching questions<\/td>[\s\S]*?<td data-l="Main">Runs on its fallback for now: test-luna failed its last test\. Choose a new main model with Change\.<\/td><td data-l="Fallback \(another model\)">test-mini · OpenRouter<\/td>\s*<td data-l=""><details class="change" open>/,
     );
-    expect(html).toMatch(/<td data-l="Task">Scoring roles<\/td>[\s\S]*?<td data-l="Main">Choose a model<\/td>[\s\S]*?<details class="change">/);
+    expect(html).toMatch(/<td data-l="Task">Scoring roles<\/td>[\s\S]*?<td data-l="Main">Choose a model <span class="small">test-luna failed its last test\.<\/span><\/td>[\s\S]*?<details class="change">/);
     // A call goes to the saved fallback, never to another model.
     expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
     plugin.replies.push(ok({ input: 1, output: 1 }));
@@ -431,6 +436,44 @@ describe("the model for each task", () => {
     // It works again once its model passes again.
     await recordTest(userId, "test-luna", "passed", "2026-11-27T12:00:00.000Z");
     expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-luna" } });
+  });
+
+  it("says why a task's main model is no longer usable, by the same checks that decide it", async () => {
+    await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 3, output: 15 }, NOW);
+    for (const model of ["test-luna", "test-mini", "openrouter/auto"]) await recordTest(userId, model);
+    const route = (task: string, main: string) =>
+      env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, ?, 'openrouter', ?, 'openrouter', 'test-mini', 'changed', ?)").bind(userId, task, main, NOW.toISOString());
+    await env.DB.batch([
+      route("match", "test-luna"),
+      route("score", "test-sonnet"),
+      route("fill_form", "openrouter/auto"),
+      route("check_form", "test-new"),
+      // OpenRouter stops listing test-luna, and lists test-new, never tested.
+      env.DB.prepare("DELETE FROM model_price_caps"),
+      env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?)")
+        .bind(userId, NOW.toISOString(), JSON.stringify(["openrouter/auto", "test-mini", "test-new"])),
+    ]);
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-27T11:00:00Z", status: "good", results: [],
+      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models.filter((m) => m.id !== "test-luna"), { id: "test-new", name: "Test New", tools: true }] },
+      rows: [row("test-mini", "input", 0.25), row("test-mini", "output", 1), row("test-new", "input", 0.1), row("test-new", "output", 0.5), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
+    });
+    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    expect(offered.map((m) => m.model)).toEqual(["test-mini"]);
+    const why = (task: string) => routes.find((r) => r.task.id === task)!.stopped?.why;
+    expect([why("match"), why("score"), why("fill_form"), why("check_form")]).toEqual(["not_listed", "left_out", "no_cap", "unknown"]);
+    const html = renderPickerPage({
+      viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false,
+      accountSettings: () => ({ label: "Privacy settings", href: "https://example.com/privacy" }),
+    });
+    const cell = (label: string) => html.match(new RegExp(`<td data-l="Task">${label}</td>[\\s\\S]*?<td data-l="Main">([\\s\\S]*?)</td>`))![1]!;
+    const on = (why: string) => `Runs on its fallback for now: ${why} Choose a new main model with Change.`;
+    expect(cell("Matching questions")).toBe(on("test-luna is no longer on OpenRouter's list."));
+    expect(cell("Scoring roles")).toBe(on(`test-sonnet is left out by your OpenRouter settings. <a href="https://example.com/privacy" target="_blank" rel="noopener noreferrer">Privacy settings</a>`));
+    expect(cell("Filling forms")).toBe(on(`openrouter/auto needs a price cap. <a href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;cap=openrouter%2Fauto#m-openrouter-auto">Set its price cap</a>`));
+    expect(cell("Checking a form")).toBe(on("test-new is no longer usable."));
+    // Each still answers on its fallback.
+    expect(await routeTask(env.DB, userId, "fill_form")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
   });
 
   it("gives a task with no saved choice no model, even with one usable model, and says to choose one", async () => {

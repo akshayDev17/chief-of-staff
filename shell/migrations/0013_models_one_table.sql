@@ -38,9 +38,14 @@ CREATE TABLE model_latest_tests (
 );
 
 -- The tests already made: each model's newest of its latest Test all models
--- result and the passed test it was added with, so every model a task uses
+-- verdict and the passed test it was added with, so every model a task uses
 -- today stays usable while that test is its latest (no task_routes row is
 -- changed). A model added with no recorded test has no pass to carry over.
+-- A run's refusal that says nothing about the model is no verdict, as in
+-- src/models/test-model.ts isVerdict, and is not carried: busy, no credit,
+-- no key (not_set_up), the budget spent, not connected, the app's own setup
+-- missing, and no reply with no reply from the provider (no credential, or
+-- "The test could not run."), or no reason at all.
 INSERT INTO model_latest_tests (user_id, provider, model, state, result, tested_at)
 SELECT user_id, provider, model, state, result, tested_at FROM (
   SELECT user_id, provider, model, state, result, tested_at,
@@ -48,6 +53,11 @@ SELECT user_id, provider, model, state, result, tested_at FROM (
   FROM (
     SELECT user_id, provider, model, state, result, tested_at, 1 AS added_first FROM model_tests
      WHERE state IN ('passed', 'failed') AND result IS NOT NULL AND tested_at IS NOT NULL
+       AND (state = 'passed' OR (
+         json_extract(result, '$.reason') IS NOT NULL
+         AND json_extract(result, '$.reason') NOT IN ('busy', 'no_credits', 'not_set_up', 'budget_spent', 'not_connected', 'app_not_configured')
+         AND NOT (json_extract(result, '$.reason') = 'no_reply' AND json_extract(result, '$.reply') IS NULL)
+       ))
     UNION ALL
     SELECT user_id, provider, model, 'passed', json_object('text', 'Works now.', 'test', json(test_result)),
            coalesce(json_extract(test_result, '$.at'), added_at), 0 FROM user_models

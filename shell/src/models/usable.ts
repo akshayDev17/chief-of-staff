@@ -7,6 +7,7 @@
 //   latestTestWrite(db, userId, provider, model, state, record, testedAt) -> D1PreparedStatement
 //   readLatestTests(db, userId, provider) -> Map<model, LatestTest>
 //   readUsableModels(db, userId) -> UsableModel[]
+//   readNotUsable(db, userId, models) -> NotUsable[]   why each of them is not usable
 //
 // "Offers the user": the provider's current model list names the model and
 // the app can call it (src/prices/openrouter.ts: not blocked), a router has
@@ -18,11 +19,12 @@
 // A Test all models run that is still testing a model does not change its
 // latest test: tasks keep their models while a run goes on.
 
+import type { OpenRouterModel } from "../prices/openrouter";
 import { readCurrentCatalog } from "../prices/store";
 import { isProvider, type Provider } from "../prices/types";
 import type { Link } from "../proxy/plugin";
-import { readAccountList } from "./account-list";
-import { readPriceCaps } from "./price-caps";
+import { readAccountList, type AccountList } from "./account-list";
+import { readPriceCaps, type PriceCap } from "./price-caps";
 import type { TestRefusal, TestResult } from "./test-model";
 
 // What a test showed, as stored (model_latest_tests and model_tests): the
@@ -81,6 +83,39 @@ export async function readLatestTests(db: D1Database, userId: string, provider: 
   return new Map(results.map((r) => [r.model, { model: r.model, state: r.state, testedAt: r.tested_at, result: JSON.parse(r.result) as TestRecord }]));
 }
 
+// Why a model is not usable: its latest test failed; the provider's current
+// list no longer names it; the user's own account list leaves it out; a
+// router has no price cap; `unknown` for anything else (no passed test, or
+// the app cannot call it).
+export type NotUsable = "failed" | "not_listed" | "left_out" | "no_cap" | "unknown";
+
+interface OfferChecks {
+  listed: Map<string, OpenRouterModel>;
+  accounts: Map<Provider, AccountList | undefined>;
+  caps: Map<Provider, Map<string, PriceCap>>;
+}
+
+async function readOfferChecks(db: D1Database, userId: string, providers: Provider[]): Promise<OfferChecks> {
+  const catalog = await readCurrentCatalog(db);
+  return {
+    listed: new Map((catalog?.models ?? []).map((m) => [m.id, m])),
+    accounts: new Map(await Promise.all(providers.map(async (p) => [p, await readAccountList(db, userId, p)] as const))),
+    caps: new Map(await Promise.all(providers.map(async (p) => [p, await readPriceCaps(db, userId, p)] as const))),
+  };
+}
+
+// Why the provider's current list does not offer `model` to the user, or
+// undefined when it does.
+function notOffered(c: OfferChecks, provider: Provider, model: string): NotUsable | undefined {
+  const entry = c.listed.get(model);
+  if (!entry) return "not_listed";
+  if (entry.blocked) return "unknown";
+  if (entry.router && !c.caps.get(provider)?.has(model)) return "no_cap";
+  const account = c.accounts.get(provider);
+  if (account && !account.models.has(model)) return "left_out";
+  return undefined;
+}
+
 // The signed-in user's usable models at every provider a plug-in serves,
 // ordered by provider and model. Scoped to the user.
 export async function readUsableModels(db: D1Database, userId: string): Promise<UsableModel[]> {
@@ -89,20 +124,24 @@ export async function readUsableModels(db: D1Database, userId: string): Promise<
     .bind(userId)
     .all<{ provider: string; model: string; result: string; tested_at: string }>();
   if (!results.length) return [];
-  const catalog = await readCurrentCatalog(db);
-  const listed = new Map((catalog?.models ?? []).map((m) => [m.id, m]));
-  const providers = [...new Set(results.map((r) => r.provider))].filter(isProvider);
-  const accounts = new Map(await Promise.all(providers.map(async (p) => [p, await readAccountList(db, userId, p)] as const)));
-  const caps = new Map(await Promise.all(providers.map(async (p) => [p, await readPriceCaps(db, userId, p)] as const)));
+  const checks = await readOfferChecks(db, userId, [...new Set(results.map((r) => r.provider))].filter(isProvider));
   return results.flatMap((r) => {
-    if (!isProvider(r.provider)) return [];
-    const entry = listed.get(r.model);
-    if (!entry || entry.blocked) return [];
-    if (entry.router && !caps.get(r.provider)?.has(r.model)) return [];
-    const account = accounts.get(r.provider);
-    if (account && !account.models.has(r.model)) return [];
+    if (!isProvider(r.provider) || notOffered(checks, r.provider, r.model)) return [];
     const test = (JSON.parse(r.result) as TestRecord).test;
     if (!test) return [];
     return [{ provider: r.provider, model: r.model, location: test.location, testedAt: r.tested_at, test }];
   });
+}
+
+// Why each of `models`, none of them usable, is not usable, in order, by the
+// same checks as readUsableModels. Scoped to the user.
+export async function readNotUsable(db: D1Database, userId: string, models: Array<{ provider: Provider; model: string }>): Promise<NotUsable[]> {
+  if (!models.length) return [];
+  const { results } = await db
+    .prepare("SELECT provider, model FROM model_latest_tests WHERE user_id = ? AND state = 'failed'")
+    .bind(userId)
+    .all<{ provider: string; model: string }>();
+  const failed = new Set(results.map((r) => `${r.provider}|${r.model}`));
+  const checks = await readOfferChecks(db, userId, [...new Set(models.map((m) => m.provider))]);
+  return models.map((m) => (failed.has(`${m.provider}|${m.model}`) ? "failed" : (notOffered(checks, m.provider, m.model) ?? "unknown")));
 }

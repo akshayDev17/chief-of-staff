@@ -12,9 +12,12 @@
 // fallback, another of the user's models: the user's choice, or the proposal
 // at the task's suggested strength marked "proposed" until accepted (again,
 // for an accepted task whose proposal has changed); a task with neither
-// reads "Choose a model". A task whose saved main model stopped passing
-// reads that it runs on its fallback, named, with its Change form open to
-// choose a new main model; with no usable fallback it reads "Choose a model". Changing a task chooses the provider and then the
+// reads "Choose a model". A task whose saved main model is no longer usable
+// says why (it failed its last test, the provider no longer lists it, the
+// account's settings leave it out, with a link to them, or it needs a price
+// cap, with a link to set one) and that it runs on its fallback, named, with
+// its Change form open to choose a new main model; with no usable fallback
+// it reads "Choose a model" with the same reason. Changing a task chooses the provider and then the
 // model, for the main and the fallback (the owner, 2026-11-27: "for each kind
 // of task : choose the provider and the model"); OpenRouter is the one
 // provider today, and another provider's passed models join the same lists. A proposed model of the other
@@ -34,6 +37,7 @@
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
 import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { rowAnchor, viewQuery } from "../providers/models-table";
 import { modelsSubtabs, nextAction, setupTabsLine } from "./setup-tabs";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
@@ -52,6 +56,8 @@ export interface PickerPageInput {
   noToolUse: (m: { provider: Provider; model: string }) => boolean;
   // The provider's own conditions on free models, shown when one is offered.
   freeTerms?: { text: string; links: Link[] };
+  // The page of the user's account settings at the provider, where it has one.
+  accountSettings?: (p: Provider) => Link | undefined;
   problem?: string;
   said?: string;
 }
@@ -102,11 +108,36 @@ function substituteNote(task: Task, m: Offered, asFallback: boolean): string {
   return ` <span class="small">a ${m.tier} model, since you have no ${asFallback ? "other " : ""}${task.tier} model yet</span>`;
 }
 
+const newTab = (l: Link): string => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
+
+// "<model> failed its last test.", or the other reason its saved main model
+// is not usable, with the link that fixes it where there is one.
+function whyStopped(stopped: NonNullable<TaskRoute["stopped"]>, input: PickerPageInput): string {
+  const { provider, model } = stopped.main;
+  const name = esc(input.providerName(provider));
+  const said = (why: string) => `${esc(model)} ${why}`;
+  switch (stopped.why) {
+    case "failed":
+      return said("failed its last test.");
+    case "not_listed":
+      return said(`is no longer on ${name}'s list.`);
+    case "left_out": {
+      const settings = input.accountSettings?.(provider);
+      return said(`is left out by your ${name} settings.`) + (settings ? ` ${newTab(settings)}` : "");
+    }
+    case "no_cap":
+      return said("needs a price cap.") + ` <a href="${esc(`${PROVIDERS_PATH}?${viewQuery(provider, { cap: model })}#${rowAnchor(model)}`)}">Set its price cap</a>`;
+    default:
+      return said("is no longer usable.");
+  }
+}
+
 function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput): string {
   const onFallback = r.stopped?.fallback;
   if (onFallback) {
-    return `<td data-l="Main">Runs on its fallback for now: ${esc(r.stopped!.main.model)} stopped passing its test. Choose a new main model with Change.</td><td data-l="Fallback (another model)">${esc(modelName(onFallback, input))}</td>`;
+    return `<td data-l="Main">Runs on its fallback for now: ${whyStopped(r.stopped!, input)} Choose a new main model with Change.</td><td data-l="Fallback (another model)">${esc(modelName(onFallback, input))}</td>`;
   }
+  if (r.stopped) return `<td data-l="Main">Choose a model <span class="small">${whyStopped(r.stopped, input)}</span></td><td data-l="Fallback (another model)">–</td>`;
   if (!route) return `<td data-l="Main">Choose a model</td><td data-l="Fallback (another model)">–</td>`;
   const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
   const fromProposal = r.pending || r.current?.setHow === "accepted";
@@ -138,7 +169,7 @@ function freeTap(input: PickerPageInput): string {
 
 function freeTermsLine(input: PickerPageInput): string {
   if (!input.freeTerms || !input.offered.some((m) => m.free)) return "";
-  const links = input.freeTerms.links.map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
+  const links = input.freeTerms.links.map(newTab).join(" · ");
   return `<details class="more"><summary>OpenRouter's terms for free models</summary><p class="small muted">${esc(input.freeTerms.text)} ${links}</p></details>`;
 }
 
@@ -261,7 +292,8 @@ export async function handleTaskModels(
     const providerName = (p: Provider) => plugins[p]?.connect.guide.short ?? PROVIDER_NAMES[p];
     const noToolUse = (m: { provider: Provider; model: string }) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
     const freeTerms = offered.filter((m) => m.free).map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
-    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, freeTerms, ...extra }), status);
+    const accountSettings = (p: Provider) => plugins[p]?.connect.guide.accountSettings;
+    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, ...extra }), status);
   };
 
   if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });

@@ -51,7 +51,7 @@ import type { Provider } from "../prices/types";
 import type { ModelRequest, PluginRegistry } from "../proxy/plugin";
 import { callModel, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
 import { readFreeModels } from "./test-model";
-import { readUsableModels, type UsableModel } from "./usable";
+import { readNotUsable, readUsableModels, type NotUsable, type UsableModel } from "./usable";
 
 export interface Task {
   id: string;
@@ -96,10 +96,10 @@ export interface TaskRoute {
   // its accepted models differ from its proposal now.
   pending: boolean;
   // The task's saved choice names a main model that is not usable now
-  // (`main`). Its calls go to `fallback`, its saved fallback, while that is
-  // usable; without one the task reads "Choose a model". No proposal
-  // replaces the choice by itself.
-  stopped?: Stopped<Offered>;
+  // (`main`), for the reason `why`. Its calls go to `fallback`, its saved
+  // fallback, while that is usable; without one the task reads "Choose a
+  // model". No proposal replaces the choice by itself.
+  stopped?: Stopped<Offered> & { why: NotUsable };
 }
 
 export interface Stopped<M> {
@@ -189,12 +189,15 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
     .bind(userId)
     .all<ChoiceRecord>();
   const saved = new Map(results.map((r) => [r.task, r]));
+  const stoppedMains = results.filter((r) => !byKey.has(modelKey({ provider: r.main_provider, model: r.main_model })));
+  const notUsable = await readNotUsable(db, userId, stoppedMains.map((r) => ({ provider: r.main_provider, model: r.main_model })));
+  const why = new Map(stoppedMains.map((r, i) => [r.task, notUsable[i]!]));
   const routes = TASKS.map((task): TaskRoute => {
     const r = saved.get(task.id);
     const proposal = proposeRoute(task, offered);
     if (!r) return { task, proposal, pending: proposal !== undefined };
     const route = savedRoute(r, byKey);
-    if ("stopped" in route) return { task, proposal, pending: false, stopped: route.stopped };
+    if ("stopped" in route) return { task, proposal, pending: false, stopped: { ...route.stopped, why: why.get(task.id)! } };
     const pending = r.set_how === "accepted" && proposal !== undefined && !sameRoute(route, proposal);
     return { task, proposal, current: { ...route, setHow: r.set_how }, pending };
   });

@@ -266,10 +266,13 @@ function errPart(input: ModelsTableInput): string {
 
 // ---------- the rows ----------
 
-function failTag(result: TestRecord | undefined): string {
-  if (result?.reason === "no_credits") return '<span class="pill warn">Needs credit</span>';
-  if (result?.reason === "busy") return '<span class="pill">Busy</span>';
-  return `<span class="pill bad">Doesn't work</span>`;
+// A failed verdict is "Doesn't work"; a refusal that says nothing about the
+// model names what kept the test from answering.
+function failTag(failed: { result: TestRecord; notVerdict?: true }): string {
+  if (!failed.notVerdict) return `<span class="pill bad">Doesn't work</span>`;
+  if (failed.result.reason === "no_credits") return '<span class="pill warn">Needs credit</span>';
+  if (failed.result.reason === "busy") return '<span class="pill">Busy</span>';
+  return `<span class="pill">Couldn't test</span>`;
 }
 
 function priceHtml(r: OfferRow, input: ModelsTableInput): string {
@@ -402,7 +405,7 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   // on hundreds of rows says nothing); the strip's Works cell finds them.
   let tags = "";
   if (r.free) tags += '<span class="pill free">Free</span>';
-  if (failed) tags += failTag(failed.result);
+  if (failed) tags += failTag(failed);
   const resultHere = view.results?.some((x) => x.model === r.model) ?? false;
   const plainMeta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span></span>`;
   let meta: string;
