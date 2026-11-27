@@ -33,7 +33,7 @@
 // 30seconds?"). The Usage page, not built yet, is named but not linked.
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
-import { addModel, listOffer, readUserModels, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
+import { addModel, listOffer, readUserModels, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
 import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { nextAction, setupTabsLine } from "../models/setup-tabs";
@@ -485,7 +485,8 @@ export async function handleProviders(
       const reason = field("reason");
       const model = field("model").slice(0, 120);
       if (!MODEL_HELP_REASONS.has(reason) || !model) return page({ problem: "There is nothing to ask about here.", selected: provider }, 400);
-      const text = refusalText({ kind: "refused", model, reason: reason as AddRefusal }, plugins[provider]);
+      const refused = { kind: "refused" as const, model, reason: reason as AddRefusal };
+      const text = [refusalText(refused, plugins[provider]), refusalFix(refused, plugins[provider])].filter(Boolean).join(" ");
       await db
         .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
         .bind(userId, `Choose a model: ${model}`, text, now.toISOString())

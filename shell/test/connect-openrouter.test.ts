@@ -275,6 +275,17 @@ describe("Connect OpenRouter", () => {
     expect(banner).toContain("did not give your account&#39;s model list (503");
   });
 
+  it("sends Admin a friend's refused model with its plain line and its fix, never the provider's reply", async () => {
+    await connect();
+    const asked = await post("/openrouter/model-help", { model: "openai/gpt-6-luna", reason: "budget_spent" }, { viewer: "friend" });
+    expect(asked.status).toBe(200);
+    const row = await env.DB.prepare("SELECT item, reason FROM help_requests WHERE user_id = ?").bind(userId).first<{ item: string; reason: string }>();
+    expect(row).toEqual({
+      item: "Choose a model: openai/gpt-6-luna",
+      reason: "This month's budget is spent. The test call waits until the 1st. Raise the budget on Budgets, then test openai/gpt-6-luna again.",
+    });
+  });
+
   it("refuses a form from another site, and a provider that does not exist", async () => {
     const forged = await handle(new Request(`${BASE}/openrouter/connect`, { method: "POST", body: new URLSearchParams(), headers: { origin: "https://elsewhere.example" } }));
     expect(forged.status).toBe(403);
