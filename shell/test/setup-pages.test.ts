@@ -9,7 +9,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleTaskModels } from "../src/models/picker-page";
-import { AFTER_SETUP_TABS, SETUP_TABS } from "../src/models/setup-tabs";
+import { SETUP_TABS } from "../src/models/setup-tabs";
 import { handleProviders } from "../src/providers/page";
 import { handleBudgets } from "../src/proxy/budgets-page";
 import { writeConnection } from "../src/proxy/connections";
@@ -51,13 +51,14 @@ describe("Models › Setup", () => {
     expect(SETUP_TABS.map((t) => t.label)).toEqual(["Providers and models", "Budgets", "Model for each task"]);
   });
 
-  it("chains each screen's Next to the next tab, and the last to the checklist's next item", async () => {
+  it("chains each screen's Next to the next tab, and gives the last none while the checklist's next item is not built", async () => {
     const html = await screens();
     const chain = SETUP_TABS.map((t) => nextOf(html[t.href]!));
     expect(chain).toEqual([
       `${SETUP_TABS[1]!.href}|Next: ${SETUP_TABS[1]!.nextName}`,
       `${SETUP_TABS[2]!.href}|Next: ${SETUP_TABS[2]!.nextName}`,
-      `|Next: ${AFTER_SETUP_TABS.nextName} (not built yet)`,
+      // The checklist's next item is not built: no button that leads nowhere.
+      "",
     ]);
     expect(chain[0]).toBe(`${BUDGETS_PATH}|Next: budgets`);
     expect(chain[1]).toBe(`${TASK_MODELS_PATH}|Next: the model for each task`);

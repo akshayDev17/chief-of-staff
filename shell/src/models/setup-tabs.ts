@@ -9,8 +9,8 @@
 //   nextAction(path, cls) -> HTML  "Next: <the next screen>"
 //
 // After the last screen comes the checklist's next item, Connect Gmail (item
-// 6, on Job application settings), which is not built yet: its Next names it
-// and leads nowhere.
+// 6, on Job application settings), which is not built yet: the last screen
+// has no Next until it is (no button that leads nowhere).
 
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH, USAGE_PATH } from "../paths";
 
@@ -28,9 +28,6 @@ export const SETUP_TABS: readonly SetupTab[] = [
   { label: "Model for each task", nextName: "the model for each task", href: TASK_MODELS_PATH },
 ];
 
-// The setup checklist's item after the Models tab's (design-v3 11.6, item 6).
-export const AFTER_SETUP_TABS = { nextName: "Connect Gmail", built: false } as const;
-
 // The Models tab has exactly two sub-tabs (design-v3 10.1, the owner,
 // 2026-11-24: "within models, create 2 sub tabs: setup and usage."). Setup
 // opens its first screen.
@@ -46,11 +43,10 @@ export function setupTabsLine(path: string): string {
   ).join(" · ")}</nav>`;
 }
 
-// The Next button of the screen at `path`: the next tab, or after the last
-// one the checklist's next item, named but not linked while it is not built.
+// The Next button of the screen at `path`: the next tab; after the last one,
+// none while the checklist's next item is not built.
 export function nextAction(path: string, cls = "btn"): string {
   const at = SETUP_TABS.findIndex((t) => t.href === path);
   const next = SETUP_TABS[at + 1];
-  if (next) return `<a class="${cls}" href="${next.href}" data-next>Next: ${next.nextName}</a>`;
-  return `<span class="${cls}" aria-disabled="true" data-next>Next: ${AFTER_SETUP_TABS.nextName} (not built yet)</span>`;
+  return next ? `<a class="${cls}" href="${next.href}" data-next>Next: ${next.nextName}</a>` : "";
 }

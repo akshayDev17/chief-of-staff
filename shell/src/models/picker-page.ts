@@ -34,7 +34,8 @@
 // dropdowns are plain selects, each row has its own Save, and every form
 // posts and redirects back (post-redirect-get). One solid blue button at a
 // time: Save while a row is changed, else the first of Accept all with one
-// tap, Use my free models, the first row's fix, and Next.
+// tap, Use my free models, the first row's fix, and Next (none after this
+// last screen while the checklist's next item is not built).
 //
 // A free model is never proposed, only chosen: in its dropdown, or with one tap
 // for every task that has no model and no proposal (a $0 account's passed
@@ -302,8 +303,8 @@ function finding(input: PickerPageInput): string {
   const n = input.routes.filter((r) => r.current || r.stopped?.fallback).length;
   const pending = input.routes.filter((r) => r.pending).length;
   if (n === TASKS.length && !pending) return "Every task has a model. Its fallback answers when the main model fails a call.";
-  const has = n === 0 ? "No task has a model yet." : `${n} of ${TASKS.length} tasks have a model.`;
-  return pending ? `${has} ${pending === 1 ? "One task has" : `${pending} tasks have`} proposed models to accept.` : `${has} Each takes a model of its strength that passed its test.`;
+  const has = n === 0 ? "No task has a model yet" : `${n} of ${TASKS.length} tasks have a model`;
+  return pending ? `${has} · ${pending === 1 ? "1 proposal" : `${pending} proposals`} to accept` : `${has}. Each takes a model of its strength that passed its test.`;
 }
 
 const tabsLine = (): string =>
@@ -332,6 +333,7 @@ export function renderMain(input: PickerPageInput): string {
       : "";
   const banner = `${input.problem ? `<div class="banner warn" role="alert" tabindex="-1">${esc(input.problem)}</div>` : ""}${input.said ? `<div class="banner ok" role="status" tabindex="-1">${esc(input.said)}</div>` : ""}`;
   const primaryNext = !pending && !free && fixAt === -1;
+  const next = `${help}${nextAction(TASK_MODELS_PATH, primaryNext ? "btn primary" : "btn")}`;
   return `<div class="title-row"><h1>Models</h1>${modelsSubtabs("setup")}</div>
 ${tabsLine()}
 <div data-part="banner">${banner}</div>
@@ -353,7 +355,7 @@ ${terms}
 </div>
 <div class="savebar" id="savebar" role="region" aria-label="Unsaved changes" hidden><p class="sb-n" aria-live="polite"></p><p class="sb-err" role="alert"></p><button type="button" class="btn" data-undo>Undo</button><button type="button" class="btn primary" data-save>Save</button></div>
 </section>
-<div class="next-row">${help}${nextAction(TASK_MODELS_PATH, primaryNext ? "btn primary" : "btn")}</div>`;
+${next ? `<div class="next-row">${next}</div>` : ""}`;
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
