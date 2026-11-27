@@ -93,8 +93,10 @@ the date its prices were read. The user accepts it or types their own.
 
 ### The budget bar
 
-Once the budget is set, Budgets, and only Budgets, shows the month's spend as
-one bar in three parts (`budget-bar.ts`; AKS-136, reworked for OpenRouter):
+Once the budget is set, Budgets shows the month's spend as one bar
+(`budget-bar.ts`; AKS-136, reworked for OpenRouter). The Providers page does
+not show it; design-v3 section 1.8 says where else it will appear. The bar has
+three parts:
 
 - **Solid, spent as OpenRouter reports it**: the app's key's own figure for
   the current UTC month, `usage_monthly` plus `byok_usage_monthly` from
