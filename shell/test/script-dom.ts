@@ -87,3 +87,12 @@ export function listboxPage(script: string, models: string[], opts: { href?: str
 
 // The inline scripts of a rendered page, in order: the page's own output.
 export const pageScripts = (html: string): string => [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+
+// Runs the `on<event>` attribute of the element with `id` in a rendered page,
+// as a browser runs an inline handler, with `self` as `this`.
+export function fireInline(html: string, id: string, event: string, self: unknown): void {
+  const tag = html.match(new RegExp(`<[a-z]+\\b[^>]*\\bid="${id}"[^>]*>`))?.[0];
+  if (!tag) throw new Error(`no element #${id} in the page`);
+  const handler = tag.match(new RegExp(`\\bon${event}="([^"]*)"`))?.[1];
+  if (handler) new Function("event", handler.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")).call(self, { type: event });
+}

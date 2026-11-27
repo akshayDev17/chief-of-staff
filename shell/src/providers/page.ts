@@ -3,7 +3,7 @@
 // one provider since 2026-11-27), each with its action lines, its
 // connection, its account line and, once connected, the model test.
 //
-//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1][&test-all=confirm][&tests=all|works|fails]
+//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1|&disconnected=1][&test-all=confirm][&tests=all|works|fails]
 //   POST /chief-of-staff/models/setup/providers/<id>/connect      to the provider's own consent page
 //   GET  /chief-of-staff/models/setup/providers/<id>/consented    back from it: the key into the vault, then to #test
 //   POST /chief-of-staff/models/setup/providers/<id>/disconnect
@@ -79,9 +79,13 @@ export interface ProvidersPageInput {
   panels: ProviderPanel[];
   selected: Provider;
   confirmDisconnect: boolean;
+  // Back from Disconnect: the key is gone from the vault.
+  disconnected: boolean;
   confirmTestAll: boolean;
   testsFilter: TestsFilter;
   problem?: string;
+  // The provider's own words behind the problem, collapsed.
+  problemDetails?: string;
   said?: string;
   // The result of choosing a model, shown under the model list.
   outcome?: AddOutcome;
@@ -155,15 +159,20 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const g = plugin.connect.guide;
   const steps = `<ol class="steps">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>`;
   const help = input.viewer === "friend" ? postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
-  if (!connection) return `${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
+  const gone = input.disconnected
+    ? `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Disconnected. Delete the key on ${esc(g.short)} too.</strong></p>
+<div class="row">${g.revokeLinks(undefined).map((l) => `<a class="btn small" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join("")}</div>
+<details class="more"><summary>Details</summary><p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p></details></div>`
+    : "";
+  if (!connection) return `${gone}${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
   const revoked = check?.state === "revoked";
   const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
   const revokeLinks = g.revokeLinks(connection).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
   const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
-<p class="small">The app deletes the key from your vault. Its models stop answering for you at once.</p>
-<p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p>
+<p class="small">The app deletes the key from your vault.</p>
+<details class="more"><summary>Details</summary><ul class="small about"><li>Its models stop answering for you at once.</li><li>The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</li></ul></details>
 <div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
   const passed = panel.passedModels ?? 0;
@@ -234,7 +243,7 @@ ${refresh}
 ${setupTabsLine(PROVIDERS_PATH)}
 <h2>Model provider</h2>
 <p>OpenRouter reaches every maker's models. You pay it for your own calls.</p>
-${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
+${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}${input.problemDetails ? `<details class="more"><summary>Details</summary><p class="small">${esc(input.problemDetails)}</p></details>` : ""}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
 <section class="card">
 ${tabs}
@@ -313,7 +322,7 @@ async function pageInput(
   viewer: Viewer,
   url: URL,
   now: Date,
-  extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {},
+  extra: { problem?: string; problemDetails?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {},
 ): Promise<ProvidersPageInput> {
   const registered = PROVIDERS.filter((p) => plugins[p]);
   const panels = await Promise.all(
@@ -348,9 +357,11 @@ async function pageInput(
     panels,
     selected,
     confirmDisconnect: url.searchParams.get("disconnect") === "1",
+    disconnected: url.searchParams.get("disconnected") === "1",
     confirmTestAll: url.searchParams.get("test-all") === "confirm",
     testsFilter,
     problem: extra.problem,
+    problemDetails: extra.problemDetails,
     said: extra.said,
     outcome: extra.outcome,
     progressHref: url.pathname === PROVIDERS_PATH ? `${url.pathname}${url.search}` : `${providerHref(selected, `&tests=${testsFilter}`)}#${selected}-test-all`,
@@ -393,7 +404,7 @@ export async function handleProviders(
   let { plugins } = input;
   const url = new URL(request.url);
   const [, providerPart, verb] = ROUTE.exec(url.pathname) ?? [];
-  const page = async (extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
+  const page = async (extra: { problem?: string; problemDetails?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
     html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
   const back = (provider: string, extra = "", anchor = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}${anchor}`, 303);
   // The price table and the provider's model list, read now when there is
@@ -440,7 +451,7 @@ export async function handleProviders(
     }
     case "disconnect":
       await disconnectProvider(db, secrets, userId, provider);
-      return back(provider);
+      return back(provider, "&disconnected=1");
     case "choose": {
       if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
       const outcome = await addModel(db, plugins, { userId, provider, model: field("model"), now });
@@ -456,7 +467,7 @@ export async function handleProviders(
       }
       await refreshCatalog(true);
       const read = await refreshAccountList(db, plugins, userId, provider, now);
-      return "problem" in read ? page({ problem: read.problem, selected: provider }, 502) : back(provider);
+      return "problem" in read ? page({ problem: read.problem, problemDetails: read.details, selected: provider }, 502) : back(provider);
     }
     case "add-tested": {
       if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);

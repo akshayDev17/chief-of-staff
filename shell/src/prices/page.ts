@@ -206,7 +206,7 @@ export function renderPriceTablePage(input: PageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin · Price table · Chief of staff</title>
-<style>${PAGE_CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}</style>
 </head>
 <body>
 <main class="screen">
@@ -215,8 +215,8 @@ export function renderPriceTablePage(input: PageInput): string {
 ${refreshBanner(input.snapshot)}
 <form class="sort-by" method="get">
 <label class="small" for="price-sort">Sort by</label>
-<select id="price-sort" name="sort" onchange="this.form.submit()">${options}</select>
-<noscript><button type="submit">Sort</button></noscript>
+<select id="price-sort" name="sort">${options}</select>
+<button type="submit" class="btn">Sort</button>
 </form>
 <div class="tbl-wrap"><table class="stackable" id="price-tbl">
 <thead><tr>

@@ -35,7 +35,7 @@ export async function refreshAccountList(
   userId: string,
   provider: Provider,
   now: Date,
-): Promise<AccountList | { problem: string }> {
+): Promise<AccountList | { problem: string; details?: string }> {
   const plugin = plugins[provider];
   const connection = await readConnection(db, userId, provider);
   if (!plugin || !connection) return { problem: "That provider is not connected." };
@@ -44,7 +44,8 @@ export async function refreshAccountList(
     ids = await plugin.connect.readAccountModels(await plugin.mintCredential(connection, { userId }));
   } catch (error) {
     const said = error instanceof ProviderRefusal ? ` (${error.refusal.status} ${error.refusal.errorName}${error.refusal.message ? `: ${error.refusal.message}` : ""})` : "";
-    return { problem: `${plugin.connect.guide.short} did not give your account's model list${said}; the list below is its public one.` };
+    const short = plugin.connect.guide.short;
+    return { problem: `Showing ${short}'s public list.`, details: `${short} did not give your account's model list${said}; the list below is its public one.` };
   }
   return saveAccountList(db, userId, provider, ids, now);
 }

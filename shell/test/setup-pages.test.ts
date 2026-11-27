@@ -14,7 +14,9 @@ import { handleBudgets } from "../src/proxy/budgets-page";
 import { writeConnection } from "../src/proxy/connections";
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../src/paths";
 import { fakeFetch } from "./fake-sources";
-import { element, listboxPage, pageScripts, runScript, type Sent } from "./script-dom";
+import { element, fireInline, listboxPage, pageScripts, runScript, type Sent } from "./script-dom";
+import { renderPriceTablePage } from "../src/prices/page";
+import { currentSnapshot, readSnapshotRows, recentAlerts } from "../src/prices/store";
 import { seedPrices, testPlugin, testSecrets, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
@@ -117,5 +119,21 @@ describe("Models › Setup", () => {
     pair.provider.fire("change");
     expect(pair.model.value).toBe("");
     expect(sent).toEqual([]);
+  });
+
+  it("sends nothing and loads nothing when Admin · Price table's sort select changes; its Sort button sends the form", async () => {
+    const snapshot = (await currentSnapshot(env.DB))!;
+    const html = renderPriceTablePage({ snapshot, rows: await readSnapshotRows(env.DB, snapshot.id), alerts: await recentAlerts(env.DB), sort: { column: "provider", dir: "asc" } });
+    const sent: Sent = [];
+    const form = { submit: () => sent.push("submit"), requestSubmit: () => sent.push("submit") };
+    const select = Object.assign(element({ id: "price-sort" }), { form, value: "input-desc" });
+    runScript(pageScripts(html), { querySelectorAll: () => [], querySelector: () => null, getElementById: (id: string) => (id === "price-sort" ? select : null) }, `${ORIGIN}/chief-of-staff/admin/prices`, sent);
+    select.fire("change");
+    fireInline(html, "price-sort", "change", select);
+    fireInline(html, "price-sort", "input", select);
+    expect(sent).toEqual([]);
+    const sortForm = html.match(/<form class="sort-by" method="get">[\s\S]*?<\/form>/)![0];
+    expect(sortForm).toMatch(/<button type="submit"[^>]*>Sort<\/button>/);
+    expect(sortForm).not.toContain("<noscript>");
   });
 });

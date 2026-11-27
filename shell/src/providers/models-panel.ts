@@ -35,7 +35,7 @@
 import { esc, nbDate } from "../prices/page";
 import { SOURCES } from "../prices/sources";
 import type { Tier } from "../prices/tiers";
-import { PROVIDERS_PATH } from "../paths";
+import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { blockedReason, refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
 import { CONCURRENCY, FRESH_LIST_WAIT, RUN_GAP_MINUTES, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { TEST_MAX_TOKENS } from "./openrouter";
@@ -145,7 +145,7 @@ ${more("Details", `${replyLine(plugin, t.status, [o.model.model, named, t.text ?
       ? `<form method="post" action="${action(plugin.provider, "model-help")}"><input type="hidden" name="model" value="${esc(o.model)}"><input type="hidden" name="reason" value="${esc(o.reason)}"><button type="submit" class="btn small help-btn">Ask Admin for help</button></form>`
       : "";
   const fix = refusalFix(o, plugin);
-  const main = first ? linkButton(first, "btn small") : "";
+  const main = first ? linkButton(first, "btn small") : o.reason === "budget_spent" ? `<a class="btn small" href="${BUDGETS_PATH}">Budgets</a>` : "";
   return `<div class="tc tc-bad" role="alert"><p class="tc-verdict"><strong>${esc(refusalText(o, plugin))}</strong> <span class="small">${esc(o.model)}</span></p>
 ${main || help ? `<div class="row">${main}${help}</div>` : ""}
 ${more("Details", `${reply}${fix ? `<p class="tc-fix small">${esc(fix)}</p>` : ""}${rest.length ? `<div class="row">${linkButtons(rest)}</div>` : ""}`)}</div>`;

@@ -46,6 +46,15 @@ const post = (path: string, fields: Record<string, string> = {}, opts: Parameter
   handle(new Request(`${BASE}${path}`, { method: "POST", body: new URLSearchParams(fields), headers: { origin: ORIGIN } }), opts);
 const get = (path = "", opts: Parameters<typeof handle>[1] = {}) => handle(new Request(`${BASE}${path}`), opts);
 
+// The text a page shows outside its collapsed <details>, one entry per element's text.
+const visibleLines = (html: string): string[] =>
+  html
+    .replace(/<details[\s\S]*?<\/details>/g, "")
+    .split(/<[^>]+>/)
+    .map((t) => t.replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+const words = (line: string): number => line.split(" ").length;
+
 // Connect, then come back from OpenRouter's page as it would send the user.
 async function connect(overrides: Overrides = {}): Promise<Response> {
   fetcher = fakeFetch(overrides);
@@ -229,7 +238,16 @@ describe("Connect OpenRouter", () => {
     const confirm = await (await get("?provider=openrouter&disconnect=1")).text();
     expect(confirm).toContain("The key stays valid on OpenRouter until you delete it there");
     expect(confirm).toContain("https://openrouter.ai/settings/keys");
-    expect((await post("/openrouter/disconnect")).status).toBe(303);
+    // The dialog's visible lines are short; the rest is collapsed.
+    const dialog = confirm.slice(confirm.indexOf('<div class="dialog"'), confirm.indexOf("</div></div>", confirm.indexOf('<div class="dialog"')));
+    for (const line of visibleLines(dialog)) expect(words(line), line).toBeLessThanOrEqual(12);
+    const gone = await post("/openrouter/disconnect");
+    expect(gone.status).toBe(303);
+    const after = await (await handle(new Request(gone.headers.get("location")!))).text();
+    const box = after.match(/<div class="tc tc-sw" role="status">[\s\S]*?<\/details><\/div>/)![0];
+    expect(visibleLines(box)).toEqual(["Disconnected. Delete the key on OpenRouter too.", "Your keys on OpenRouter"]);
+    expect(box).toContain('href="https://openrouter.ai/settings/keys"');
+    expect(box).toContain("The key stays valid on OpenRouter until you delete it there");
     expect(await readConnection(env.DB, userId, "openrouter")).toBeUndefined();
     expect(await readCheck(env.DB, userId, "openrouter")).toBeUndefined();
     expect(await readAccountList(env.DB, userId, "openrouter")).toBeUndefined();
@@ -245,6 +263,16 @@ describe("Connect OpenRouter", () => {
     const again = await post("/openrouter/refresh", {}, { now: new Date("2026-11-27T10:05:30Z") });
     expect(again.status).toBe(429);
     expect(await again.text()).toContain("Refresh it again from 10:06 UTC");
+  });
+
+  it("says in one short line when the account's own list could not be read, with OpenRouter's reply in Details", async () => {
+    await connect();
+    fetcher = fakeFetch({ userModels: () => Response.json({ error: { code: 503, message: "upstream down" } }, { status: 503 }) });
+    const failed = await post("/openrouter/refresh", {}, { now: new Date("2026-11-27T10:05:00Z") });
+    expect(failed.status).toBe(502);
+    const banner = (await failed.text()).match(/<div class="banner warn" role="alert">[\s\S]*?<\/details><\/div>/)![0];
+    expect(visibleLines(banner)).toEqual(["Showing OpenRouter's public list."]);
+    expect(banner).toContain("did not give your account&#39;s model list (503");
   });
 
   it("refuses a form from another site, and a provider that does not exist", async () => {

@@ -333,21 +333,19 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
   const short = plugin?.connect.guide.short ?? "The provider";
   switch (o.reason) {
     case "not_connected":
-      return `${name} is not connected: connect it on Providers first.`;
+      return `${name} is not connected.`;
     case "not_offered":
-      return `${o.model} is not on ${name}'s list.`;
+      return `Not on ${name}'s list.`;
     case "no_price":
-      return `${o.model} has no price yet, so it cannot be added: the budget stop needs a real price.`;
+      return "No price yet, so it can't be added.";
     case "cannot_call":
-      return plugin?.connect.canCall(o.model)
-        ? `${o.model} is not offered for your account: your ${short} settings leave it out.`
-        : `${o.model} is not offered at ${name}: ${plugin?.connect.notCallableReason(o.model) ?? "the app cannot call it"}.`;
+      return plugin?.connect.canCall(o.model) ? "Not offered for your account." : "The app can't call this model.";
     case "wrong_model":
-      return `${short}'s reply names another model${o.reply?.repliedModel ? ` (${o.reply.repliedModel})` : ""}, not ${o.model}, so ${o.model} was not added.`;
+      return `${short}'s reply named another model, so it wasn't added.`;
     case "budget_spent":
-      return `This month's budget for ${name} is spent, so the test call waits until the 1st.`;
+      return "This month's budget is spent.";
     case "not_passed":
-      return `${o.model} did not pass in your latest Test all models run, so it cannot be added from it.`;
+      return "It didn't pass in your latest Test all models run.";
     case "no_credits":
       if (o.free) return `${short} asked for credit even for this free model.`;
       return plugin ? reasonText(o.reason, plugin) : `${short} refused the test call.`;
@@ -356,14 +354,22 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
   }
 }
 
-// The fix line, where the plug-in gave none.
+// The reason and the fix, collapsed under the plain line; the plug-in's own
+// fix where it gave one.
 export function refusalFix(o: Extract<AddOutcome, { kind: "refused" }>, plugin: ProviderPlugin | undefined): string {
   if (o.fix) return o.fix;
+  const name = plugin?.connect.guide.name ?? "the provider";
   switch (o.reason) {
+    case "no_price":
+      return "The budget stop needs a real price.";
+    case "cannot_call":
+      return plugin?.connect.canCall(o.model)
+        ? `Your ${plugin.connect.guide.short} settings leave ${o.model} out.`
+        : `${o.model}: ${plugin?.connect.notCallableReason(o.model) ?? "the app cannot call it"}.`;
     case "wrong_model":
-      return `Pick ${o.model} again; if the reply still names another model, ${plugin?.connect.guide.name ?? "the provider"} is answering with it.`;
+      return `Test ${o.model} again; if the reply still names another model, ${name} is answering with it.`;
     case "budget_spent":
-      return `Raise the budget on Budgets, then pick ${o.model} again.`;
+      return `The test call waits until the 1st. Raise the budget on Budgets, then test ${o.model} again.`;
     case "not_connected":
       return "Open Providers and connect it.";
     case "not_passed":
