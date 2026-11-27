@@ -23,12 +23,16 @@
 // result, works now or not, with the plain reason, and the real total. It
 // adds nothing: each model that works has an Add button, which adds it with
 // that passed test call (models/test-all.ts addTestedModel).
+//
+// Where the list has a free model ($0 in and out), the plug-in's own terms
+// for free models show under it: the provider's request limits and the
+// privacy setting that can refuse them, with the pages that state them.
 
 import { esc, nbDate } from "../prices/page";
 import { SOURCES } from "../prices/sources";
 import type { Tier } from "../prices/tiers";
 import { PROVIDERS_PATH } from "../paths";
-import { blockedReason, refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
+import { blockedReason, isFree, refusalFix, refusalText, type AddOutcome, type OfferRow, type TestResult } from "../models/add";
 import { CONCURRENCY, RUN_GAP_MINUTES, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { TEST_MAX_TOKENS } from "./openrouter";
 import type { Link, ProviderPlugin } from "../proxy/plugin";
@@ -144,6 +148,13 @@ function refreshLine(input: ModelsSectionInput): string {
 <p class="small muted">Every model ${esc(short)} lists is here, from its public list, which needs no key. Your key reads which of them your account allows (your ${esc(short)} provider preferences, privacy settings and guardrails can leave some out); whether a model answers for you right now shows only when it is tested.</p>`;
 }
 
+function freeTermsLine(input: ModelsSectionInput): string {
+  const terms = input.plugin.connect.freeModelTerms;
+  if (!terms || !input.rows.some((r) => isFree(r.price))) return "";
+  const links = terms.links.map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
+  return `<p class="small muted free-terms">Free models work without credit. ${esc(terms.text)} ${links}</p>`;
+}
+
 function testAllSection(input: ModelsSectionInput): string {
   const { plugin, plan, run } = input;
   const p = plugin.provider;
@@ -187,7 +198,7 @@ function resultsList(input: ModelsSectionInput, run: TestAllRun): string {
       const reply = t.result?.reply ? ` <span class="tc-reply">${esc([t.result.reply.status, t.result.reply.errorName, t.result.reply.message ? `“${t.result.reply.message}”` : ""].filter(Boolean).join(" · "))}</span>` : "";
       const fix = t.result?.fix ? ` <span class="small tc-fix">${esc(t.result.fix)}</span>` : "";
       const links = t.result?.links?.length ? ` <span class="row">${linkButtons(t.result.links)}</span>` : "";
-      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : "doesn't work now"}</span>${ok ? addButton(input, t.model) : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}${fix}${links}`}</li>`;
+      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : t.result?.reason === "no_credits" ? "needs credit" : "doesn't work now"}</span>${ok ? addButton(input, t.model) : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}${fix}${links}`}</li>`;
     })
     .join("");
   const when = run.finishedAt ? `Tested ${readOn(run.startedAt)}` : `Started ${readOn(run.startedAt)}`;
@@ -224,6 +235,7 @@ ${input.rows.map((r) => option(r, input)).join("\n")}
 </div>
 ${fallback}
 </form>
+${freeTermsLine(input)}
 <p class="small muted" style="margin-top:6px">A model is added only when its test call passes; a reply naming a different model is refused with a plain reason. A model with no price yet cannot be chosen, because the budget stop needs a real price.</p>
 ${testAllSection(input)}
 </section>`;

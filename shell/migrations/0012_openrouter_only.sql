@@ -16,7 +16,7 @@
 CREATE TABLE model_price_rows (
   snapshot_id INTEGER NOT NULL REFERENCES price_snapshots (id) ON DELETE CASCADE,
   provider TEXT NOT NULL CHECK (provider IN ('openrouter')),
-  model TEXT NOT NULL,                 -- OpenRouter's model ID, e.g. openai/gpt-6-luna
+  model TEXT NOT NULL,                 -- OpenRouter's model ID, as its live list names it
   deployment TEXT NOT NULL,            -- 'global': OpenRouter routes each call itself
   region TEXT NOT NULL,                -- 'global'
   -- 'request': OpenRouter's fee per call, in USD per million calls.

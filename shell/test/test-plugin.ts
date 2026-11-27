@@ -39,7 +39,12 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
         if (returned.get("code") !== `code-for-${verifier}`) throw new ConnectProblem("That authorization was refused.");
         return { fields: { method: "oauth_pkce", key_hash: "a".repeat(64) }, secret: `issued-key-${verifier}` };
       },
-      testModel: "test-sonnet",
+      // The account's live list: the seeded models at their seeded prices.
+      readAccountModels: async () => [
+        { id: "test-luna", inputUsd: 0.1, outputUsd: 0.5, text: true, moderated: false },
+        { id: "test-mini", inputUsd: 0.25, outputUsd: 1, text: true, moderated: false },
+        { id: "test-sonnet", inputUsd: 3, outputUsd: 15, text: true, moderated: false },
+      ],
       canCall: (m) => !opts.cannotCall?.includes(m),
       notCallableReason: () => "the test plug-in cannot call it",
       replyModel: (body) => {

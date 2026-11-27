@@ -89,9 +89,11 @@ https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
 | Status | What the user sees |
 | --- | --- |
 | no key in the vault, 401 | the connection isn't set up yet, or was removed (Connect OpenRouter again) |
-| 402 | your OpenRouter account or this key is out of credits |
+| 402 | needs credit on OpenRouter: the account or this key has none left for this paid model (free models work without credit) |
 | 403 | OpenRouter refused this request for your account (moderation, a guardrail, privacy settings) |
+| "No endpoints found matching your data policy" (any status) | refused for your account: your OpenRouter privacy settings leave no provider for it, often a free model's; with a link to them |
 | 404 | that model ID doesn't exist here |
+| 429 "free-models-per-day" or "-per-min" | busy: OpenRouter's free-model limits (20 a minute; 50 a day under 10 credits bought, 1,000 from 10, https://openrouter.ai/docs/api-reference/limits, read 2026-11-27) |
 | 408, 429, 502, 503 | busy or out of quota, not a setup fault |
 | other | OpenRouter refused the test call, in its own words |
 
@@ -100,10 +102,32 @@ Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
 
 ## The Connect check (`check.ts`)
 
-After Connect, the test call runs by itself, on the plug-in's own test model
-(`openai/gpt-6-luna`, $0.10 in and $0.50 out per million tokens on
-2026-11-27; if OpenRouter stops listing it, the next of `TEST_MODELS`, else
-the first model it lists that the app can call), never on a model the user
+After Connect, the test call runs by itself. The app holds no model ID of its
+own (the owner, 2026-11-27: "not use a fixed hardcoded list of models but
+always query all models from the fucking provider"): each check reads the
+account's live list (`/api/v1/models/user`) with the user's own key, saves it
+as the account's list, and picks the test model from it by one stated rule
+(`test-model.ts`):
+
+- a candidate takes and gives text, has a list price, is not served by
+  moderated endpoints only, has no retirement date, and the price table
+  prices it;
+- cheapest means the lowest input plus output price; a tie goes to the larger
+  context, then to the ID in alphabetical order;
+- the cheapest paid model, unless OpenRouter says the account has no credit
+  (`GET /api/v1/key`: `is_free_tier`, "Whether the user has paid for credits
+  before", or a key `limit_remaining` of 0), when it is the cheapest free
+  model ($0 in and out). OpenRouter gives an app no account balance
+  (`/api/v1/credits` needs a management key), so otherwise the cheapest paid
+  model is tried, and a 402 moves the test to the cheapest free one;
+- a refusal of the model's own (busy, gone, its providers' data policy) hands
+  the test to the next cheapest of its group, at most three calls a check.
+
+The result names the model and why ("Tested on <model>: cheapest free model,
+because your OpenRouter account has no credit"), and the free-model requests
+left today where the key reports them (`free_model_daily_requests`). When the
+account's list cannot be read, the check fails with that plain reason: there
+is no built-in list to fall back to. The test is never on a model the user
 chose. Its reply is capped at 16 tokens. It is a real call through the proxy
 (`sendTestCall`), priced and written to the ledger (task `test_call`); it
 needs the model's price (it waits, and is tried again every 15 minutes, until

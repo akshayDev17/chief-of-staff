@@ -4,6 +4,7 @@
 //   GET  /chief-of-staff/models/setup/tasks
 //   POST /chief-of-staff/models/setup/tasks/accept    the one tap: every proposal is taken
 //   POST /chief-of-staff/models/setup/tasks/change    task, main, fallback (or none)
+//   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
 // Only the user's own passed models are offered (chosen one by one, or added
@@ -20,7 +21,10 @@
 // changed to any of the user's models, the Strongest included. A model known
 // to make no tool call (the plug-in's `noToolUse`, shown in the model list too)
 // reads "no tool use" wherever it is named, and a free model reads FREE_NOTE;
-// a free model is never proposed, only chosen with Change. Friend screens say "Admin" for
+// a free model is never proposed, only chosen: with Change, or with one tap
+// for every task that has no model and no proposal (a $0 account's passed
+// models are all free), which the page offers and explains, with the
+// provider's own terms for free models. Friend screens say "Admin" for
 // the owner and never "tier".
 //
 // TODO(T18): tasks name no tools yet. Once a task's agent sends tools, never
@@ -33,7 +37,8 @@ import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
 import { FREE_NOTE } from "./add";
-import { acceptProposals, changeTask, modelKey, onlyModel, readTaskRoutes, taskById, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
+import type { Link } from "../proxy/plugin";
+import { acceptProposals, changeTask, freeRoutes, modelKey, onlyModel, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
 
 export interface PickerPageInput {
   viewer: Viewer;
@@ -43,6 +48,8 @@ export interface PickerPageInput {
   providerName: (p: Provider) => string;
   // True for a model known to make no tool call.
   noToolUse: (m: { provider: Provider; model: string }) => boolean;
+  // The provider's own conditions on free models, shown when one is offered.
+  freeTerms?: { text: string; links: Link[] };
   problem?: string;
   said?: string;
 }
@@ -107,13 +114,31 @@ function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInp
   return `<td data-l="Main">${esc(modelName(route.main, input))}${tag}${note(route.main, false)}</td><td data-l="Fallback (another model)">${fallback}</td>`;
 }
 
+// The one tap for free models, where tasks have no model and no proposal.
+function freeTap(input: PickerPageInput): string {
+  const set = freeRoutes(input.offered, input.routes);
+  if (!set.length) return "";
+  const allFree = input.offered.every((m) => m.free);
+  const why = allFree
+    ? "Your models that passed are all free, so the app proposes none: a free model is never proposed, because it is rate-limited and its providers may log prompts."
+    : `${set.length === 1 ? "One task has" : `${set.length} tasks have`} no proposed model, and your free models can take ${set.length === 1 ? "it" : "them"}.`;
+  return `<div class="banner" role="note"><p style="margin:0 0 6px">${esc(why)} You can still use them: one tap sets ${set.length === TASKS.length ? "every task" : set.length === 1 ? "that task" : "those tasks"} to them, by the proposal's own rule (the cheapest at the task's strength, another free model as its fallback). You can change any task afterwards.</p>
+<form method="post" action="${TASK_MODELS_PATH}/use-free"><button type="submit" class="btn">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "that task" : "those tasks"}</button></form></div>`;
+}
+
+function freeTermsLine(input: PickerPageInput): string {
+  if (!input.freeTerms || !input.offered.some((m) => m.free)) return "";
+  const links = input.freeTerms.links.map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
+  return `<p class="small muted">Free models: ${esc(input.freeTerms.text)} ${links}</p>`;
+}
+
 export function renderPickerPage(input: PickerPageInput): string {
   const single = onlyModel(input.offered) !== undefined;
   const intro = !input.offered.length
     ? `<div class="banner warn">Choose a model first: only your own models that passed their test call are offered here. Choose one below a provider's passed Connect. <a href="${PROVIDERS_PATH}">Providers and models</a></div>`
     : single
       ? `<p>You have one model that passed, so every task uses it for now. Choose another model, or run Test all models on <a href="${PROVIDERS_PATH}">Providers and models</a>, and the app proposes a main model and a fallback for each task here.</p>`
-      : `<p>Each task gets a main model and a fallback, another of your models, at the suggested strength for that task, from the models that passed their test. When the main model's provider is busy or fails the call, the fallback answers it. To change a task, choose its provider and model. You can change any of them.${input.offered.some((m) => m.free) ? " A free model is never proposed: a task uses it only when you choose it with Change." : ""}</p>`;
+      : `<p>Each task gets a main model and a fallback, another of your models, at the suggested strength for that task, from the models that passed their test. When the main model's provider is busy or fails the call, the fallback answers it. To change a task, choose its provider and model. You can change any of them.${input.offered.some((m) => m.free) ? " A free model is never proposed: a task uses it only when you choose it, with Change or with the one tap for free models." : ""}</p>`;
   const head = single
     ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
     : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
@@ -157,6 +182,8 @@ ${body}
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
 ${intro}
+${freeTap(input)}
+${freeTermsLine(input)}
 ${table}
 <div class="row" style="margin-top:10px">${accept}<a class="btn${pending ? " secondary" : ""}" href="${BUDGETS_PATH}">Next: budget</a>${help}</div>
 </main>
@@ -197,7 +224,7 @@ fieldset.pair { border: 1px solid var(--line); border-radius: 8px; padding: 4px 
 fieldset.pair legend { padding: 0 4px; color: var(--muted); }
 `;
 
-const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|help))?$`);
+const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|use-free|help))?$`);
 
 export const isTaskModelsPath = (pathname: string): boolean => ROUTE.test(pathname);
 
@@ -221,7 +248,8 @@ export async function handleTaskModels(
     const { offered, routes } = await readTaskRoutes(db, userId);
     const providerName = (p: Provider) => plugins[p]?.connect.guide.short ?? PROVIDER_NAMES[p];
     const noToolUse = (m: { provider: Provider; model: string }) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
-    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, ...extra }), status);
+    const freeTerms = offered.filter((m) => m.free).map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
+    return html(renderPickerPage({ viewer, offered, routes, providerName, noToolUse, freeTerms, ...extra }), status);
   };
 
   if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });
@@ -238,6 +266,16 @@ export async function handleTaskModels(
   if (verb === "accept") {
     const n = await acceptProposals(db, userId, now);
     return page({ said: n ? `Accepted: ${n} ${n === 1 ? "task uses its" : "tasks use their"} proposed models.` : "There was nothing to accept." });
+  }
+  if (verb === "use-free") {
+    const set = await useFreeModels(db, userId, now);
+    const mains = [...new Set(set.map((s) => s.route.main.model))];
+    const said = !set.length
+      ? "There was nothing to set."
+      : set.length === TASKS.length && mains.length === 1
+        ? `Every task now uses ${mains[0]}. Change any task below.`
+        : `${set.length} ${set.length === 1 ? "task now uses a free model" : "tasks now use your free models"}. Change any task below.`;
+    return page({ said });
   }
   if (verb === "change") {
     const pair = (role: "main" | "fallback") => (field(`${role}_provider`) && field(`${role}_model`) ? modelKey({ provider: field(`${role}_provider`) as Provider, model: field(`${role}_model`) }) : "");

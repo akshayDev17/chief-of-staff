@@ -4,6 +4,7 @@
 //   readTaskRoutes(db, userId) -> TaskRoute[]     one per task, in TASKS order
 //   routeTask(db, userId, task) -> Route | undefined
 //   acceptProposals(db, userId, now)              the one tap
+//   useFreeModels(db, userId, now)                the one tap for free models, where nothing is proposed
 //   changeTask(db, userId, task, main, fallback?, now)
 //   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
 //
@@ -20,7 +21,11 @@
 // tier is proposed instead. A free model ($0 in and out, such as
 // OpenRouter's `:free` ones: rate-limited, and the provider may log prompts)
 // is never proposed, nor used as the one model: a task uses it only once the
-// user chooses it with Change. The proposal is used once the user accepts it;
+// user chooses it, with Change or, for every task with no model and no
+// proposal (all of a $0 account's passed models are free), with one tap
+// ("Use my free models for every task", the owner, 2026-11-27: "use only the
+// free models"), which picks by the proposal's own rule and saves the tasks
+// as the user's own choice. The proposal is used once the user accepts it;
 // an accepted task whose proposal has since changed (say a model at another
 // provider was added) is pending again and keeps its accepted models until
 // the next tap. Any task can be changed to any of the user's models, the
@@ -109,19 +114,29 @@ export const onlyModel = (offered: Offered[]): Offered | undefined => (offered.l
 const PREFERRED: Record<Task["tier"], readonly Tier[]> = { Smallest: ["Smallest", "Middle"], Middle: ["Middle", "Smallest"] };
 
 // The cheapest model at the nearest proposable strength, among `models`;
-// never a free one.
-function bestFor(task: Task, models: Offered[]): Offered | undefined {
+// never a free one unless `free` says to take only free ones.
+function bestFor(task: Task, models: Offered[], free = false): Offered | undefined {
   for (const tier of PREFERRED[task.tier]) {
-    const at = models.filter((m) => m.tier === tier && !m.free).sort((a, b) => (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) || modelKey(a).localeCompare(modelKey(b)));
+    const at = models.filter((m) => m.tier === tier && Boolean(m.free) === free).sort((a, b) => (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) || modelKey(a).localeCompare(modelKey(b)));
     if (at[0]) return at[0];
   }
   return undefined;
 }
 
-export function proposeRoute(task: Task, models: Offered[]): Route | undefined {
-  const main = bestFor(task, models);
+export function proposeRoute(task: Task, models: Offered[], free = false): Route | undefined {
+  const main = bestFor(task, models, free);
   if (!main) return undefined;
-  return { main, fallback: bestFor(task, models.filter((m) => modelKey(m) !== modelKey(main))) };
+  return { main, fallback: bestFor(task, models.filter((m) => modelKey(m) !== modelKey(main)), free) };
+}
+
+// The tasks with no model and no proposal, which the user's free models can
+// take with one tap, each with the route they would get.
+export function freeRoutes(offered: Offered[], routes: TaskRoute[]): Array<{ task: Task; route: Route }> {
+  return routes.flatMap((r) => {
+    if (r.current || r.proposal) return [];
+    const route = proposeRoute(r.task, offered, true);
+    return route ? [{ task: r.task, route }] : [];
+  });
 }
 
 const sameRoute = (a: Route, b: Route): boolean =>
@@ -199,6 +214,16 @@ export async function acceptProposals(db: D1Database, userId: string, now: Date)
   const pending = routes.filter((r) => r.pending);
   if (pending.length) await db.batch(pending.map((r) => prepareChoiceWrite(db, userId, r.task.id, r.proposal!, "accepted", now)));
   return pending.length;
+}
+
+// The one tap for free models: every task with no model and no proposal
+// takes the user's free models by the proposal's rule, saved as the user's
+// own choice (a later proposal never overwrites it). Returns the tasks set.
+export async function useFreeModels(db: D1Database, userId: string, now: Date): Promise<Array<{ task: Task; route: Route }>> {
+  const { offered, routes } = await readTaskRoutes(db, userId);
+  const set = freeRoutes(offered, routes);
+  if (set.length) await db.batch(set.map((s) => prepareChoiceWrite(db, userId, s.task.id, s.route, "changed", now)));
+  return set;
 }
 
 export type ChangeProblem = "no_such_task" | "not_your_model" | "same_model";

@@ -96,7 +96,7 @@ describe("Test all models", () => {
     const run = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(run.finishedAt).toBe(NOW.toISOString());
     expect(run.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "failed"], ["test-sonnet", "passed"]]);
-    expect(run.tests[1]!.result).toMatchObject({ reason: "no_credits", text: "Your Test openrouter account or this key is out of credits.", reply: { status: 402 } });
+    expect(run.tests[1]!.result).toMatchObject({ reason: "no_credits", text: "Needs credit on Test openrouter: your account or this key has none left for this paid model.", reply: { status: 402 } });
     expect(run.realCostUsd).toBeCloseTo(0.000251, 12);
     // Each test call is in the ledger under its own task; a run adds no model.
     expect(await readUserModels(env.DB, userId)).toEqual([]);
