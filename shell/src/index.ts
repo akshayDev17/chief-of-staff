@@ -61,7 +61,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleBudgets(request, env.DB, await readProviderPlugins(env, env.DB), user.id, now);
+      return handleBudgets(request, env.DB, await readProviderPlugins(env, env.DB), user.id, now, { secrets: vaultSecrets(env.DB, env) });
     }
     // Models › Setup › Providers, for the signed-in user. Access lets only
     // the owner in until invitations bring friends (T45), so every viewer

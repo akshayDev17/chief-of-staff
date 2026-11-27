@@ -92,7 +92,9 @@ describe("Models › Setup › Budgets", () => {
     expect(response.headers.get("location")).toBe(`${BASE}?per_day=5`);
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 31, setHow: "accepted" });
     const html = await (await send("?per_day=5")).text();
-    expect(html).toContain("Budget set: $31 a month · $0.00 spent since the 1st");
+    expect(html).toContain('<p class="ok-line">Budget set: $31 a month</p>');
+    // The month's spend is the budget bar's; with no key in the vault it is the app's own count.
+    expect(html).toContain("$0.00 of $31 · $31.00 left");
     expect(html).not.toContain("Until it is set");
   });
 

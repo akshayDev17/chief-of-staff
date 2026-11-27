@@ -7,8 +7,9 @@
 // before any task has one, the dearest model the user picked there) and the
 // design's tokens per application (budgets.ts) at the volume the user plans.
 // The user accepts it with one tap or types their own; until then the card
-// says the provider's models cannot be called. The Usage page, not built
-// yet, is named but not linked.
+// says the provider's models cannot be called. Once it is set, the card shows
+// the month's spend against it as the budget bar (budget-bar.ts). The Usage
+// page, not built yet, is named but not linked.
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { isProvider, type Provider } from "../prices/types";
@@ -23,8 +24,10 @@ import {
   type Budget,
   type Suggestion,
 } from "./budgets";
-import { connectedProviders } from "./connections";
-import type { PluginRegistry } from "./plugin";
+import { BAR_CSS, BAR_JS, readKeyFigure, renderBudgetBar, type KeyFigure } from "./budget-bar";
+import { connectedProviders, readConnection } from "./connections";
+import type { SecretStore } from "../providers/secrets";
+import type { ConnectionFields, PluginRegistry } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
@@ -34,6 +37,9 @@ export interface ProviderBudgetCard {
   budget?: Budget;
   spentThisMonth: number;
   suggestion?: Suggestion;
+  // OpenRouter's own figure for the key, read once the budget is set.
+  key?: KeyFigure;
+  connection?: ConnectionFields;
 }
 
 export interface BudgetsPageInput {
@@ -44,7 +50,6 @@ export interface BudgetsPageInput {
 }
 
 const dollars = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
-const cents = (n: number) => `$${n.toFixed(2)}`;
 
 function card(c: ProviderBudgetCard, applicationsADay: number): string {
   const name = PROVIDER_NAMES[c.provider];
@@ -55,9 +60,13 @@ function card(c: ProviderBudgetCard, applicationsADay: number): string {
 <p class="small">Basis: ${applicationsADay} application${applicationsADay === 1 ? "" : "s"} a day, if this provider carried every task, at ${esc(s.model)}'s list prices from the app's price table and the design's tokens per application. Replaced by the figures measured in practice mode.</p>`
     : `<p class="small muted">No suggestion yet: it is worked out from the list price of a model you pick at this provider (<a href="${PROVIDERS_PATH}">choose one on its Connect screen</a>).</p>`;
   const set = c.budget
-    ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month · ${cents(c.spentThisMonth)} spent since the 1st</p>`
+    ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month</p>`
     : "";
   const unset = c.budget ? "" : `<p class="small muted">Until it is set, this provider's models cannot be called.</p>`;
+  const bar =
+    c.budget && c.key
+      ? renderBudgetBar({ budgetUsd: c.budget.monthlyUsd, ledgerUsd: c.spentThisMonth, key: c.key, budgetHref: `#amount-${c.provider}`, connection: c.connection })
+      : "";
   const hidden = `<input type="hidden" name="provider" value="${c.provider}">
 <input type="hidden" name="per_day" value="${applicationsADay}">`;
   const accept = s
@@ -68,6 +77,7 @@ ${hidden}
     : "";
   return `<section class="card"><h3>${name}</h3>
 ${set}
+${bar}
 ${suggestion}
 <div class="row">
 ${accept}
@@ -92,7 +102,7 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Models · Budgets · Chief of staff</title>
-<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${BAR_CSS}</style>
 </head>
 <body>
 <main class="screen">
@@ -110,6 +120,8 @@ ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</
 ${cards}
 <p class="small muted">A budget is any amount more than $0 a month.</p>
 </main>
+<script>${BAR_JS}
+</script>
 </body>
 </html>`;
 }
@@ -130,15 +142,26 @@ export function parseApplicationsADay(text: string | null): number {
   return text && Number.isInteger(n) && n >= 1 && n <= 100 ? n : DEFAULT_APPLICATIONS_A_DAY;
 }
 
-async function pageInput(db: D1Database, userId: string, applicationsADay: number, now: Date): Promise<BudgetsPageInput> {
+export interface KeyReader {
+  secrets: SecretStore;
+  fetcher?: typeof fetch;
+}
+
+async function pageInput(db: D1Database, userId: string, applicationsADay: number, now: Date, reader: KeyReader): Promise<BudgetsPageInput> {
   const providers = (await connectedProviders(db, userId)).filter(isProvider);
   const cards = await Promise.all(
-    providers.map(async (provider) => ({
-      provider,
-      budget: await readBudget(db, userId, provider),
-      spentThisMonth: await monthSpend(db, userId, provider, now),
-      suggestion: await suggestBudget(db, await pickedModels(db, userId, provider), applicationsADay),
-    })),
+    providers.map(async (provider): Promise<ProviderBudgetCard> => {
+      const budget = await readBudget(db, userId, provider);
+      const connection = await readConnection(db, userId, provider);
+      return {
+        provider,
+        budget,
+        spentThisMonth: await monthSpend(db, userId, provider, now),
+        suggestion: await suggestBudget(db, await pickedModels(db, userId, provider), applicationsADay),
+        ...(budget ? { key: await readKeyFigure(reader.secrets, userId, now, reader.fetcher) } : {}),
+        connection,
+      };
+    }),
   );
   return { cards, applicationsADay };
 }
@@ -149,10 +172,17 @@ const html = (body: string, status = 200) => new Response(body, { status, header
 // or, when none is typed, the accepted suggestion, re-runs that provider's
 // test call if it was waiting for a spent budget, then shows the page again.
 // Scoped to the signed-in user throughout.
-export async function handleBudgets(request: Request, db: D1Database, plugins: PluginRegistry, userId: string, now: Date): Promise<Response> {
+export async function handleBudgets(
+  request: Request,
+  db: D1Database,
+  plugins: PluginRegistry,
+  userId: string,
+  now: Date,
+  reader: KeyReader,
+): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET") {
-    return html(renderBudgetsPage(await pageInput(db, userId, parseApplicationsADay(url.searchParams.get("per_day")), now)));
+    return html(renderBudgetsPage(await pageInput(db, userId, parseApplicationsADay(url.searchParams.get("per_day")), now, reader)));
   }
   // A form posted from another site is refused.
   const origin = request.headers.get("origin");
@@ -165,7 +195,7 @@ export async function handleBudgets(request: Request, db: D1Database, plugins: P
   const applicationsADay = parseApplicationsADay(field("per_day"));
   const provider = field("provider");
   const refuse = async (problem: string) =>
-    html(renderBudgetsPage({ ...(await pageInput(db, userId, applicationsADay, now)), problem }), 400);
+    html(renderBudgetsPage({ ...(await pageInput(db, userId, applicationsADay, now, reader)), problem }), 400);
   if (!isProvider(provider) || !(await connectedProviders(db, userId)).includes(provider)) {
     return refuse("That provider is not connected.");
   }
