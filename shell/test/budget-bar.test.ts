@@ -192,9 +192,11 @@ describe("the bar on the Models pages", () => {
   });
 });
 
-// Runs the bar's own tap script against a small stand-in for the browser's
-// DOM: just the elements and calls the script uses.
-type Listener = (e: { key?: string; target?: unknown }) => void;
+// Runs the bar's own script against a small stand-in for the browser's DOM:
+// just the elements and calls the script uses. Each part is followed by its
+// label, which holds one link.
+type Event = { key?: string; target?: unknown; relatedTarget?: unknown };
+type Listener = (e: Event) => void;
 
 function element(attrs: Record<string, string> = {}) {
   const listeners: Record<string, Listener[]> = {};
@@ -203,25 +205,51 @@ function element(attrs: Record<string, string> = {}) {
     getAttribute(n: string) { return this.attrs[n] ?? null; },
     setAttribute(n: string, v: string) { this.attrs[n] = v; },
     addEventListener(type: string, fn: Listener) { (listeners[type] ??= []).push(fn); },
-    fire(type: string, e: { key?: string; target?: unknown } = {}) {
+    fire(type: string, e: Event = {}) {
       for (const fn of listeners[type] ?? []) fn({ target: this, ...e });
     },
   };
 }
 
+type El = ReturnType<typeof element>;
+
 function tapBar() {
-  const segs = ["real", "est", "left"].map((id) => element({ "data-region": id, "aria-expanded": "false" }));
-  const outside = element();
-  const bar = Object.assign(element(), { querySelectorAll: () => segs, contains: (n: unknown) => n === bar || segs.includes(n as never) });
-  const document = Object.assign(element(), { querySelectorAll: () => [bar] });
+  // The browser shows a focus ring (:focus-visible) for keyboard focus only.
+  let keyboard = false;
+  const document = Object.assign(element(), { activeElement: null as unknown, querySelectorAll: () => [bar] });
+  const focusable = (el: El) =>
+    Object.assign(el, {
+      matches: (sel: string) => sel === ":focus-visible" && keyboard && document.activeElement === el,
+      focus() { moveFocus(el); },
+    });
+  const links = ["real", "est", "left"].map(() => focusable(element()));
+  const tips = links.map((link) => Object.assign(element(), { contains: (n: unknown) => n === link }));
+  const segs = ["real", "est", "left"].map((id, i) =>
+    focusable(Object.assign(element({ "data-region": id, "aria-expanded": "false" }), { nextElementSibling: tips[i]! })),
+  );
+  const outside = focusable(element());
+  const inBar = (n: unknown) => segs.includes(n as never) || links.includes(n as never);
+  const bar = Object.assign(element(), { querySelectorAll: () => segs, contains: (n: unknown) => n === bar || inBar(n) });
+  // focusout bubbles to the bar from the element losing focus; focus does not bubble.
+  function moveFocus(to: El) {
+    const from = document.activeElement;
+    if (from === to) return;
+    if (inBar(from)) bar.fire("focusout", { target: from, relatedTarget: to });
+    document.activeElement = to;
+    to.fire("focus");
+  }
   new Function("document", BAR_JS)(document);
-  // A click on a part bubbles up to the document, as in a browser.
-  const click = (target: ReturnType<typeof element>) => {
+  // A tap focuses the part without a focus ring, then the click bubbles up to the document.
+  const click = (target: El) => {
+    keyboard = false;
+    if (segs.includes(target as never)) moveFocus(target);
     target.fire("click");
     document.fire("click", { target });
   };
+  const tab = (to: El) => { keyboard = true; moveFocus(to); };
+  const press = (key: string) => { keyboard = true; bar.fire("keydown", { key }); };
   const open = () => segs.filter((s) => s.attrs["aria-expanded"] === "true").map((s) => s.attrs["data-region"]);
-  return { segs, outside, bar, document, click, open };
+  return { segs, links, outside, document, click, tab, press, open };
 }
 
 describe("tapping a part of the bar", () => {
@@ -248,12 +276,44 @@ describe("tapping a part of the bar", () => {
     expect(t.open()).toEqual([]);
   });
 
-  it("closes the label on Escape", () => {
+  it("closes the label on Escape, though the tapped part keeps focus", () => {
     const t = tapBar();
     t.click(t.segs[2]!);
-    t.bar.fire("keydown", { key: "Enter" });
+    t.press("Enter");
     expect(t.open()).toEqual(["left"]);
-    t.bar.fire("keydown", { key: "Escape" });
+    t.press("Escape");
     expect(t.open()).toEqual([]);
+    expect(t.document.activeElement).toBe(t.segs[2]);
+  });
+});
+
+describe("tabbing through the bar", () => {
+  it("opens a part's label on focus and keeps it open while focus is on the label's link", () => {
+    const t = tapBar();
+    t.tab(t.segs[0]!);
+    expect(t.open()).toEqual(["real"]);
+    t.tab(t.links[0]!);
+    expect(t.open()).toEqual(["real"]);
+    t.tab(t.segs[1]!);
+    expect(t.open()).toEqual(["est"]);
+    t.tab(t.links[1]!);
+    t.tab(t.outside);
+    expect(t.open()).toEqual([]);
+  });
+
+  it("closes the label on Escape from a focused part", () => {
+    const t = tapBar();
+    t.tab(t.segs[1]!);
+    t.press("Escape");
+    expect(t.open()).toEqual([]);
+  });
+
+  it("closes the label on Escape from its link, and puts focus back on the part", () => {
+    const t = tapBar();
+    t.tab(t.segs[2]!);
+    t.tab(t.links[2]!);
+    t.press("Escape");
+    expect(t.open()).toEqual([]);
+    expect(t.document.activeElement).toBe(t.segs[2]);
   });
 });

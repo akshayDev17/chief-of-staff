@@ -195,7 +195,7 @@ export const BAR_CSS = `
 .bb-tip > div { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font-size: .85rem; line-height: 1.45; box-shadow: 0 4px 14px rgba(0, 0, 0, .12); overflow-wrap: anywhere; }
 .bb-go { display: block; margin-top: 4px; }
 @media (hover: hover) { .bb-seg:hover + .bb-tip, .bb-tip:hover { display: block; } }
-.bb-seg:focus-visible + .bb-tip, .bb-tip:focus-within, .bb-seg[aria-expanded="true"] + .bb-tip { display: block; }
+.bb-seg[aria-expanded="true"] + .bb-tip { display: block; }
 .bb-key { display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; margin: 0; padding: 0; font-size: .85rem; }
 .bb-key li { display: flex; align-items: center; gap: 6px; }
 .bb-sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); flex: none; }
@@ -204,15 +204,25 @@ export const BAR_CSS = `
 `;
 
 // Tapping a part opens its label and tapping it again, elsewhere, or Escape
-// closes it; hover and focus need no script (BAR_CSS).
+// closes it. Keyboard focus on a part opens its label too, and it stays open
+// while focus moves into the label's links; hover needs no script (BAR_CSS).
 export const BAR_JS = `
 document.querySelectorAll("[data-budget-bar]").forEach(function (bar) {
   var segs = Array.prototype.slice.call(bar.querySelectorAll(".bb-seg"));
   function show(id) { segs.forEach(function (s) { s.setAttribute("aria-expanded", String(s.getAttribute("data-region") === id)); }); }
+  function opened() { return segs.filter(function (s) { return s.getAttribute("aria-expanded") === "true"; })[0]; }
+  function within(s, n) { return n === s || s.nextElementSibling.contains(n); }
   segs.forEach(function (s) {
     s.addEventListener("click", function () { show(s.getAttribute("aria-expanded") === "true" ? "" : s.getAttribute("data-region")); });
+    s.addEventListener("focus", function () { if (s.matches(":focus-visible")) show(s.getAttribute("data-region")); });
   });
+  bar.addEventListener("focusout", function (e) { var s = opened(); if (s && e.relatedTarget && !within(s, e.relatedTarget)) show(""); });
   document.addEventListener("click", function (e) { if (!bar.contains(e.target)) show(""); });
-  bar.addEventListener("keydown", function (e) { if (e.key === "Escape") show(""); });
+  bar.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    var s = opened();
+    if (s && s.nextElementSibling.contains(document.activeElement)) s.focus();
+    show("");
+  });
 });
 `;
