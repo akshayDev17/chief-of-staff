@@ -7,7 +7,7 @@ name: Release shell
 # rollback and the restore steps.
 #
 # Its Cloudflare and GitHub setup is the portfolio-app tool's, as for every
-# app on akshayprabhakant.com: the route's two Access applications and the
+# app on akshayprabhakant.com: the route's Access application and the
 # GitHub environment `production` (README "Cloudflare Access"). Until that
 # environment holds the deploy token and the Access application's AUD tag,
 # the release stops after the tests with a plain message naming what is

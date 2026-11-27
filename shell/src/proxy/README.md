@@ -26,7 +26,7 @@ method (`connect`, see `src/providers/README.md`), its price source
 
 The one real plug-in is OpenRouter's (`src/providers/openrouter.ts`);
 `test/test-plugin.ts` is the test-only one. A refusal the plug-in reads as
-the grant removed (`connect.classify` says `not_set_up`: OpenRouter's 401, or
+the key removed (`connect.classify` says `not_set_up`: OpenRouter's 401, or
 no key in the vault) records the connection as revoked, for T49's alert
 (`src/providers/revoked.ts`).
 

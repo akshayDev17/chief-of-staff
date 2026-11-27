@@ -75,8 +75,9 @@ design-v3 section 10.3). Two parts:
   `akshayprabhakant.com/chief-of-staff/*`. The second application the plan
   had, a Bypass policy on the app's former OpenID Connect issuer documents
   (`/chief-of-staff/oidc/...`), is no longer needed: the issuer was removed
-  on 2026-11-27, and the owner may take it out of the tool's plan. The tool also puts the deploy secrets
-  in the repository's GitHub environment `production` (below). So the
+  on 2026-11-27, and the owner may take it out of the tool's plan. The tool
+  also puts the deploy secrets in the repository's GitHub environment
+  `production` (below). So the
   deploy token needs no Access permission, and no address of the owner's is
   in this repository or its secrets.
 - **The check in the Worker** (`shell/src/access.ts`), run first on every
@@ -160,6 +161,7 @@ release keeps it:
   Without it, Connect OpenRouter says the app's own side is not set up
   (missing VAULT_KEY). Never rotate it casually: it unwraps every user's
   vault key.
+
 `ISSUER_KEYS` (the removed issuer's key) and `ENTRA_CERT_KEY` are no longer
 read; the owner may delete them with `npx wrangler secret delete`.
 
