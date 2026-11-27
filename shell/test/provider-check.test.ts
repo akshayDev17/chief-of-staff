@@ -662,9 +662,9 @@ describe("Refresh model list", () => {
 
     const page = await (await open(plugins, at(1))).text();
     // Refreshed this minute: the button is off until the next one.
-    expect(page).toContain("<button type=\"submit\" class=\"btn small\" disabled>Refresh model list</button>");
+    expect(page).toContain("<button type=\"submit\" class=\"btn small refresh\" disabled>Refresh model list</button>");
     expect(page).toContain("Refresh it again from 10:02 UTC.");
-    expect(await (await open(plugins, at(2))).text()).toContain("<button type=\"submit\" class=\"btn small\">Refresh model list</button>");
+    expect(await (await open(plugins, at(2))).text()).toContain("<button type=\"submit\" class=\"btn small refresh\">Refresh model list</button>");
     expect(page).toContain("Bedrock's model list read 10:01 UTC on 2026&#8209;11&#8209;25 · your AWS account checked 10:01 UTC.");
     const haiku = entry(page, "Claude Haiku 4.5");
     expect(haiku).toContain("accept terms on first pick · needs Anthropic&#39;s form");
@@ -679,6 +679,14 @@ describe("Refresh model list", () => {
     expect(reads).toHaveLength(1);
     expect(controlPlane(sent)).toHaveLength(2);
     expect((await refresh(plugins, at(2), readCatalog)).status).toBe(303);
+
+    // Refreshed at 10:03:30: the time shown is the minute the button turns back on.
+    expect((await refresh(plugins, at(3.5), readCatalog)).status).toBe(303);
+    const waiting = await (await open(plugins, at(4.25))).text();
+    expect(waiting).toContain("<button type=\"submit\" class=\"btn small refresh\" disabled>Refresh model list</button>");
+    expect(waiting).toContain("Refresh it again from 10:05 UTC.");
+    expect(await (await refresh(plugins, at(4.25), readCatalog)).text()).toContain("refresh it again from 10:05 UTC.");
+    expect((await refresh(plugins, at(4.5), readCatalog)).status).toBe(303);
   });
 
   it("notes Anthropic's form only on the Claude models older than Claude Opus 4.7, as the guide says", () => {

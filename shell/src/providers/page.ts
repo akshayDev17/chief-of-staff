@@ -287,7 +287,6 @@ label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
 .seg > a + a { border-left: 1px solid var(--line); }
 .seg > a:hover { background: var(--accent-soft); }
 .seg > a.on, .seg > a.on + a { border-left-color: var(--accent); }
-.seg > a:first-child.on { border-left: 0; }
 .seg > a.on { background: var(--accent); color: var(--card); }
 .seg > a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 759px) {
@@ -302,8 +301,8 @@ label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
 .btn.small { font-size: .85rem; min-height: 28px; padding: 3px 9px; }
 .btn.ghost { background: transparent; color: var(--text); border-color: var(--line); }
 .btn[aria-disabled] { opacity: .55; cursor: default; }
-.btn:not(.ghost):not(.help-btn):not(.danger):hover { filter: brightness(.85); }
-.btn:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+.btn.refresh:not(:disabled):hover { filter: brightness(.85); }
+.btn.refresh:disabled { opacity: .55; cursor: not-allowed; }
 .btn.danger { background: var(--danger-btn); border-color: var(--danger-btn); color: #fff; }
 .btn.danger:hover { background: var(--danger-btn-hover); border-color: var(--danger-btn-hover); }
 .btn.danger:focus-visible { outline-color: var(--danger-btn); }

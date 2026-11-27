@@ -174,6 +174,12 @@ export async function readAccountStates(
 
 const hhmm = (iso: string): string => `${iso.slice(11, 16)} UTC`;
 
+// The minute a refresh after the one at checkedAt may run, or undefined once it may.
+export function refreshAgainFrom(checkedAt: string, now: Date): string | undefined {
+  const next = new Date(checkedAt).getTime() + REFRESH_SECONDS * 1000;
+  return next > now.getTime() ? hhmm(new Date(Math.ceil(next / 60_000) * 60_000).toISOString()) : undefined;
+}
+
 const updateNote = (): string =>
   `Update the stack for live account checks: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose Update, then Replace existing template with the app's template ${ACCOUNT_CHECKS_SINCE}, as the guide's last step says. Until then each model's account state is unknown; choosing one still runs its test call.`;
 
@@ -192,8 +198,8 @@ export async function refreshBedrockModels(
   const connection = await readConnection(db, userId, "bedrock");
   if (!plugin || !connection) return { kind: "not_connected", problem: "Amazon Bedrock is not connected." };
   const last = await readAccountCheck(db, userId);
-  const next = last ? new Date(new Date(last.checkedAt).getTime() + REFRESH_SECONDS * 1000) : undefined;
-  if (next && next > now) return { kind: "too_soon", problem: `The list was refreshed at ${hhmm(last!.checkedAt)}; refresh it again from ${hhmm(next.toISOString())}.` };
+  const again = last ? refreshAgainFrom(last.checkedAt, now) : undefined;
+  if (again) return { kind: "too_soon", problem: `The list was refreshed at ${hhmm(last!.checkedAt)}; refresh it again from ${again}.` };
 
   // (a) The model list, at most once a minute for everyone.
   const snapshot = await currentSnapshot(db);
