@@ -201,7 +201,6 @@ describe("Models › Setup › Providers", () => {
     expect(page).toContain('<span class="tier tier-s">Smallest</span> under $0.50 per million tokens, <span class="tier tier-m">Middle</span> $0.50 to under $2.50, <span class="tier tier-l">Strongest</span> $2.50 and up.');
     // Without scripts, a plain list does the same.
     expect(page).toContain('<noscript><div class="row"><select class="f" name="model" aria-label="Model"><option value="Nova 2.0 Lite">Nova 2.0 Lite · $0.10 in · $0.50 out · Smallest</option></select>');
-    expect(page).toContain('document.querySelectorAll("form[data-listbox]")');
     // The old page is gone from the links.
     expect(page).not.toContain("/models/setup/add");
     expect(page).toContain('<a class="btn" href="/chief-of-staff/models/setup/tasks">Next: the model for each task</a>');

@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addModel } from "../src/models/add";
 import { PROVIDERS_PATH } from "../src/paths";
 import { handleProviders } from "../src/providers/page";
-import { readAccountCheck } from "../src/providers/bedrock-account";
+import { accessNotes, readAccountCheck } from "../src/providers/bedrock-account";
 import type { BedrockCatalog, CatalogRead } from "../src/providers/bedrock-catalog";
 import { readBedrockOffer } from "../src/providers/bedrock-catalog";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
@@ -676,6 +676,25 @@ describe("Refresh model list", () => {
     expect(reads).toHaveLength(1);
     expect(controlPlane(sent)).toHaveLength(2);
     expect((await refresh(plugins, at(2), readCatalog)).status).toBe(303);
+  });
+
+  it("notes Anthropic's form only on the Claude models older than Claude Opus 4.7, as the guide says", () => {
+    const check = { checkedAt: at(1).toISOString(), form: "not_filled" as const, models: {} };
+    expect(accessNotes("Claude Haiku 4.5", check)).toEqual(["needs Anthropic's form"]);
+    expect(accessNotes("Claude 3.5 Sonnet", check)).toEqual(["needs Anthropic's form"]);
+    expect(accessNotes("Claude Opus 4.7", check)).toEqual([]);
+    expect(accessNotes("Claude Sonnet 5.5", check)).toEqual([]);
+    expect(accessNotes(TEST_MODEL, check)).toEqual([]);
+    expect(accessNotes("Claude Haiku 4.5", { ...check, form: "filled" })).toEqual([]);
+    const guide = bedrockPlugin({}).connect.guide.steps.join(" ");
+    expect(guide).toContain("For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.");
+  });
+
+  it("answers 400, not 429, when Bedrock is not connected", async () => {
+    const { plugins } = awsWorld();
+    const response = await refresh(plugins, at(1));
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Amazon Bedrock is not connected.");
   });
 
   it("marks each model's state unknown on a stack older than 1.2.0, with the update to make, and reads nothing in the account", async () => {

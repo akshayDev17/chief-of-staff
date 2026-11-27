@@ -98,6 +98,22 @@ export function olderTemplate(version: string | undefined, than: string): boolea
   return i !== -1 && a![i]! < b![i]!;
 }
 
+// Anthropic's one-time use-case form gates the Claude models older than this
+// one (Bedrock's model access guide, read 2026-11-27); the guide's step and
+// each entry's "needs Anthropic's form" note both read it here.
+export const FORM_FREE_FROM = "Claude Opus 4.7";
+
+const claudeVersion = (model: string): number[] | undefined => {
+  const m = /^claude\b\D*(\d+)(?:\.(\d+))?/i.exec(model);
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : undefined;
+};
+
+export function needsAnthropicForm(model: string): boolean {
+  const version = claudeVersion(model);
+  const [major, minor] = claudeVersion(FORM_FREE_FROM)!;
+  return version !== undefined && (version[0]! < major! || (version[0] === major && version[1]! < minor!));
+}
+
 // The geography prefix of a cross-Region inference profile, from the region
 // the app calls from.
 export function geography(region: string): string {
@@ -228,7 +244,7 @@ export function bedrockPlugin(env: BedrockEnv, fetcher: typeof fetch = fetch, no
         'Scroll to the bottom and tick <strong>"I acknowledge that AWS CloudFormation might create IAM resources with custom names."</strong> This is for the one role, chief-of-staff-model-caller, which can call models and accept Bedrock models\' Marketplace terms on first use.',
         "Press <strong>Create stack</strong>.",
         "Wait until the stack's status reads CREATE_COMPLETE, which takes about a minute.",
-        "The Connect test call always runs on Amazon Nova 2 Lite, which AWS sells itself, whatever models you choose. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on the first call to it, when you choose it, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+        `The Connect test call always runs on Amazon Nova 2 Lite, which AWS sells itself, whatever models you choose. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on the first call to it, when you choose it, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than ${FORM_FREE_FROM}, AWS also asks its one-time use-case form.`,
         "The form is expected and is filled once per AWS account (or once in an AWS Organization's management account). An individual may enter their own name, a personal site or GitHub profile as the website, and a plain personal use case.",
         "Go back to the Chief of staff tab and finish the Connect step so the test call runs.",
         "Once it passes, choose your models in the list below it: each runs its own test call once. <strong>Refresh model list</strong> reads Bedrock's list again now and checks, in your own account, which models still need their terms accepted or Anthropic's form.",

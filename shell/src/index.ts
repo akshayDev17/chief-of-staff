@@ -94,10 +94,10 @@ export default {
         readCatalog: (at) => readBedrockCatalog(fetch, env, regionOf(env), at),
       });
     }
-    // The old Models › Setup › Add a model page and its forms: models are
-    // chosen on each provider's Connect screen now, so they lead there.
-    if (url.pathname === ADD_MODEL_PATH || url.pathname.startsWith(`${ADD_MODEL_PATH}/`)) {
-      const provider = url.searchParams.get("provider") ?? /^\/([a-z]+)\//.exec(url.pathname.slice(ADD_MODEL_PATH.length))?.[1];
+    // The old Models › Setup › Add a model page: models are chosen on each
+    // provider's Connect screen now, so it leads there.
+    if (url.pathname === ADD_MODEL_PATH && request.method === "GET") {
+      const provider = url.searchParams.get("provider");
       return Response.redirect(`${url.origin}${PROVIDERS_PATH}${provider && /^[a-z]+$/.test(provider) ? `?provider=${provider}` : ""}`, 303);
     }
     // Models › Setup › Model for each task, for the signed-in user (T18);

@@ -435,8 +435,8 @@ export async function handleProviders(
     }
     case "refresh": {
       if (provider !== "bedrock") return new Response(null, { status: 404 });
-      const problem = await refreshBedrockModels(db, plugins, { userId, readCatalog: input.readCatalog, now });
-      return problem ? page({ problem, selected: provider }, 429) : back(provider);
+      const refused = await refreshBedrockModels(db, plugins, { userId, readCatalog: input.readCatalog, now });
+      return refused ? page({ problem: refused.problem, selected: provider }, refused.kind === "too_soon" ? 429 : 400) : back(provider);
     }
     case "model-help": {
       // "Ask Admin for help" on a chosen model: its name and the plain

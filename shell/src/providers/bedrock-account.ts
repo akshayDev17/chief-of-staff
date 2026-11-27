@@ -3,7 +3,7 @@
 // models it offers, so each entry of the model list can say what a pick will
 // meet before the user picks it.
 //
-//   refreshBedrockModels(db, plugins, { userId, readCatalog, now }) -> problem | undefined
+//   refreshBedrockModels(db, plugins, { userId, readCatalog, now }) -> RefreshProblem | undefined
 //   readAccountCheck(db, userId) -> AccountCheck | undefined
 //   readAccountStates(fetcher, credentials, region, now, modelIds) -> AccountStates
 //   accessNotes(model, check) -> string[]      the entry's notes
@@ -45,7 +45,7 @@ import { readConnection } from "../proxy/connections";
 import type { PluginRegistry } from "../proxy/plugin";
 import { readCheck } from "./check";
 import { signV4, withoutHost, type AwsCredentials } from "./aws";
-import { olderTemplate, STACK_NAME } from "./bedrock";
+import { needsAnthropicForm, olderTemplate, STACK_NAME } from "./bedrock";
 import { readBedrockOffer, REVIEWED, type BedrockCatalog, type CatalogRead, type ReviewedModels } from "./bedrock-catalog";
 
 // The first template whose role can read the account's model states.
@@ -177,19 +177,23 @@ const hhmm = (iso: string): string => `${iso.slice(11, 16)} UTC`;
 const updateNote = (): string =>
   `Update the stack for live account checks: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose Update, then Replace existing template with the app's template ${ACCOUNT_CHECKS_SINCE}, as the guide's last step says. Until then each model's account state is unknown; choosing one still runs its test call.`;
 
+// Why nothing was read: no Bedrock connection, or a refresh less than a
+// minute ago.
+export type RefreshProblem = { kind: "not_connected" | "too_soon"; problem: string };
+
 // The refresh. Returns a plain problem when nothing was read.
 export async function refreshBedrockModels(
   db: D1Database,
   plugins: PluginRegistry,
   input: { userId: string; readCatalog?: (now: Date) => Promise<CatalogRead>; now: Date },
-): Promise<string | undefined> {
+): Promise<RefreshProblem | undefined> {
   const { userId, now } = input;
   const plugin = plugins.bedrock;
   const connection = await readConnection(db, userId, "bedrock");
-  if (!plugin || !connection) return "Amazon Bedrock is not connected.";
+  if (!plugin || !connection) return { kind: "not_connected", problem: "Amazon Bedrock is not connected." };
   const last = await readAccountCheck(db, userId);
   const next = last ? new Date(new Date(last.checkedAt).getTime() + REFRESH_SECONDS * 1000) : undefined;
-  if (next && next > now) return `The list was refreshed at ${hhmm(last!.checkedAt)}; refresh it again from ${hhmm(next.toISOString())}.`;
+  if (next && next > now) return { kind: "too_soon", problem: `The list was refreshed at ${hhmm(last!.checkedAt)}; refresh it again from ${hhmm(next.toISOString())}.` };
 
   // (a) The model list, at most once a minute for everyone.
   const snapshot = await currentSnapshot(db);
@@ -257,6 +261,6 @@ export function accessNotes(model: string, check: AccountCheck | undefined): str
     if (access.entitlement === "NOT_AVAILABLE") notes.push("no entitlement in this account");
     if (access.region === "NOT_AVAILABLE") notes.push("not available in this region");
   }
-  if (check.form === "not_filled" && /^claude\b/i.test(model)) notes.push("needs Anthropic's form");
+  if (check.form === "not_filled" && needsAnthropicForm(model)) notes.push("needs Anthropic's form");
   return notes;
 }

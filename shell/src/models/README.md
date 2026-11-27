@@ -26,7 +26,8 @@ nothing to type:
   coloured label (Smallest, Middle, Strongest) that also names it in words;
 - notes: added, no tool use, and on Bedrock what the last **Refresh model
   list** read of the user's own account ("accept terms on first pick",
-  "needs Anthropic's form", `src/providers/bedrock-account.ts`). These notes
+  "needs Anthropic's form" on the Claude models older than Claude Opus 4.7,
+  `src/providers/bedrock-account.ts`). These notes
   never block a choice: only a test call proves a model answers.
 
 Foundry calls a model by the user's deployment name: each entry names the
