@@ -239,6 +239,7 @@ const FREE_TERMS_LINKS: Link[] = [
 // "Get total credits purchased and used for the authenticated user.
 // [Management key] required", https://openrouter.ai/docs/api-reference/get-credits,
 // read 2026-11-27, so the app cannot read the balance). The key reports
+// `label`, as saved on OpenRouter (the user may change the prefilled one);
 // `is_free_tier`, "Whether the user has paid for credits before";
 // `organization_id`, "The ID of the organization that owns this API key, or
 // null when an individual account owns it"; `workspace_id`, "The ID of the
@@ -262,6 +263,7 @@ export function accountOf(body: unknown): AccountInfo | undefined {
   const id = (v: unknown) => (typeof v === "string" && v ? v : undefined);
   return {
     freeTier: d.is_free_tier,
+    ...(id(d.label) ? { label: id(d.label) } : {}),
     ...(id(d.organization_id) ? { organizationId: id(d.organization_id) } : {}),
     ...(id(d.workspace_id) ? { workspaceId: id(d.workspace_id) } : {}),
     ...(limit !== undefined ? { limitUsd: limit, ...(remaining !== undefined ? { limitRemainingUsd: remaining } : {}) } : {}),
@@ -341,7 +343,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
   return {
     provider: "openrouter",
     version: "openrouter-2026-11-27",
-    connectionFields: ["method", "key_hash", "key_label"],
+    connectionFields: ["method", "key_hash"],
     priceSource: ["openrouter-models"],
 
     async mintCredential(_connection: ConnectionFields, { userId }) {
@@ -409,19 +411,18 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
 
       async start({ callbackUrl, consentState, creditLimitUsd, now }) {
         const verifier = makeVerifier();
-        const label = keyLabelAt(now);
         const url = new URL(OPENROUTER_AUTH_URL);
         url.searchParams.set("callback_url", callbackUrl);
         url.searchParams.set("code_challenge", await challengeOf(verifier));
         url.searchParams.set("code_challenge_method", "S256");
-        url.searchParams.set("key_label", label);
+        url.searchParams.set("key_label", keyLabelAt(now));
         // "a positive amount below 1,000,000 with at most two decimal places".
         url.searchParams.set("limit", (Math.min(999_999.99, Math.max(0.01, Math.round(creditLimitUsd * 100) / 100))).toFixed(2));
         url.searchParams.set("state", consentState);
-        return { open: url.toString(), verifier, pending: { key_label: label } };
+        return { open: url.toString(), verifier };
       },
 
-      async finish(verifier, returned, pending) {
+      async finish(verifier, returned) {
         const code = returned.get("code");
         if (!code) throw new ConnectProblem("OpenRouter sent you back without an authorization. Tap Connect OpenRouter again, and tap Authorize on OpenRouter's page.");
         let response: Response;
@@ -441,8 +442,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
           const said = response.ok ? "it sent no key" : `${response.status} ${errorFromBody(response.status, body).message}`.trim();
           throw new ConnectProblem(`OpenRouter did not accept that authorization (${said}). Codes last 10 minutes: tap Connect OpenRouter again.`);
         }
-        // The label prefilled on OpenRouter's page; the user may have changed it there.
-        return { fields: { method: "oauth_pkce", key_hash: await sha256Hex(key), key_label: pending.key_label || KEY_LABEL }, secret: key };
+        return { fields: { method: "oauth_pkce", key_hash: await sha256Hex(key) }, secret: key };
       },
 
       canCall: callable,

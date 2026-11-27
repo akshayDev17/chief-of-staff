@@ -21,7 +21,7 @@ const memorySecrets = (key?: string): SecretStore => {
 describe("Connect OpenRouter: OAuth PKCE", () => {
   it("sends the user to OpenRouter's own page with an S256 challenge, the state, the dated label and the credit limit", async () => {
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch());
-    const { open, verifier, pending } = await plugin.connect.start({ callbackUrl: "https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented", consentState: "s1", creditLimitUsd: 31, now: new Date("2026-11-27T14:05:59Z") });
+    const { open, verifier } = await plugin.connect.start({ callbackUrl: "https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented", consentState: "s1", creditLimitUsd: 31, now: new Date("2026-11-27T14:05:59Z") });
     const url = new URL(open);
     expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
     expect(url.searchParams.get("callback_url")).toBe("https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented");
@@ -30,30 +30,27 @@ describe("Connect OpenRouter: OAuth PKCE", () => {
     expect(url.searchParams.get("state")).toBe("s1");
     // Each Connect mints a new key, so each label names when it was made.
     expect(url.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 14:05 UTC");
-    expect(pending).toEqual({ key_label: "Chief of staff · 2026-11-27 14:05 UTC" });
     expect(url.searchParams.get("limit")).toBe("31.00");
     // RFC 7636: 43 to 128 characters of the unreserved set; never sent to the browser.
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
     expect(open).not.toContain(verifier);
   });
 
-  it("trades the code and verifier for the key, and keeps only its hash and label on the record", async () => {
+  it("trades the code and verifier for the key, and keeps only its hash on the record", async () => {
     const fetcher = fakeFetch();
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fetcher);
-    const issued = await plugin.connect.finish("the-verifier", new URLSearchParams({ code: "c1", state: "s1" }), { key_label: "Chief of staff · 2026-11-27 14:05 UTC" });
+    const issued = await plugin.connect.finish("the-verifier", new URLSearchParams({ code: "c1", state: "s1" }));
     expect(fetcher.sent[0]).toMatchObject({ url: "https://openrouter.ai/api/v1/auth/keys", method: "POST", body: { code: "c1", code_verifier: "the-verifier", code_challenge_method: "S256" } });
     expect(issued.secret).toBe(ISSUED_KEY);
-    expect(issued.fields).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY), key_label: "Chief of staff · 2026-11-27 14:05 UTC" });
+    expect(issued.fields).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY) });
     expect(JSON.stringify(issued.fields)).not.toContain(ISSUED_KEY);
     expect(plugin.connect.guide.revokeLinks(issued.fields).map((l) => l.href)).toEqual(["https://openrouter.ai/settings/keys", `https://openrouter.ai/keys/${issued.fields.key_hash}`]);
-    // A consent opened before labels were dated gets the plain label.
-    expect((await plugin.connect.finish("v", new URLSearchParams({ code: "c2" }), {})).fields.key_label).toBe("Chief of staff");
   });
 
   it("refuses a return with no code, and an exchange OpenRouter refuses, in plain words", async () => {
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch({ keys: () => Response.json({ error: { code: 403, message: "Invalid code or code_verifier" } }, { status: 403 }) }));
-    await expect(plugin.connect.finish("v", new URLSearchParams({ state: "s" }), {})).rejects.toThrow(ConnectProblem);
-    await expect(plugin.connect.finish("v", new URLSearchParams({ code: "c" }), {})).rejects.toThrow(/403 Invalid code or code_verifier.*10 minutes/);
+    await expect(plugin.connect.finish("v", new URLSearchParams({ state: "s" }))).rejects.toThrow(ConnectProblem);
+    await expect(plugin.connect.finish("v", new URLSearchParams({ code: "c" }))).rejects.toThrow(/403 Invalid code or code_verifier.*10 minutes/);
   });
 });
 
@@ -127,8 +124,8 @@ describe("the model list and plain reasons", () => {
   });
 
   it("reads the account behind the key: never bought credits, who owns the key, its limit and spend", async () => {
-    expect(accountOf({ data: { is_free_tier: true, organization_id: null, workspace_id: "ws-1", limit: 10, limit_remaining: 9.65, limit_reset: null, usage: 0.35, usage_monthly: 0.35, free_model_daily_requests: { used: 17, limit: 50, remaining: 33 } } })).toEqual({
-      freeTier: true, workspaceId: "ws-1", limitUsd: 10, limitRemainingUsd: 9.65, usageUsd: 0.35, usageMonthlyUsd: 0.35, freeDaily: { used: 17, limit: 50, remaining: 33 },
+    expect(accountOf({ data: { label: "Chief of staff · 2026-11-27 14:05 UTC", is_free_tier: true, organization_id: null, workspace_id: "ws-1", limit: 10, limit_remaining: 9.65, limit_reset: null, usage: 0.35, usage_monthly: 0.35, free_model_daily_requests: { used: 17, limit: 50, remaining: 33 } } })).toEqual({
+      freeTier: true, label: "Chief of staff · 2026-11-27 14:05 UTC", workspaceId: "ws-1", limitUsd: 10, limitRemainingUsd: 9.65, usageUsd: 0.35, usageMonthlyUsd: 0.35, freeDaily: { used: 17, limit: 50, remaining: 33 },
     });
     expect(accountOf({ data: { is_free_tier: false, organization_id: "org-1", limit: null, limit_remaining: null, usage: 2 } })).toEqual({ freeTier: false, organizationId: "org-1", usageUsd: 2 });
     expect(accountOf({ data: {} })).toBeUndefined();

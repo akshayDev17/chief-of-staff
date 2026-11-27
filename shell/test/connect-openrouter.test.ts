@@ -87,9 +87,8 @@ describe("Connect OpenRouter", () => {
     // The verifier waits in the vault, never in the check row or the URL.
     const check = await readCheck(env.DB, userId, "openrouter");
     expect(check?.consentState).toBe(auth.searchParams.get("state"));
-    // The dated label waits with the consent, until OpenRouter sends the user back.
+    // Each key's label names when Connect was tapped.
     expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 10:00 UTC");
-    expect(check?.pendingFields).toEqual({ key_label: "Chief of staff · 2026-11-27 10:00 UTC" });
     const { results } = await env.DB.prepare("SELECT name FROM vault_items WHERE user_id = ?").bind(userId).all<{ name: string }>();
     expect(results.map((r) => r.name)).toEqual(["provider-verifier:openrouter"]);
   });
@@ -106,7 +105,7 @@ describe("Connect OpenRouter", () => {
     expect(back.status).toBe(303);
     // Straight to the model test, highlighted by its anchor.
     expect(back.headers.get("location")).toBe(`${BASE}?provider=openrouter#test`);
-    expect(await readConnection(env.DB, userId, "openrouter")).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY), key_label: "Chief of staff · 2026-11-27 10:00 UTC" });
+    expect(await readConnection(env.DB, userId, "openrouter")).toEqual({ method: "oauth_pkce", key_hash: await sha256Hex(ISSUED_KEY) });
     const check = await readCheck(env.DB, userId, "openrouter");
     expect(check).toMatchObject({ state: "passed", passedAt: NOW.toISOString() });
     expect(check?.consentState).toBeUndefined();
@@ -237,7 +236,8 @@ describe("Connect OpenRouter", () => {
   });
 
   it("Disconnect deletes the key from the vault, the record and the check, and opens that exact key's page on OpenRouter", async () => {
-    await connect();
+    // The owner renamed the key on OpenRouter's page: the dialog names it as saved there.
+    await connect({ currentKey: () => keyReply({ label: "Laptop key" }) });
     const hash = await sha256Hex(ISSUED_KEY);
     const keyPage = `https://openrouter.ai/keys/${hash}`;
     const confirm = await (await get("?provider=openrouter&disconnect=1")).text();
@@ -245,17 +245,17 @@ describe("Connect OpenRouter", () => {
     // One line, with a button to the key's own page; the key itself never reaches the page.
     expect(visibleLines(dialog)).toEqual(["Disconnect OpenRouter?", "The app deletes the key from your vault.", "Also delete this key on OpenRouter.", "Open its page", "Cancel", "Disconnect"]);
     expect(dialog).toContain(`<a class="btn small" href="${keyPage}" target="_blank" rel="noopener noreferrer">Open its page</a>`);
-    expect(dialog).toContain("This key is “Chief of staff · 2026-11-27 10:00 UTC” on OpenRouter.");
+    expect(dialog).toContain("This key is “Laptop key” on OpenRouter.");
     expect(dialog).toContain("OpenRouter&#39;s delete-a-key API takes only your own management key");
     expect(confirm).not.toContain(ISSUED_KEY);
     for (const line of visibleLines(dialog)) expect(words(line), line).toBeLessThanOrEqual(12);
     const gone = await post("/openrouter/disconnect");
     expect(gone.status).toBe(303);
-    expect(gone.headers.get("location")).toBe(`${BASE}?provider=openrouter&disconnected=1&key=${hash}`);
+    expect(gone.headers.get("location")).toBe(`${BASE}?provider=openrouter&disconnected=1`);
     const after = await (await handle(new Request(gone.headers.get("location")!))).text();
     const box = after.match(/<div class="tc tc-sw" role="status">[\s\S]*?<\/details><\/div>/)![0];
-    expect(visibleLines(box)).toEqual(["Disconnected.", "Also delete this key on OpenRouter.", "Open its page"]);
-    expect(box).toContain(`href="${keyPage}"`);
+    expect(visibleLines(box)).toEqual(["Disconnected.", "Also delete the key on OpenRouter.", "Your keys on OpenRouter"]);
+    expect(box).toContain('href="https://openrouter.ai/settings/keys"');
     expect(box).toContain("The key stays valid on OpenRouter until you delete it there");
     expect(after).not.toContain(ISSUED_KEY);
     expect(await readConnection(env.DB, userId, "openrouter")).toBeUndefined();
@@ -264,13 +264,14 @@ describe("Connect OpenRouter", () => {
     expect((await env.DB.prepare("SELECT count(*) AS n FROM vault_items").first<{ n: number }>())!.n).toBe(0);
   });
 
-  it("after Disconnect, links only a well-formed key hash, else the list of keys", async () => {
-    for (const key of ["", "&key=nothex", `&key=${"a".repeat(63)}`, `&key=${"a".repeat(64)}"><script>`]) {
-      const html = await (await get(`?provider=openrouter&disconnected=1${key}`)).text();
-      const box = html.match(/<div class="tc tc-sw" role="status">[\s\S]*?<\/details><\/div>/)![0];
-      expect(visibleLines(box), key).toEqual(["Disconnected.", "Also delete the key on OpenRouter.", "Your keys on OpenRouter"]);
-      expect(box).toContain('href="https://openrouter.ai/settings/keys"');
-      expect(box).not.toContain("<script>");
+  it("names no key label when OpenRouter's reply cannot be read or holds none, and still opens the key's page", async () => {
+    for (const currentKey of [() => new Response(null, { status: 500 }), () => keyReply({ label: "" })]) {
+      await connect({ currentKey });
+      const confirm = await (await get("?provider=openrouter&disconnect=1")).text();
+      expect(confirm).not.toContain("This key is");
+      expect(confirm).not.toContain("Key on OpenRouter:");
+      expect(confirm).toContain(`href="https://openrouter.ai/keys/${await sha256Hex(ISSUED_KEY)}"`);
+      await post("/openrouter/disconnect");
     }
   });
 
@@ -280,13 +281,15 @@ describe("Connect OpenRouter", () => {
     expect(before).toContain("OpenRouter&#39;s flow has no way to reuse one");
     await connect();
     await post("/openrouter/disconnect");
-    fetcher = fakeFetch();
+    // OpenRouter saves the prefilled label on the key it mints.
+    let saved = "";
+    fetcher = fakeFetch({ currentKey: () => keyReply({ label: saved }) });
     const later = new Date("2026-11-28T09:30:00Z");
     const start = await post("/openrouter/connect", {}, { now: later });
     const auth = new URL(start.headers.get("location")!);
-    expect(auth.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-28 09:30 UTC");
+    saved = auth.searchParams.get("key_label")!;
+    expect(saved).toBe("Chief of staff · 2026-11-28 09:30 UTC");
     await get(`/openrouter/consented?code=code-2&state=${auth.searchParams.get("state")}`, { now: later });
-    expect((await readConnection(env.DB, userId, "openrouter"))?.key_label).toBe("Chief of staff · 2026-11-28 09:30 UTC");
     const confirm = await (await get("?provider=openrouter&disconnect=1", { now: later })).text();
     expect(confirm).toContain("This key is “Chief of staff · 2026-11-28 09:30 UTC” on OpenRouter.");
     expect(confirm).toContain("Key on OpenRouter: “Chief of staff · 2026-11-28 09:30 UTC”");

@@ -23,15 +23,12 @@
 // disabled on the provider's side, for T49's urgent alert. Rows written
 // before 2026-11-27 can hold `failed` and an old test result, which nothing
 // reads any more: a stored connection that is not revoked is connected.
-// While the user is on the consent page, `pending_fields` holds the
-// connection's non-secret fields fixed at Connect (OpenRouter: the key's
-// dated label), written to the connection when the provider returns.
 
 import { AppNotConfigured } from "../app-config";
 import type { Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
-import { deleteConnection, readConnection, writeConnection } from "../proxy/connections";
-import { ConnectProblem, type ConnectionFields, type PlainReason, type PluginRegistry, type ProviderPlugin } from "../proxy/plugin";
+import { deleteConnection, writeConnection } from "../proxy/connections";
+import { ConnectProblem, type PlainReason, type PluginRegistry, type ProviderPlugin } from "../proxy/plugin";
 import { deleteAccountList, refreshAccountList } from "../models/account-list";
 import type { SecretStore } from "./secrets";
 
@@ -48,9 +45,8 @@ export interface Check {
   passedAt?: string;
   revokedAt?: string;
   // While the user is on the provider's consent page: the state value it
-  // must send back, and the fields fixed when it was opened.
+  // must send back.
   consentState?: string;
-  pendingFields?: ConnectionFields;
 }
 
 interface CheckRecord {
@@ -59,7 +55,6 @@ interface CheckRecord {
   passed_at: string | null;
   revoked_at: string | null;
   consent_state: string | null;
-  pending_fields: string | null;
 }
 
 const toCheck = (r: CheckRecord): Check => ({
@@ -68,12 +63,11 @@ const toCheck = (r: CheckRecord): Check => ({
   passedAt: r.passed_at ?? undefined,
   revokedAt: r.revoked_at ?? undefined,
   consentState: r.consent_state ?? undefined,
-  pendingFields: r.pending_fields ? (JSON.parse(r.pending_fields) as ConnectionFields) : undefined,
 });
 
 export async function readCheck(db: D1Database, userId: string, provider: string): Promise<Check | undefined> {
   const r = await db
-    .prepare("SELECT provider, state, passed_at, revoked_at, consent_state, pending_fields FROM provider_checks WHERE user_id = ? AND provider = ?")
+    .prepare("SELECT provider, state, passed_at, revoked_at, consent_state FROM provider_checks WHERE user_id = ? AND provider = ?")
     .bind(userId, provider)
     .first<CheckRecord>();
   return r ? toCheck(r) : undefined;
@@ -83,13 +77,12 @@ export async function readCheck(db: D1Database, userId: string, provider: string
 async function saveCheck(db: D1Database, userId: string, c: Check): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO provider_checks (user_id, provider, state, result, checked_at, next_try_at, passed_at, revoked_at, consent_state, pending_fields)
-       VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?6, ?7)
+      `INSERT INTO provider_checks (user_id, provider, state, result, checked_at, next_try_at, passed_at, revoked_at, consent_state)
+       VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?6)
        ON CONFLICT (user_id, provider) DO UPDATE SET state = excluded.state, result = NULL, checked_at = NULL, next_try_at = NULL,
-         passed_at = excluded.passed_at, revoked_at = excluded.revoked_at, consent_state = excluded.consent_state,
-         pending_fields = excluded.pending_fields`,
+         passed_at = excluded.passed_at, revoked_at = excluded.revoked_at, consent_state = excluded.consent_state`,
     )
-    .bind(userId, c.provider, c.state, c.passedAt ?? null, c.revokedAt ?? null, c.consentState ?? null, c.pendingFields ? JSON.stringify(c.pendingFields) : null)
+    .bind(userId, c.provider, c.state, c.passedAt ?? null, c.revokedAt ?? null, c.consentState ?? null)
     .run();
 }
 
@@ -154,7 +147,7 @@ export async function connectProvider(
     throw error;
   }
   const before = await readCheck(db, input.userId, input.provider);
-  await saveCheck(db, input.userId, { ...(before ?? { provider: input.provider, state: "checking" }), consentState, pendingFields: start.pending });
+  await saveCheck(db, input.userId, { ...(before ?? { provider: input.provider, state: "checking" }), consentState });
   return { open: start.open };
 }
 
@@ -186,7 +179,7 @@ export async function finishConsent(
     const verifier = await secrets.read(input.userId, input.provider, "verifier");
     await secrets.remove(input.userId, input.provider, "verifier");
     if (!verifier) return notThis;
-    issued = await plugin.connect.finish(verifier, input.returned, check.pendingFields ?? {});
+    issued = await plugin.connect.finish(verifier, input.returned);
     await secrets.put(input.userId, input.provider, "key", issued.secret, input.now);
   } catch (error) {
     if (error instanceof ConnectProblem) return { problem: error.message };
@@ -205,14 +198,11 @@ export async function finishConsent(
 // provider's models stop answering for this user at once. The key itself
 // stays valid on the provider's side until the user deletes it there:
 // OpenRouter's delete-a-key API takes only a management key (openrouter.ts),
-// so the app cannot. Returns the record it removed, read before anything
-// goes, so the screen can still link the key's own page on the provider.
-export async function disconnectProvider(db: D1Database, secrets: SecretStore, userId: string, provider: Provider): Promise<ConnectionFields | undefined> {
-  const removed = await readConnection(db, userId, provider);
+// so the app cannot.
+export async function disconnectProvider(db: D1Database, secrets: SecretStore, userId: string, provider: Provider): Promise<void> {
   await secrets.remove(userId, provider, "key");
   await secrets.remove(userId, provider, "verifier");
   await deleteConnection(db, userId, provider);
   await deleteAccountList(db, userId, provider);
   await db.prepare("DELETE FROM provider_checks WHERE user_id = ? AND provider = ?").bind(userId, provider).run();
-  return removed;
 }

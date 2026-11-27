@@ -23,8 +23,9 @@ read 2026-11-27):
    (`<APP_ORIGIN>/chief-of-staff/models/setup/providers/openrouter/consented`),
    the S256 `code_challenge`, `state`, `key_label` and `limit`. The label is
    dated, `Chief of staff · 2026-11-27 14:05 UTC` (UTC, when Connect was
-   tapped), because every Authorize mints a new key (below); it waits on the
-   check row's `pending_fields` until OpenRouter sends the user back. `limit` is
+   tapped), because every Authorize mints a new key (below). The app does not
+   store it: the user may change it on OpenRouter's page, so the screen reads
+   the saved label live from `GET /api/v1/key`'s `label`. `limit` is
    the user's monthly OpenRouter budget in the app, or $10 before one is set.
    It is the key's own credit limit on OpenRouter, separate from the app's
    monthly budget: the user can change it, or give it a reset period (say
@@ -41,8 +42,8 @@ read 2026-11-27):
 3. The key goes straight into the user's vault (`secrets.ts`, `src/vault.ts`:
    the user's own AES-256-GCM key, wrapped by the vault key `VAULT_KEY`). It
    is never shown, logged, put in an error message or sent to the browser.
-   The connection record holds only `method` (`oauth_pkce`), `key_label` and
-   `key_hash`, the key's SHA-256, which names the key's own page on OpenRouter
+   The connection record holds only `method` (`oauth_pkce`) and `key_hash`,
+   the key's SHA-256, which names the key's own page on OpenRouter
    (`https://openrouter.ai/keys/<hash>`, as OpenRouter's PKCE page builds it).
 4. No test call runs by itself (the owner, 2026-11-27). The account's own
    model list is read with the new key (`src/models/account-list.ts`; it costs
@@ -63,8 +64,7 @@ No OpenRouter page offers a key a way to delete itself, and `GET /api/v1/key`
 returns no hash. So Disconnect's confirmation says "Also delete this key on
 OpenRouter." with **Open its page**, `https://openrouter.ai/keys/<key_hash>`
 from the record; the key never reaches the browser. The page Disconnect
-returns to links the same page (its hash rides the address as `&key=`, shown
-only when it is 64 hex characters), else https://openrouter.ai/settings/keys.
+returns to links https://openrouter.ai/settings/keys.
 
 **A new key each time.** Reconnecting cannot reuse a key within OpenRouter's
 documented flow: each Authorize trades a fresh code "for a user-controlled

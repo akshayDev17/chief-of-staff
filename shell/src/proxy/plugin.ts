@@ -105,6 +105,8 @@ export interface Failure {
 export interface AccountInfo {
   // The account has never bought credit (OpenRouter's `is_free_tier`).
   freeTier: boolean;
+  // The key's label on the provider, as saved there.
+  label?: string;
   // Who owns the key: the user's own account, or an organization (its ID).
   organizationId?: string;
   // The workspace the key spends in, when the provider names one.
@@ -152,9 +154,6 @@ export interface Guide {
 export interface ConnectStart {
   open: string;
   verifier: string;
-  // Non-secret connection fields fixed when the consent page is opened (the
-  // key's label, say), kept with the pending consent and handed to `finish`.
-  pending?: ConnectionFields;
 }
 
 export interface ConnectMethod {
@@ -164,11 +163,11 @@ export interface ConnectMethod {
   // limit to prefill on the key the provider issues, which the user can
   // change there; `now` is when the user tapped Connect.
   start(context: { callbackUrl: string; consentState: string; creditLimitUsd: number; now: Date }): Promise<ConnectStart>;
-  // Back from the consent page, with the verifier and pending fields `start` made: the
+  // Back from the consent page, with the verifier `start` made: the
   // connection's non-secret fields and the key the provider issued. Throws a
   // ConnectProblem, with a plain message, when the page refused or its answer
   // cannot be trusted.
-  finish(verifier: string, returned: URLSearchParams, pending: ConnectionFields): Promise<{ fields: ConnectionFields; secret: string }>;
+  finish(verifier: string, returned: URLSearchParams): Promise<{ fields: ConnectionFields; secret: string }>;
   // Whether the plug-in can call the model: the provider still lists it.
   // A model the user added that the provider has dropped is shown as "not
   // offered yet" with `notCallableReason`, never picked.

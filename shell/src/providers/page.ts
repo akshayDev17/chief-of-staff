@@ -3,7 +3,7 @@
 // one provider since 2026-11-27), each with its action lines, its
 // connection, its account line and, once connected, the model test.
 //
-//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1|&disconnected=1[&key=<hash>]][&test-all=confirm][&tests=all|works|fails]
+//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1|&disconnected=1][&test-all=confirm][&tests=all|works|fails]
 //   POST /chief-of-staff/models/setup/providers/<id>/connect      to the provider's own consent page
 //   GET  /chief-of-staff/models/setup/providers/<id>/consented    back from it: the key into the vault, then to #test
 //   POST /chief-of-staff/models/setup/providers/<id>/disconnect
@@ -33,11 +33,10 @@
 // 30seconds?"). The Usage page, not built yet, is named but not linked.
 //
 // The app cannot delete the key on OpenRouter (openrouter.ts, "Revoking"), so
-// Disconnect's confirmation, and the page it returns to, open that exact
-// key's page there, named by the SHA-256 hash the record holds; the key
-// itself never reaches the browser. The hash rides the return address
-// (`&key=`), since the record is gone by then, and is shown only when it is
-// 64 hex characters.
+// Disconnect's confirmation opens that exact key's page there, named by the
+// SHA-256 hash the record holds; the key itself never reaches the browser.
+// The page Disconnect returns to links the list of keys. The key's label is
+// the one OpenRouter saved, read live with the account.
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
 import { addModel, listOffer, readUserModels, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
@@ -86,10 +85,8 @@ export interface ProvidersPageInput {
   panels: ProviderPanel[];
   selected: Provider;
   confirmDisconnect: boolean;
-  // Back from Disconnect: the key is gone from the vault; the removed
-  // connection's key hash, when it had one.
+  // Back from Disconnect: the key is gone from the vault.
   disconnected: boolean;
-  disconnectedKeyHash?: string;
   confirmTestAll: boolean;
   testsFilter: TestsFilter;
   problem?: string;
@@ -186,7 +183,7 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const help = input.viewer === "friend" ? postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
   const gone = input.disconnected
     ? `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Disconnected.</strong></p>
-${alsoDeleteLine(plugin, input.disconnectedKeyHash ? { key_hash: input.disconnectedKeyHash } : undefined)}
+${alsoDeleteLine(plugin, undefined)}
 <details class="more"><summary>Details</summary><p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p></details></div>`
     : "";
   if (!connection) return `${gone}${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
@@ -194,7 +191,8 @@ ${alsoDeleteLine(plugin, input.disconnectedKeyHash ? { key_hash: input.disconnec
   const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
   const revokeLinks = g.revokeLinks(connection).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
   const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
-  const label = connection.key_label ? `<li>This key is “${esc(connection.key_label)}” on ${esc(g.short)}.</li>` : "";
+  const keyLabel = panel.account && panel.account !== "unread" ? panel.account.label : undefined;
+  const label = keyLabel ? `<li>This key is “${esc(keyLabel)}” on ${esc(g.short)}.</li>` : "";
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
 <p class="small">The app deletes the key from your vault.</p>
@@ -210,7 +208,7 @@ ${alsoDeleteLine(plugin, connection)}
       : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
   const budget = panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
   const keyDetails = `<details class="more"><summary>Key and budget</summary><ul class="small about">
-${connection.key_label ? `<li>Key on ${esc(g.short)}: “${esc(connection.key_label)}”</li>` : ""}<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
+${keyLabel ? `<li>Key on ${esc(g.short)}: “${esc(keyLabel)}”</li>` : ""}<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
 <li>To revoke the key on ${esc(g.short)}: ${esc(g.revoke)} ${revokeLinks}</li>
 </ul></details>`;
   const note = input.viewer === "friend" ? `<p class="small muted">Only you see ${esc(g.short)}'s replies.</p>${passed ? "" : postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small")}` : "";
@@ -387,7 +385,6 @@ async function pageInput(
     selected,
     confirmDisconnect: url.searchParams.get("disconnect") === "1",
     disconnected: url.searchParams.get("disconnected") === "1",
-    disconnectedKeyHash: url.searchParams.get("key") ?? undefined,
     confirmTestAll: url.searchParams.get("test-all") === "confirm",
     testsFilter,
     problem: extra.problem,
@@ -479,11 +476,9 @@ export async function handleProviders(
       if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
       return "open" in outcome ? Response.redirect(outcome.open, 303) : back(provider);
     }
-    case "disconnect": {
-      const removed = await disconnectProvider(db, secrets, userId, provider);
-      const hash = removed?.key_hash && /^[0-9a-f]{64}$/.test(removed.key_hash) ? `&key=${removed.key_hash}` : "";
-      return back(provider, `&disconnected=1${hash}`);
-    }
+    case "disconnect":
+      await disconnectProvider(db, secrets, userId, provider);
+      return back(provider, "&disconnected=1");
     case "choose": {
       if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
       const outcome = await addModel(db, plugins, { userId, provider, model: field("model"), now });
