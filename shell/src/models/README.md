@@ -140,8 +140,22 @@ price, where the reply reported none, is marked estimated, and so is a row
 written before the ledger recorded how it was costed. The test calls appear
 as the tasks "Model tests" and "Test all models".
 
-Both tables list the dearest first, ties by name. With nothing to show yet,
-the page highlights one next action, the first missing: Connect OpenRouter,
-then Set a budget, then Test a model. After a Disconnect the month's figures
-stay, and the page says they are from before it, with Connect OpenRouter as
-its next action.
+Both tables list the dearest first, ties by name, in a fixed order with no
+sort control. Per model scrolls inside its own box, about ten rows tall (fewer
+on a phone), with its column header and its "This month" foot pinned; over
+ten rows a search sits above it (any part of the name, maker or ID, a live
+count, Clear when nothing matches). The search runs in the page only, with no
+request and the address unchanged; without scripts it stays hidden and the
+box holds the whole list. Per task, a row per task, stays a plain table.
+
+When OpenRouter's figure for the current key and the app's count differ, one
+line under the figures says why, with the detail collapsed: each Connect makes
+a new key and records when (`connected_at`), so this month's calls from before
+then were made with an earlier key and are not in its figure. When those do
+not account for the difference, the line says only that the two differ and
+that the app's count is what stops calls.
+
+With nothing to show yet, the page highlights one next action, the first
+missing: Connect OpenRouter, then Set a budget, then Test a model. After a
+Disconnect the month's figures stay, and the page says they are from before
+it, with Connect OpenRouter as its next action.
