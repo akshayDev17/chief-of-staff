@@ -71,6 +71,9 @@ const entry = (html: string, id: string): string => {
   return at < 0 ? "" : html.slice(at, html.indexOf("</li>", at));
 };
 
+const after = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
+const snapshots = async () => (await env.DB.prepare("SELECT count(*) AS n FROM price_snapshots").first<{ n: number }>())!.n;
+const failedAlerts = async () => (await env.DB.prepare("SELECT count(*) AS n FROM price_alerts WHERE kind = 'refresh_failed'").first<{ n: number }>())!.n;
 const modelListReads = () => fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models").length;
 
 // The current list as the previous Worker stored it: no version, the music
@@ -142,27 +145,28 @@ describe("a $0 OpenRouter account", () => {
     expect(modelListReads()).toBe(1);
   });
 
-  it("tries a failing OpenRouter at most once a minute for a list that predates the rules, and keeps the stored list", async () => {
+  it("tries a failing OpenRouter once every 15 minutes for a list that predates the rules, storing no snapshot and keeping the stored list", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     const before = await storeOldCatalog();
+    const snapshotsBefore = await snapshots();
+    const alertsBefore = await failedAlerts();
     fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY, models: () => new Response("down", { status: 503 }) });
     const first = await get();
     expect(first.status).toBe(200);
     // The model list still shows, from the stored list.
     expect(entry(await first.text(), FREE)).not.toBe("");
     expect(modelListReads()).toBe(1);
-    expect((await readCurrentCatalog(env.DB))!.models).toEqual(before.models);
-    const alerts = async () => (await env.DB.prepare("SELECT count(*) AS n FROM price_alerts WHERE kind = 'refresh_failed'").first<{ n: number }>())!.n;
-    const alerted = await alerts();
-    for (const seconds of [1, 20, 59]) expect((await get("", new Date(NOW.getTime() + seconds * 1000))).status).toBe(200);
+    for (const seconds of [1, 20, 59, 14 * 60 + 59]) expect((await get("", after(seconds))).status).toBe(200);
     expect(modelListReads()).toBe(1);
-    expect(await alerts()).toBe(alerted);
-    await get("", new Date(NOW.getTime() + 61_000));
+    expect(await failedAlerts()).toBe(alertsBefore + 1);
+    await get("", after(15 * 60));
     expect(modelListReads()).toBe(2);
+    expect(await failedAlerts()).toBe(alertsBefore + 2);
+    expect(await snapshots()).toBe(snapshotsBefore);
     expect((await readCurrentCatalog(env.DB))!.models).toEqual(before.models);
   });
 
-  it("runs no queued test on a list that predates the rules: the minute cron reads it again, once a minute, then never calls the music model", async () => {
+  it("runs no queued test on a list that predates the rules: 15 failed minutes store nothing and raise one alert, then a good read lets the tests run without the music model", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     expect((await post("/openrouter/test-all")).status).toBe(303);
     // A run queued before the deploy, on a list that let the music model through.
@@ -171,18 +175,22 @@ describe("a $0 OpenRouter account", () => {
     await storeOldCatalog();
     const queued = async () => (await readTestAll(env.DB, userId, "openrouter"))!.tests.filter((t) => t.state === "queued").length;
     const before = await queued();
+    const snapshotsBefore = await snapshots();
+    const alertsBefore = await failedAlerts();
 
     fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY, models: () => new Response("down", { status: 503 }) });
-    await minuteCron(NOW, fetcher);
-    await minuteCron(new Date(NOW.getTime() + 30_000), fetcher);
+    for (let minute = 0; minute < 15; minute++) await minuteCron(after(minute * 60), fetcher);
     expect(modelListReads()).toBe(1);
+    expect(await snapshots()).toBe(snapshotsBefore);
+    expect(await failedAlerts()).toBe(alertsBefore + 1);
     expect(chatModels()).toEqual([]);
     expect(await queued()).toBe(before);
     expect((await readCurrentCatalog(env.DB))!.version).toBeUndefined();
 
     fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
-    for (let minute = 1; (await queued()) > 0 && minute < 30; minute++) await minuteCron(new Date(NOW.getTime() + minute * 61_000), fetcher);
+    for (let minute = 15; (await queued()) > 0 && minute < 45; minute++) await minuteCron(after(minute * 60), fetcher);
     expect(modelListReads()).toBe(1);
+    expect(await snapshots()).toBe(snapshotsBefore + 1);
     expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)!.blocked).toBeDefined();
     const done = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(done.done).toBe(done.tests.length);

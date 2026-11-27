@@ -14,7 +14,7 @@
 // also gives the model list each user chooses from.
 
 import { CATALOG_VERSION, readOpenRouter, type OpenRouterCatalog } from "./openrouter";
-import { addAlert, currentSnapshot, readCurrentCatalog, readSnapshotRows, readStoredCatalog, writeSnapshot } from "./store";
+import { addAlert, currentSnapshot, newestAlertAt, readCurrentCatalog, readSnapshotRows, readStoredCatalog, writeSnapshot } from "./store";
 import { rowKey, type PriceRow, type SourceId, type SourceResult } from "./types";
 
 export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: string[] } {
@@ -50,8 +50,12 @@ export interface RefreshInput {
 }
 
 export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: number; results: SourceResult[] }> {
-  const { db, fetcher, now } = input;
-  const { read, catalog: catalogRead } = await readOpenRouter(fetcher, now);
+  return storeRead(input, await readOpenRouter(input.fetcher, input.now));
+}
+
+// The snapshot from one read of OpenRouter's models API, good or failed.
+async function storeRead(input: RefreshInput, { read, catalog: catalogRead }: OpenRouterRead): Promise<{ snapshotId: number; results: SourceResult[] }> {
+  const { db, now } = input;
   const reads = [read];
 
   const last = await currentSnapshot(db);
@@ -114,21 +118,42 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
   return { snapshotId, results };
 }
 
-// Reads again at most once a minute, a failed read included.
+type OpenRouterRead = Awaited<ReturnType<typeof readOpenRouter>>;
+
+// Refresh model list reads again at most once a minute, a failed read included.
 export const REFRESH_GAP_MS = 60_000;
+// A stale model list is read again at most this often after a failed read.
+export const STALE_RETRY_MS = 15 * 60_000;
 
 // The stored model list follows parseModels' current rules.
 export const isCurrentCatalog = (catalog: OpenRouterCatalog | undefined): boolean => catalog?.version === CATALOG_VERSION;
 
-// Before a screen or the minute cron uses the model list: OpenRouter's list
-// is read again when there is none yet, the stored one predates
-// parseModels' rules, or when forced, at most once a minute by the newest
-// snapshot whatever its status, so a failing OpenRouter is not asked on every
-// view and the stored list is kept. True when it read.
+// Before a screen or the minute cron uses the model list (the Providers
+// routes, Model for each task, the every-minute cron). Forced (Refresh model
+// list): a refresh as the daily one, at most once a minute by the newest
+// snapshot. Otherwise only when there is no list yet or the stored one
+// predates parseModels' rules: a failed read stores no snapshot, so the
+// stored list and its prices stay as they are, raises one refresh_failed
+// alert, and is tried again once the newest such alert is 15 minutes old.
+// True when it stored a snapshot.
 export async function refreshStaleCatalog(input: RefreshInput & { force?: boolean }): Promise<boolean> {
-  const snapshot = await currentSnapshot(input.db);
-  if (!input.force && isCurrentCatalog(await readCurrentCatalog(input.db))) return false;
-  if (snapshot && input.now.getTime() - Date.parse(snapshot.takenAt) < REFRESH_GAP_MS) return false;
-  await refreshPrices(input);
+  const { db, now } = input;
+  if (input.force) {
+    const snapshot = await currentSnapshot(db);
+    if (snapshot && now.getTime() - Date.parse(snapshot.takenAt) < REFRESH_GAP_MS) return false;
+    await refreshPrices(input);
+    return true;
+  }
+  if (isCurrentCatalog(await readCurrentCatalog(db))) return false;
+  const failedAt = await newestAlertAt(db, "refresh_failed");
+  if (failedAt && now.getTime() - Date.parse(failedAt) < STALE_RETRY_MS) return false;
+  const read = await readOpenRouter(input.fetcher, now);
+  if (!read.read.ok) {
+    const detail = `${read.read.source}: ${read.read.error}. The stored model list predates the app's rules and stays in use; it is read again in 15 minutes.`;
+    console.warn(`price refresh failed: ${detail}`);
+    await addAlert(db, now, "refresh_failed", detail);
+    return false;
+  }
+  await storeRead(input, read);
   return true;
 }

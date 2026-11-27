@@ -178,6 +178,12 @@ export async function addAlertOncePerDay(db: D1Database, now: Date, kind: AlertK
   return meta.changes > 0;
 }
 
+// When the newest alert of a kind was raised, if one was.
+export async function newestAlertAt(db: D1Database, kind: AlertKind): Promise<string | undefined> {
+  const r = await db.prepare("SELECT max(created_at) AS at FROM price_alerts WHERE kind = ?").bind(kind).first<{ at: string | null }>();
+  return r?.at ?? undefined;
+}
+
 export async function recentAlerts(db: D1Database, limit = 10): Promise<Array<{ createdAt: string; kind: AlertKind; detail: string }>> {
   const { results } = await db
     .prepare("SELECT created_at, kind, detail FROM price_alerts ORDER BY id DESC LIMIT ?")

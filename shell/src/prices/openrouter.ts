@@ -76,10 +76,12 @@ export interface OpenRouterModel {
 }
 
 // The rules parseModels applies, raised whenever they change: a catalog
-// stored under older rules (with no version before 2) is stale, and the
-// Providers page reads OpenRouter's list again (providers/page.ts). Until
-// then every screen keeps using it. 2: free by isTrulyFreeTextModel, and a
-// model that also gives audio, images or video is blocked (2026-11-27).
+// stored under older rules (with no version before 2) is stale, and is read
+// from OpenRouter again before the Providers routes, Model for each task and
+// the every-minute cron use it (refreshStaleCatalog, prices/refresh.ts).
+// Until then every screen keeps using it, and queued Test all models tests
+// wait (models/test-all.ts). 2: free by isTrulyFreeTextModel, and a model
+// that also gives audio, images or video is blocked (2026-11-27).
 export const CATALOG_VERSION = 2;
 
 export interface OpenRouterCatalog {
