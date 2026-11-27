@@ -23,7 +23,12 @@ read 2026-11-27):
    (`<APP_ORIGIN>/chief-of-staff/models/setup/providers/openrouter/consented`),
    the S256 `code_challenge`, `state`, `key_label=Chief of staff` and `limit`:
    the user's monthly OpenRouter budget in the app, or $10 before one is set.
-   The user can change the limit on OpenRouter's page.
+   It is the key's own credit limit on OpenRouter, separate from the app's
+   monthly budget: the user can change it, or give it a reset period (say
+   monthly), on the key's page at OpenRouter, and the guide says so. A 402,
+   or a 403 whose message names the key's limit, tells the user to raise or
+   reset it there, with https://openrouter.ai/settings/keys and the key's own
+   page.
 2. The user signs in at OpenRouter and taps Authorize. OpenRouter sends them
    back with `code` and `state`. The state must be this user's and is spent
    once; the app then posts the code and verifier to

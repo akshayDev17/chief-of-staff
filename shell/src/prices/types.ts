@@ -12,7 +12,9 @@ export type TokenKind =
   | "cached_input"
   | "cache_write"
   | "cache_write_1h"
-  | "output";
+  | "output"
+  // The provider's fee per call; its row's usdPerMTok is USD per million calls.
+  | "request";
 
 // OpenRouter routes each call itself, so every row is `global`.
 export type Deployment = "global";

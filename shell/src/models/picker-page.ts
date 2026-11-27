@@ -6,8 +6,9 @@
 //   POST /chief-of-staff/models/setup/tasks/change    task, main, fallback (or none)
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
-// Only the user's own passed models are offered (chosen one by one, or passed
-// in Test all models). With one, every task uses it ("Model now"). With more,
+// Only the user's own passed models are offered (chosen one by one, or added
+// from Test all models' results). With one, every task uses it ("Model now"),
+// unless it is free. With more,
 // each task shows its main model and its fallback, another of the user's
 // models: the user's choice, or the proposal at the task's suggested strength
 // marked "proposed" until accepted (again, for an accepted task whose
@@ -18,7 +19,8 @@
 // strength, where the user has none of the task's own, says so. Any task can be
 // changed to any of the user's models, the Strongest included. A model known
 // to make no tool call (the plug-in's `noToolUse`, shown in the model list too)
-// reads "no tool use" wherever it is named. Friend screens say "Admin" for
+// reads "no tool use" wherever it is named, and a free model reads FREE_NOTE;
+// a free model is never proposed, only chosen with Change. Friend screens say "Admin" for
 // the owner and never "tier".
 //
 // TODO(T18): tasks name no tools yet. Once a task's agent sends tools, never
@@ -30,7 +32,8 @@ import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
-import { acceptProposals, changeTask, modelKey, readTaskRoutes, taskById, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
+import { FREE_NOTE } from "./add";
+import { acceptProposals, changeTask, modelKey, onlyModel, readTaskRoutes, taskById, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
 
 export interface PickerPageInput {
   viewer: Viewer;
@@ -44,8 +47,9 @@ export interface PickerPageInput {
   said?: string;
 }
 
-const modelName = (m: Offered, input: PickerPageInput): string =>
-  `${m.model} · ${input.providerName(m.provider)}${input.noToolUse(m) ? " · no tool use" : ""}`;
+const marks = (m: Offered, input: PickerPageInput): string => `${input.noToolUse(m) ? " · no tool use" : ""}${m.free ? ` · ${FREE_NOTE}` : ""}`;
+
+const modelName = (m: Offered, input: PickerPageInput): string => `${m.model} · ${input.providerName(m.provider)}${marks(m, input)}`;
 
 // One provider select and one model select, the models grouped by provider;
 // a small script shows only the chosen provider's models, and the server
@@ -61,7 +65,7 @@ function pairSelects(id: string, role: "main" | "fallback", chosen: Offered | un
       (p) =>
         `<optgroup label="${esc(input.providerName(p))}" data-provider="${esc(p)}">${input.offered
           .filter((m) => m.provider === p)
-          .map((m) => `<option value="${esc(m.model)}"${chosen && modelKey(m) === modelKey(chosen) ? " selected" : ""}>${esc(m.model)}${input.noToolUse(m) ? " · no tool use" : ""}${m.tier ? ` (${m.tier})` : ""}</option>`)
+          .map((m) => `<option value="${esc(m.model)}"${chosen && modelKey(m) === modelKey(chosen) ? " selected" : ""}>${esc(m.model + marks(m, input))}${m.tier ? ` (${m.tier})` : ""}</option>`)
           .join("")}</optgroup>`,
     )
     .join("");
@@ -104,19 +108,19 @@ function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInp
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
-  const single = input.offered.length === 1;
+  const single = onlyModel(input.offered) !== undefined;
   const intro = !input.offered.length
     ? `<div class="banner warn">Choose a model first: only your own models that passed their test call are offered here. Choose one below a provider's passed Connect. <a href="${PROVIDERS_PATH}">Providers and models</a></div>`
     : single
       ? `<p>You have one model that passed, so every task uses it for now. Choose another model, or run Test all models on <a href="${PROVIDERS_PATH}">Providers and models</a>, and the app proposes a main model and a fallback for each task here.</p>`
-      : `<p>Each task gets a main model and a fallback, another of your models, at the suggested strength for that task, from the models that passed their test. When the main model's provider is busy or fails the call, the fallback answers it. To change a task, choose its provider and model. You can change any of them.</p>`;
+      : `<p>Each task gets a main model and a fallback, another of your models, at the suggested strength for that task, from the models that passed their test. When the main model's provider is busy or fails the call, the fallback answers it. To change a task, choose its provider and model. You can change any of them.${input.offered.some((m) => m.free) ? " A free model is never proposed: a task uses it only when you choose it with Change." : ""}</p>`;
   const head = single
     ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
     : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
   const body = input.routes
     .map((r) => {
       const route = r.pending ? r.proposal : r.current;
-      const change = input.offered.length > 1 ? changeForm(r, route, input) : "";
+      const change = single ? "" : changeForm(r, route, input);
       return `<tr><td data-l="Task">${esc(r.task.label)}</td><td data-l="Suggested strength">${r.task.tier}</td>
 ${routeCells(r, route, input, single)}
 <td data-l="">${change}</td></tr>`;

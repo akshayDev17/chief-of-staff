@@ -11,6 +11,7 @@
 //   POST /chief-of-staff/models/setup/providers/<id>/model-help   friends only: a chosen model's refusal
 //   POST /chief-of-staff/models/setup/providers/<id>/refresh      Refresh model list
 //   POST /chief-of-staff/models/setup/providers/<id>/test-all     Test all models, after its confirm step
+//   POST /chief-of-staff/models/setup/providers/<id>/add-tested   model: Add, on a model that passed in the latest Test all models
 //
 // There is no field to fill: Connect sends the user to the provider's own
 // page, where they sign in and authorize the app, and the provider issues the
@@ -31,7 +32,7 @@
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
 import { addModel, listOffer, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
-import { planTestAll, readTestAll, startTestAll, type TestAllPlan, type TestAllRun } from "../models/test-all";
+import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { refreshPrices } from "../prices/refresh";
@@ -335,12 +336,12 @@ async function pageInput(
 
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
-const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|retry|disconnect|help|choose|model-help|refresh|test-all))?$`);
+const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|retry|disconnect|help|choose|model-help|refresh|test-all|add-tested))?$`);
 
 // The refusals of a chosen model a friend can ask Admin about, by the sentence they saw.
 const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<AddRefusal | PlainReason>([
   "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
-  "wrong_model", "budget_spent", "cannot_call", "no_price",
+  "wrong_model", "budget_spent", "cannot_call", "no_price", "not_passed",
 ]);
 
 // Refresh model list may read again a minute after the last read.
@@ -434,6 +435,11 @@ export async function handleProviders(
       await refreshCatalog(true);
       const read = await refreshAccountList(db, plugins, userId, provider, now);
       return "problem" in read ? page({ problem: read.problem, selected: provider }, 502) : back(provider);
+    }
+    case "add-tested": {
+      if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
+      const outcome = await addTestedModel(db, plugins, userId, provider, field("model"), now);
+      return page({ outcome, selected: provider }, outcome.kind === "added" ? 200 : 400);
     }
     case "test-all": {
       const started = await startTestAll(db, plugins, userId, provider, now);

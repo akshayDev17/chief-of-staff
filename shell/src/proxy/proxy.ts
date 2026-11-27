@@ -34,7 +34,8 @@
 // each cache write at its own 5-minute or 1-hour row. A kind the call used
 // with no row of its own is then costed so it can never be below what the
 // provider charges: cached input at the input price, anything else at the
-// dearest rate the table lists for the model there. The row names each such
+// dearest token rate the table lists for the model there. A call that used
+// tokens also pays the model's fee per call (`request`), where it lists one. The row names each such
 // kind and its rate, and the maintainers get a `price_missing` alert. The
 // row also keeps the provider's own ID for the call (OpenRouter's generation
 // ID), so it can be checked against the provider's own record. The request
@@ -125,12 +126,14 @@ export interface Cost {
 // Tokens at the price table's list price, each kind at its own row at the
 // tier the provider billed (`short` or `long` prompt). A kind with no row
 // there is never costed lower than the vendor charges: cached input at the
-// input price, any other kind at the dearest rate the model lists at either
-// tier.
+// input price, any other kind at the dearest token rate the model lists at
+// either tier. A call that used tokens adds the fee per call, the dearer of
+// the two tiers' `request` rows.
 export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
   if (usage.reportedCostUsd !== undefined) return { usd: usage.reportedCostUsd, source: "reported", conservative: {} };
   const billed = usage.longPrompt ? long : short;
-  const ceiling = Math.max(...[...Object.values(short), ...Object.values(long)].map((p) => p?.usdPerMTok ?? 0));
+  const tokenRates = (p: Prices) => Object.entries(p).filter(([kind]) => kind !== "request").map(([, a]) => a?.usdPerMTok ?? 0);
+  const ceiling = Math.max(0, ...tokenRates(short), ...tokenRates(long));
   const conservative: Cost["conservative"] = {};
   let usd = 0;
   for (const [count, kind] of USAGE_KINDS) {
@@ -142,6 +145,7 @@ export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
     }
     usd += usage[count] * rate;
   }
+  if (USAGE_KINDS.some(([count]) => usage[count] > 0)) usd += Math.max(short.request?.usdPerMTok ?? 0, long.request?.usdPerMTok ?? 0);
   return { usd: usd / 1_000_000, source: "list_price", conservative };
 }
 

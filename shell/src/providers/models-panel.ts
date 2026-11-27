@@ -20,7 +20,9 @@
 //
 // Test all models (models/test-all.ts) runs every model's test call: it shows
 // the estimate first and runs only once confirmed, then shows each model's
-// result, works now or not, with the plain reason, and the real total.
+// result, works now or not, with the plain reason, and the real total. It
+// adds nothing: each model that works has an Add button, which adds it with
+// that passed test call (models/test-all.ts addTestedModel).
 
 import { esc, nbDate } from "../prices/page";
 import { SOURCES } from "../prices/sources";
@@ -153,7 +155,7 @@ function testAllSection(input: ModelsSectionInput): string {
 <p class="tc-fix small">A few models at a time, ${CONCURRENCY} at once. This page refreshes by itself; you can leave it and come back.</p></div>`;
   } else if (input.confirmTestAll && !plan.wait) {
     body = `<div class="tc tc-sw" role="alertdialog" aria-labelledby="${p}-confirm-h"><p class="tc-verdict" id="${p}-confirm-h"><strong>Test all ${count} models?</strong></p>
-<p class="small">Each test call sends a few words and allows at most ${TEST_MAX_TOKENS} reply tokens. Estimated total: about ${esc(input.formatCost(plan.estimateUsd))} (${esc(name)}'s prices for the test's tokens), billed to your ${esc(name)} account. Every model that works is added to your models for tasks.</p>
+<p class="small">Each test call sends a few words and allows at most ${TEST_MAX_TOKENS} reply tokens. Estimated total: about ${esc(input.formatCost(plan.estimateUsd))} (${esc(name)}'s prices for the test's tokens and any fee per call), billed to your ${esc(name)} account. It only shows which models work now: nothing is added to your models. Add any that work from the results with one tap.</p>
 <div class="row"><form method="post" action="${action(p, "test-all")}"><button type="submit" class="btn small">Run the test</button></form><a class="btn small ghost" href="${PROVIDERS_PATH}?provider=${p}#${p}-test-all">Cancel</a></div></div>`;
   } else {
     const wait = plan.wait ? `<span class="small muted">${esc(plan.wait)}</span>` : `<span class="small muted">${count} models · estimated total about ${esc(input.formatCost(plan.estimateUsd))}, shown again before it runs. At most once every ${RUN_GAP_MINUTES} minutes.</span>`;
@@ -165,9 +167,14 @@ function testAllSection(input: ModelsSectionInput): string {
   return `<section class="test-all" aria-labelledby="${p}-test-all">${head}<p class="small">See which of ${esc(name)}'s models work for your account right now, and which don't, with the reason.</p>${body}${run ? resultsList(input, run) : ""}</section>`;
 }
 
+function addButton(input: ModelsSectionInput, model: string): string {
+  if (input.rows.some((r) => r.model === model && r.added)) return ` <span class="pill ok">added</span>`;
+  return ` <form class="inline" method="post" action="${action(input.plugin.provider, "add-tested")}"><input type="hidden" name="model" value="${esc(model)}"><button type="submit" class="btn small">Add</button></form>`;
+}
+
 function resultsList(input: ModelsSectionInput, run: TestAllRun): string {
   const p = input.plugin.provider;
-  const done = run.tests.filter((t) => t.state !== "queued");
+  const done = run.tests.filter((t) => t.state === "passed" || t.state === "failed");
   if (!done.length) return "";
   const works = done.filter((t) => t.state === "passed").length;
   const shown = done.filter((t) => input.testsFilter === "all" || (input.testsFilter === "works" ? t.state === "passed" : t.state === "failed"));
@@ -177,7 +184,7 @@ function resultsList(input: ModelsSectionInput, run: TestAllRun): string {
     .map((t) => {
       const ok = t.state === "passed";
       const reply = t.result?.reply ? ` <span class="tc-reply">${esc([t.result.reply.status, t.result.reply.errorName, t.result.reply.message ? `“${t.result.reply.message}”` : ""].filter(Boolean).join(" · "))}</span>` : "";
-      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : "doesn't work now"}</span>${ok ? "" : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}`}</li>`;
+      return `<li><span class="lb-name">${esc(t.model)}</span> <span class="pill ${ok ? "ok" : "warn"}">${ok ? "works now" : "doesn't work now"}</span>${ok ? addButton(input, t.model) : ` <span class="small">${esc(t.result?.text ?? "")}</span>${reply}`}</li>`;
     })
     .join("");
   const when = run.finishedAt ? `Tested ${readOn(run.startedAt)}` : `Started ${readOn(run.startedAt)}`;
@@ -244,6 +251,7 @@ export const MODELS_CSS = `
 .results { list-style: none; padding: 0; margin: 6px 0 0; max-height: 26em; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
 .results li { padding: 5px 9px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .results li:first-child { border-top: 0; }
+.results form.inline { display: inline; }
 @media (max-width: 759px) { .lb-wrap { max-width: none; } .lb { position: static; box-shadow: none; } }
 `;
 

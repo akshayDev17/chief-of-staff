@@ -138,6 +138,16 @@ describe("the model list and plain reasons", () => {
     expect(classify({ step: "credential", status: 401, errorName: "no_key", message: "" }).reason).toBe("not_set_up");
   });
 
+  it("says a key's limit is OpenRouter's to raise or reset, with the key's own page", () => {
+    const connection = { method: "oauth_pkce", key_hash: "b".repeat(64) };
+    const limit = classify({ step: "call", status: 403, errorName: "", message: "Key limit exceeded" }, connection);
+    expect(limit.reason).toBe("no_credits");
+    expect(limit.fix).toContain("reset period");
+    expect(limit.links.map((l) => l.href)).toEqual(["https://openrouter.ai/settings/keys", `https://openrouter.ai/keys/${"b".repeat(64)}`]);
+    expect(classify({ step: "call", status: 402, errorName: "", message: "" }, connection).links.map((l) => l.href)).toContain(`https://openrouter.ai/keys/${"b".repeat(64)}`);
+    expect(classify({ step: "call", status: 403, errorName: "", message: "Blocked by guardrail" }, connection).reason).toBe("no_permission");
+  });
+
   it("reads the reply's text, or none from a reasoning model that spent its tokens thinking", async () => {
     expect(plugin.connect.replyText(await chatReply().json())).toBe("OK");
     expect(plugin.connect.replyText({ choices: [{ message: { content: "", reasoning: "…" } }] })).toBeUndefined();

@@ -27,8 +27,12 @@
 // it is tested (Choose, or Test all models).
 //
 // Each model's rows: `prompt` is input, `completion` output,
-// `input_cache_read` cached input, `input_cache_write` a cache write and
-// `input_cache_write_1h` a 1-hour cache write. A model can carry `overrides`:
+// `input_cache_read` cached input, `input_cache_write` a cache write,
+// `input_cache_write_1h` a 1-hour cache write and `request` the fee per call
+// (kept as USD per million calls). A reply counts reasoning tokens within its
+// completion tokens, so a model whose `internal_reasoning` rate is dearer
+// than `completion` has its output row at the reasoning rate: a call priced
+// from the table never counts its reasoning below OpenRouter's rate. A model can carry `overrides`:
 // higher prices above a prompt length (`min_prompt_tokens`), and prices by
 // time of day. The standard rows take the dearest of the base price and each
 // time-of-day price, and the long-prompt rows the dearest of the prompt-length
@@ -71,6 +75,7 @@ const PRICE_FIELDS: ReadonlyArray<readonly [string, TokenKind]> = [
   ["input_cache_read", "cached_input"],
   ["input_cache_write", "cache_write"],
   ["input_cache_write_1h", "cache_write_1h"],
+  ["request", "request"],
 ];
 
 // A per-token price string as USD per million tokens; undefined unless it is
@@ -101,6 +106,8 @@ const pricesOf = (pricing: Record<string, unknown>): Prices => {
     const usd = perMillion(pricing[field]);
     if (usd !== undefined) out[kind] = usd;
   }
+  const reasoning = perMillion(pricing.internal_reasoning);
+  if (reasoning !== undefined && out.output !== undefined) out.output = Math.max(out.output, reasoning);
   return out;
 };
 

@@ -64,6 +64,12 @@ describe("OpenRouter's model list as the price table", () => {
     expect(night.standard.output).toBe(1.2);
     expect(night.long).toEqual({});
   });
+
+  it("keeps the fee per call as a row, and prices output at a dearer reasoning rate", () => {
+    const fee = modelPrices({ prompt: "0.000001", completion: "0.000002", internal_reasoning: "0.000005", request: "0.0004" });
+    expect(fee.standard).toEqual({ input: 1, output: 5, request: 400 });
+    expect(modelPrices({ prompt: "0.000001", completion: "0.000002", internal_reasoning: "0" }).standard.output).toBe(2);
+  });
 });
 
 describe("the daily refresh", () => {

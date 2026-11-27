@@ -142,15 +142,26 @@ async function readBody(response: Response): Promise<unknown> {
 
 const link = (label: string, href: string): Link => ({ label, href });
 
-export function classify(failure: Failure): { reason: PlainReason; fix: string; links: Link[] } {
+// Your keys on OpenRouter, and this key's own page when its hash is known.
+const keyLinks = (connection: ConnectionFields | undefined): Link[] => [
+  link("Your keys on OpenRouter", SETTINGS_KEYS),
+  ...(connection?.key_hash && /^[0-9a-f]{64}$/.test(connection.key_hash) ? [link("This key on OpenRouter", `https://openrouter.ai/keys/${connection.key_hash}`)] : []),
+];
+
+// The key's credit limit is OpenRouter's, not the app's monthly budget.
+const KEY_LIMIT_FIX =
+  "Raise this key's credit limit on OpenRouter, or give it a reset period (say monthly), on the key's page there. That limit is separate from the app's monthly budget.";
+
+export function classify(failure: Failure, connection?: ConnectionFields): { reason: PlainReason; fix: string; links: Link[] } {
   const again = "Tap Connect OpenRouter again to authorize a new key.";
   if (failure.step === "credential") return { reason: "not_set_up", fix: `The app holds no OpenRouter key for you. ${again}`, links: [] };
   switch (failure.status) {
     case 401:
       return { reason: "not_set_up", fix: `The key was deleted or disabled on OpenRouter. ${again}`, links: [link("Your keys on OpenRouter", SETTINGS_KEYS)] };
     case 402:
-      return { reason: "no_credits", fix: "Add credits on OpenRouter, or raise this key's credit limit there, then try again.", links: [link("Credits", SETTINGS_CREDITS), link("Your keys", SETTINGS_KEYS)] };
+      return { reason: "no_credits", fix: `Add credits on OpenRouter if your account is out of them. Otherwise this key's limit is reached: ${KEY_LIMIT_FIX}`, links: [link("Credits", SETTINGS_CREDITS), ...keyLinks(connection)] };
     case 403:
+      if (/\bkey\b.*\blimit\b|\blimit\b.*\bkey\b/i.test(failure.message)) return { reason: "no_credits", fix: KEY_LIMIT_FIX, links: keyLinks(connection) };
       return { reason: "no_permission", fix: "OpenRouter's own words say why. A guardrail or your privacy settings on OpenRouter can block a model.", links: [link("Privacy settings", SETTINGS_PRIVACY)] };
     case 404:
       return { reason: "no_such_model", fix: "OpenRouter may no longer offer it: Refresh model list.", links: [] };
@@ -224,7 +235,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         short: "OpenRouter",
         steps: [
           "An OpenRouter account with credits. You pay OpenRouter for your own calls; no one else pays for them.",
-          "Tap <strong>Connect OpenRouter</strong>. OpenRouter’s own page opens: sign in there and tap <strong>Authorize</strong>. The key’s credit limit is prefilled with your monthly OpenRouter budget here, or $10 before you set one; change it there if you like.",
+          "Tap <strong>Connect OpenRouter</strong>. OpenRouter’s own page opens: sign in there and tap <strong>Authorize</strong>. It prefills the new key’s credit limit on OpenRouter with your monthly OpenRouter budget here, or $10 before you set one. That limit belongs to the key on OpenRouter: change it, or give it a reset period (say monthly), on OpenRouter’s page for the key, now or later. The app’s monthly budget is separate.",
           "OpenRouter issues the app a key for your own account and sends you back here. It goes straight into your vault: you never see, type or paste it. The test call then runs by itself.",
         ],
         checkedOn: "2026-11-27",
@@ -234,10 +245,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
           link("Usage accounting", "https://openrouter.ai/docs/use-cases/usage-accounting"),
         ],
         revoke: "delete the “Chief of staff” key in your keys on OpenRouter (Settings → API Keys). Only you can: OpenRouter lets no app delete a key it was given.",
-        revokeLinks: (connection) => [
-          link("Your keys on OpenRouter", SETTINGS_KEYS),
-          ...(connection?.key_hash && /^[0-9a-f]{64}$/.test(connection.key_hash) ? [link("This key on OpenRouter", `https://openrouter.ai/keys/${connection.key_hash}`)] : []),
-        ],
+        revokeLinks: keyLinks,
       },
 
       async start({ callbackUrl, consentState, creditLimitUsd }) {
@@ -306,7 +314,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
       locations: () => ["global"],
       testRequest: () => ({ messages: [{ role: "user", content: TEST_PROMPT }], max_tokens: TEST_MAX_TOKENS }),
       replyText,
-      classify: (failure) => classify(failure),
+      classify,
     },
   };
 }

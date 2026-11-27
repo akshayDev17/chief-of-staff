@@ -8,15 +8,19 @@
 //   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
 //
 // Only the user's own passed models (user_models, T17: chosen one by one, or
-// passed in Test all models) are ever offered, each named by its provider and
-// model, so a second provider plugs in without a change here. With one passed
-// model every task uses it. Otherwise each task gets a proposal: a main model
+// added from Test all models' results) are ever offered, each named by its
+// provider and model, so a second provider plugs in without a change here.
+// With one passed model every task uses it, unless it is free. Otherwise each
+// task gets a proposal: a main model
 // at the task's strength and a fallback at that strength, another of the
 // user's models (on OpenRouter today, the one provider, a fallback is another
 // OpenRouter model), each model's strength (tier) worked out from its price
 // (tiers.ts, T11). No task is proposed the Strongest tier; where
 // the user has no model of the task's own strength, the other non-Strongest
-// tier is proposed instead. The proposal is used once the user accepts it;
+// tier is proposed instead. A free model ($0 in and out, such as
+// OpenRouter's `:free` ones: rate-limited, and the provider may log prompts)
+// is never proposed, nor used as the one model: a task uses it only once the
+// user chooses it with Change. The proposal is used once the user accepts it;
 // an accepted task whose proposal has since changed (say a model at another
 // provider was added) is pending again and keeps its accepted models until
 // the next tap. Any task can be changed to any of the user's models, the
@@ -33,8 +37,8 @@ import { currentSnapshot, readSnapshotRows } from "../prices/store";
 import { modelTier, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import type { ModelRequest, PluginRegistry } from "../proxy/plugin";
-import { callModel, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
-import { readUserModels, type UserModel } from "./add";
+import { callModel, modelPrices, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
+import { isFree, readUserModels, type UserModel } from "./add";
 
 export interface Task {
   id: string;
@@ -56,10 +60,12 @@ export const TASKS: readonly Task[] = [
 
 export const taskById = (id: string): Task | undefined => TASKS.find((t) => t.id === id);
 
-// One of the user's passed models, with its strength and input price.
+// One of the user's passed models, with its strength and input price, and
+// whether it is free ($0 in and out).
 export interface Offered extends UserModel {
   tier?: Tier;
   inputUsd?: number;
+  free?: boolean;
 }
 
 export interface Route {
@@ -80,25 +86,33 @@ export interface TaskRoute {
 
 export const modelKey = (m: { provider: Provider; model: string }): string => `${m.provider}|${m.model}`;
 
-// The user's passed models with each one's tier and input price, from one
-// read of the current price snapshot.
+// The user's passed models with each one's tier, input price and whether it
+// is free, from one read of the current price snapshot.
 export async function readOffered(db: D1Database, userId: string): Promise<Offered[]> {
   const models = await readUserModels(db, userId);
   const snapshot = models.length ? await currentSnapshot(db) : undefined;
   const rows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
   return models.map((m) => {
     const own = rows.filter((r) => r.provider === m.provider && r.model === m.model);
-    const inputs = own.filter((r) => r.tokenKind === "input" && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location)).map((r) => r.usdPerMTok);
-    return { ...m, tier: modelTier(m.provider, own), inputUsd: inputs.length ? Math.max(...inputs) : undefined };
+    const dearest = (kind: "input" | "output"): number | undefined => {
+      const at = own.filter((r) => r.tokenKind === kind && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location)).map((r) => r.usdPerMTok);
+      return at.length ? Math.max(...at) : undefined;
+    };
+    const inputUsd = dearest("input");
+    return { ...m, tier: modelTier(m.provider, own), inputUsd, free: isFree({ input: inputUsd, output: dearest("output") }) };
   });
 }
 
+// The one model every task uses: the user's only passed model, unless it is free.
+export const onlyModel = (offered: Offered[]): Offered | undefined => (offered.length === 1 && !offered[0]!.free ? offered[0] : undefined);
+
 const PREFERRED: Record<Task["tier"], readonly Tier[]> = { Smallest: ["Smallest", "Middle"], Middle: ["Middle", "Smallest"] };
 
-// The cheapest model at the nearest proposable strength, among `models`.
+// The cheapest model at the nearest proposable strength, among `models`;
+// never a free one.
 function bestFor(task: Task, models: Offered[]): Offered | undefined {
   for (const tier of PREFERRED[task.tier]) {
-    const at = models.filter((m) => m.tier === tier).sort((a, b) => (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) || modelKey(a).localeCompare(modelKey(b)));
+    const at = models.filter((m) => m.tier === tier && !m.free).sort((a, b) => (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) || modelKey(a).localeCompare(modelKey(b)));
     if (at[0]) return at[0];
   }
   return undefined;
@@ -141,8 +155,9 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
     .bind(userId)
     .all<ChoiceRecord>();
   const saved = new Map(results.map((r) => [r.task, r]));
+  const only = onlyModel(offered);
   const routes = TASKS.map((task): TaskRoute => {
-    if (offered.length === 1) return { task, current: { main: offered[0]!, setHow: "only_model" }, pending: false };
+    if (only) return { task, current: { main: only, setHow: "only_model" }, pending: false };
     const proposal = proposeRoute(task, offered);
     const r = saved.get(task.id);
     const route = r && savedRoute(r, byKey);
@@ -158,7 +173,10 @@ export async function readTaskRoutes(db: D1Database, userId: string): Promise<{ 
 // and the task's one saved choice only.
 export async function routeTask(db: D1Database, userId: string, task: string): Promise<Route | undefined> {
   const models = await readUserModels(db, userId);
-  if (models.length === 1) return { main: models[0]! };
+  if (models.length === 1) {
+    const { short } = await modelPrices(db, models[0]!);
+    if (!isFree({ input: short.input?.usdPerMTok, output: short.output?.usdPerMTok })) return { main: models[0]! };
+  }
   const r = await db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
   return r ? savedRoute(r, new Map(models.map((m) => [modelKey(m), m]))) : undefined;
 }

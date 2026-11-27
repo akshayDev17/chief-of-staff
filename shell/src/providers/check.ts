@@ -282,8 +282,9 @@ export async function finishConsent(
     throw error;
   }
   await writeConnection(db, input.userId, plugin, issued.fields, input.now);
-  // A new connection: it has not passed yet, whatever an earlier one did.
-  await saveCheck(db, input.userId, { provider: input.provider, state: "checking", nextTryAt: input.now.toISOString() });
+  // A new connection: it has not passed yet, whatever an earlier one did. Its
+  // check runs here; the cron tries it only if this one never finishes.
+  await saveCheck(db, input.userId, { provider: input.provider, state: "checking", nextTryAt: minutesAfter(input.now, RETRY_MINUTES) });
   const checked = await runCheck(db, plugins, input.userId, input.provider, input.now);
   // The account's own model list, with the new key; best effort: the public
   // list stands in until Refresh model list reads it.
@@ -327,18 +328,24 @@ export async function askAdminForHelp(db: D1Database, plugins: PluginRegistry, u
 // The cron: every check whose next try is due, oldest first, a few a minute.
 // Only checks of providers a plug-in serves: rows left from a removed
 // provider (Bedrock, Vertex AI, Foundry) are never picked, so they cannot
-// crowd out the others.
+// crowd out the others. Each is claimed first, its next try moved on, so a
+// tick that overlaps the one before never makes the same test call twice.
 export async function runDueChecks(db: D1Database, plugins: PluginRegistry, now: Date, limit = 25): Promise<number> {
   const served = Object.keys(plugins);
   if (!served.length) return 0;
   const { results } = await db
     .prepare(
-      `SELECT user_id, provider FROM provider_checks WHERE next_try_at IS NOT NULL AND next_try_at <= ?
+      `SELECT user_id, provider, next_try_at FROM provider_checks WHERE next_try_at IS NOT NULL AND next_try_at <= ?
          AND provider IN (SELECT value FROM json_each(?)) ORDER BY next_try_at LIMIT ?`,
     )
     .bind(now.toISOString(), JSON.stringify(served), limit)
-    .all<{ user_id: string; provider: Provider }>();
-  for (const { user_id, provider } of results) {
+    .all<{ user_id: string; provider: Provider; next_try_at: string }>();
+  for (const { user_id, provider, next_try_at } of results) {
+    const claimed = await db
+      .prepare("UPDATE provider_checks SET next_try_at = ? WHERE user_id = ? AND provider = ? AND next_try_at = ?")
+      .bind(minutesAfter(now, RETRY_MINUTES), user_id, provider, next_try_at)
+      .run();
+    if (claimed.meta.changes !== 1) continue;
     try {
       await runCheck(db, plugins, user_id, provider, now);
     } catch (error) {

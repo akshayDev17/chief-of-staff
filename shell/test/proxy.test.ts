@@ -78,6 +78,15 @@ describe("one ledger row per call", () => {
     expect(costOf({ ...usage, reportedCostUsd: 0.5 }, short, long)).toEqual({ usd: 0.5, source: "reported", conservative: {} });
   });
 
+  it("adds the fee per call to a call that used tokens, and never prices a missing kind at it", () => {
+    const at = (usdPerMTok: number) => ({ usdPerMTok, source: "openrouter-models", dateRead: "", stale: false }) as const;
+    const short = { input: at(1), output: at(4), request: at(20_000) };
+    const usage = { input: 1e6, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 1e6, longPrompt: false };
+    expect(costOf(usage, short, {}).usd).toBeCloseTo(5.02, 12);
+    expect(costOf({ ...usage, cacheWrite1h: 1e6 }, short, {})).toMatchObject({ conservative: { cache_write_1h: 4 } });
+    expect(costOf({ ...usage, input: 0, output: 0 }, short, {}).usd).toBe(0);
+  });
+
   it("alerts the maintainers once a UTC day for a kind priced conservatively", async () => {
     const miniCall = call({ main: mini, fallback: undefined });
     for (let i = 0; i < 3; i++) {

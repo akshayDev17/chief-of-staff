@@ -19,8 +19,9 @@ CREATE TABLE model_price_rows (
   model TEXT NOT NULL,                 -- OpenRouter's model ID, e.g. openai/gpt-6-luna
   deployment TEXT NOT NULL,            -- 'global': OpenRouter routes each call itself
   region TEXT NOT NULL,                -- 'global'
+  -- 'request': OpenRouter's fee per call, in USD per million calls.
   token_kind TEXT NOT NULL CHECK (token_kind IN
-    ('input', 'cached_input', 'cache_write', 'cache_write_1h', 'output')),
+    ('input', 'cached_input', 'cache_write', 'cache_write_1h', 'output', 'request')),
   long_prompt INTEGER NOT NULL CHECK (long_prompt IN (0, 1)),
   batch INTEGER NOT NULL CHECK (batch IN (0, 1)),
   usd_per_mtok REAL NOT NULL CHECK (usd_per_mtok >= 0),
@@ -82,8 +83,11 @@ CREATE TABLE task_routes (
 -- estimate shown before it started, and one row per model tested, each
 -- answered by the every-minute cron a few at a time. A user's earlier runs go
 -- when a new one starts. `result` is JSON: the plain reason and the
--- provider's own status, error name and message, or the reply's text; shown
--- only to the user who ran it, never a prompt or a task's reply.
+-- provider's own status, error name and message, or the passed test call;
+-- shown only to the user who ran it, never a prompt or a task's reply. A
+-- cron tick claims each test (`running`, `claimed_at`) before its call, so
+-- an overlapping tick never tests it again; a claim older than ten minutes
+-- (a tick that died) may be taken again.
 CREATE TABLE model_test_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL REFERENCES users (id),
@@ -96,19 +100,23 @@ CREATE TABLE model_test_runs (
 
 CREATE INDEX model_test_runs_user ON model_test_runs (user_id, provider, id);
 
+-- One unfinished run per user and provider, even when two starts race.
+CREATE UNIQUE INDEX model_test_runs_one_open ON model_test_runs (user_id, provider) WHERE finished_at IS NULL;
+
 CREATE TABLE model_tests (
   run_id INTEGER NOT NULL REFERENCES model_test_runs (id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users (id),
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('queued', 'passed', 'failed')),
+  state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'passed', 'failed')),
+  claimed_at TEXT,                     -- ISO 8601 UTC, when a cron tick took it
   result TEXT,                         -- JSON, see above
   cost_usd REAL,                       -- the test call's cost, as its ledger row has it
   tested_at TEXT,
   PRIMARY KEY (run_id, model)
 );
 
--- The cron finds the queued tests.
+-- The cron finds the queued tests, and the stale claims.
 CREATE INDEX model_tests_queued ON model_tests (state, run_id);
 
 -- The ledger (design-v3 1.7): how each call was costed, and the provider's

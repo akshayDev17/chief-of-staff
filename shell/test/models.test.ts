@@ -1,15 +1,16 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { addModel, listOffer, namesPickedModel, readUserModels, saveUserModel } from "../src/models/add";
+import { addModel, FREE_NOTE, listOffer, namesPickedModel, readUserModels, saveUserModel } from "../src/models/add";
 import { renderPickerPage, handleTaskModels } from "../src/models/picker-page";
 import { acceptProposals, callTask, changeTask, proposeRoute, readTaskRoutes, routeTask, taskById, type Offered } from "../src/models/tasks";
-import { ESTIMATE_INPUT_TOKENS, planTestAll, PER_TICK, readTestAll, runQueuedTests, startTestAll } from "../src/models/test-all";
+import { addTestedModel, ESTIMATE_INPUT_TOKENS, planTestAll, PER_TICK, readTestAll, runQueuedTests, startTestAll } from "../src/models/test-all";
 import { TEST_MAX_TOKENS } from "../src/providers/openrouter";
 import { modelsSection } from "../src/providers/models-panel";
 import { formatCost } from "../src/providers/page";
 import { setBudget } from "../src/proxy/budgets";
 import { writeConnection } from "../src/proxy/connections";
-import { ok, refused, seedPrices, testPlugin, userFor, type TestPlugin } from "./test-plugin";
+import { writeSnapshot } from "../src/prices/store";
+import { ok, refused, row, seedPrices, TEST_CATALOG, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
 let plugin: TestPlugin;
@@ -80,6 +81,7 @@ describe("Test all models", () => {
     expect(html).toContain("Test all 3 models?");
     expect(html).toContain(`at most ${TEST_MAX_TOKENS} reply tokens`);
     expect(html).toContain("Run the test");
+    expect(html).toContain("nothing is added to your models");
   });
 
   it("runs in the background a few at a time, then shows which work now with the reason, and the real cost", async () => {
@@ -96,9 +98,58 @@ describe("Test all models", () => {
     expect(run.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "failed"], ["test-sonnet", "passed"]]);
     expect(run.tests[1]!.result).toMatchObject({ reason: "no_credits", text: "Your Test openrouter account or this key is out of credits.", reply: { status: 402 } });
     expect(run.realCostUsd).toBeCloseTo(0.000251, 12);
-    // Each test call is in the ledger under its own task; models that work are offered for tasks.
-    expect((await readUserModels(env.DB, userId)).map((m) => m.model)).toEqual(["test-luna", "test-sonnet"]);
+    // Each test call is in the ledger under its own task; a run adds no model.
+    expect(await readUserModels(env.DB, userId)).toEqual([]);
     const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM model_calls WHERE task = 'test_all_models'").first<{ n: number }>())!;
+    expect(n).toBe(3);
+  });
+
+  it("adds a model that passed with its passed test call and no new call, and refuses any other", async () => {
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.000001 }, { model: "test-luna" }), refused(402), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
+    await runQueuedTests(env.DB, plugins(), NOW);
+    const calls = plugin.calls.length;
+    const later = new Date("2026-11-27T10:03:00Z");
+    expect(await addTestedModel(env.DB, plugins(), userId, "openrouter", "test-luna", later)).toMatchObject({ kind: "added", model: { model: "test-luna", addedAt: later.toISOString(), test: { status: 200, costUsd: 0.000001 } } });
+    expect(await addTestedModel(env.DB, plugins(), userId, "openrouter", "test-mini", later)).toMatchObject({ kind: "refused", reason: "not_passed" });
+    const other = (await userFor("friend-sub")).id;
+    await writeConnection(env.DB, other, plugin, { method: "oauth_pkce", key_hash: "c".repeat(64) }, NOW);
+    expect(await addTestedModel(env.DB, plugins(), other, "openrouter", "test-sonnet", later)).toMatchObject({ kind: "refused", reason: "not_passed" });
+    expect(plugin.calls.length).toBe(calls);
+    expect((await readUserModels(env.DB, userId)).map((m) => m.model)).toEqual(["test-luna"]);
+    expect(await readUserModels(env.DB, other)).toEqual([]);
+    const html = modelsSection({
+      plugin, viewer: "owner", rows: await listOffer(env.DB, plugins(), userId, "openrouter"), plan: await planTestAll(env.DB, plugins(), userId, "openrouter", later),
+      run: await readTestAll(env.DB, userId, "openrouter"), confirmTestAll: false, testsFilter: "all", formatCost, now: later,
+    });
+    expect(html).toContain('<input type="hidden" name="model" value="test-sonnet"><button type="submit" class="btn small">Add</button>');
+    expect(html).not.toContain('name="model" value="test-luna"><button type="submit" class="btn small">Add</button>');
+  });
+
+  it("never tests a model twice when two cron ticks overlap, and takes a stale claim again", async () => {
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const slow = { ...plugin, call: async (input: Parameters<TestPlugin["call"]>[0]) => (await held, plugin.call(input)) };
+    const first = runQueuedTests(env.DB, { openrouter: slow }, NOW);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await runQueuedTests(env.DB, plugins(), NOW)).toBe(0);
+    release();
+    expect(await first).toBe(3);
+    expect(plugin.calls.length).toBe(3);
+    expect((await readTestAll(env.DB, userId, "openrouter"))!.finishedAt).toBe(NOW.toISOString());
+
+    await env.DB.prepare("UPDATE model_tests SET state = 'running', claimed_at = ?").bind(NOW.toISOString()).run();
+    await env.DB.prepare("UPDATE model_test_runs SET finished_at = NULL").run();
+    expect(await runQueuedTests(env.DB, plugins(), new Date("2026-11-27T10:05:00Z"))).toBe(0);
+    expect(await runQueuedTests(env.DB, plugins(), new Date("2026-11-27T10:11:00Z"))).toBe(3);
+  });
+
+  it("keeps one open run when two starts race", async () => {
+    const [a, b] = await Promise.all([startTestAll(env.DB, plugins(), userId, "openrouter", NOW), startTestAll(env.DB, plugins(), userId, "openrouter", NOW)]);
+    expect([a, b].filter((r) => "runId" in r)).toHaveLength(1);
+    expect([a, b].filter((r) => "problem" in r)).toEqual([{ problem: "A test of all models is running already." }]);
+    const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM model_tests").first<{ n: number }>())!;
     expect(n).toBe(3);
   });
 
@@ -126,6 +177,26 @@ describe("the model for each task", () => {
     expect([route?.main.model, route?.fallback?.model]).toEqual(["a", "b"]);
     const single = proposeRoute(taskById("match")!, [m("c", "Smallest", 0.1)]);
     expect(single?.fallback).toBeUndefined();
+  });
+
+  it("never proposes a free model, nor uses one as the only model, until it is chosen with Change", async () => {
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-27T07:00:00Z", status: "good", results: [],
+      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, { id: "test-free:free", name: "Test Free", tools: true }] },
+      rows: [row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-free:free", "input", 0), row("test-free:free", "output", 0)],
+    });
+    expect((await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "test-free:free")?.notes).toEqual([FREE_NOTE]);
+    await added("test-free:free");
+    expect(await routeTask(env.DB, userId, "match")).toBeUndefined();
+    const first = (await readTaskRoutes(env.DB, userId)).routes[0]!;
+    expect([first.current, first.proposal, first.pending]).toEqual([undefined, undefined, false]);
+    await added("test-luna");
+    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    expect(routes.every((r) => r.proposal?.main.model === "test-luna" && r.proposal.fallback === undefined)).toBe(true);
+    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
+    expect(html).toContain(`test-free:free · ${FREE_NOTE}`);
+    expect(await changeTask(env.DB, userId, "match", "openrouter|test-free:free", undefined, NOW)).toBeUndefined();
+    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-free:free" } });
   });
 
   it("saves a change naming provider and model, refuses the same model as its own fallback, and calls the fallback on a 429", async () => {

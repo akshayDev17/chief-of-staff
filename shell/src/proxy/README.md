@@ -57,7 +57,9 @@ no key in the vault) records the connection as revoked, for T49's alert
    input price, anything else at the dearest rate the table lists for the
    model), named on the row (`costed_conservatively`) with a `price_missing`
    alert on Admin · Price table, at most one a UTC day for each model and
-   token kind. The row also keeps OpenRouter's generation ID
+   token kind. A call that used tokens adds the model's fee per call (its
+   `request` row), and output is priced at the dearer of the completion and
+   reasoning rates (src/prices/openrouter.ts). The row also keeps OpenRouter's generation ID
    (`provider_call_id`).
 6. Falls back once, to the task's fallback, another model, when the provider
    refuses or fails the main call (408, 429, 5xx, or no reply). The fallback

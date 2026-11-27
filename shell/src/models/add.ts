@@ -6,7 +6,7 @@
 //   listOffer(db, plugins, userId, provider) -> OfferRow[]
 //   addModel(db, plugins, { userId, provider, model, now }) -> AddOutcome
 //   readUserModels(db, userId) -> UserModel[]     what T18's picker offers
-//   saveUserModel(db, userId, model)               also written by Test all models
+//   saveUserModel(db, userId, model)               also written by Add on Test all models' results
 //
 // The list is every model OpenRouter's own model list names (the owner,
 // 2026-11-27: "i would like to list all models and then choose"), read with
@@ -15,7 +15,9 @@
 // source and date read, and its tier from that price (tiers.ts). A model the
 // plug-in cannot call shows why and cannot be chosen; one with no input and
 // output price shows "no price yet" and cannot be added, because the budget
-// stop needs a real price; the proxy refuses a call to either.
+// stop needs a real price; the proxy refuses a call to either. A free model
+// ($0 in and out, such as OpenRouter's `:free` ones) carries FREE_NOTE; it is
+// never proposed for a task (models/tasks.ts).
 //
 // The test call goes through the proxy's one pipeline (`sendTestCall`), which
 // prices it and writes its ledger row. Where the reply names its model, a
@@ -36,7 +38,8 @@ export interface OfferRow {
   // The provider's own name for it ("OpenAI: GPT-6 Luna"), where it gives one.
   name?: string;
   location: string;
-  price?: { input: number; output: number; source: SourceId; dateRead: string; stale: boolean };
+  // `request`: the provider's fee per call, in USD per million calls, when it lists one.
+  price?: { input: number; output: number; request?: number; source: SourceId; dateRead: string; stale: boolean };
   tier?: Tier;
   // The plug-in can call it; otherwise `notCallableReason` says why.
   callable: boolean;
@@ -71,7 +74,12 @@ export interface UserModel {
 }
 
 // Why a model was not added, each a plain sentence on the page.
-export type AddRefusal = PlainReason | "not_connected" | "not_offered" | "no_price" | "cannot_call" | "wrong_model" | "budget_spent";
+export type AddRefusal = PlainReason | "not_connected" | "not_offered" | "no_price" | "cannot_call" | "wrong_model" | "budget_spent" | "not_passed";
+
+export const FREE_NOTE = "free: rate-limited, and the provider may log prompts";
+
+// $0 in and out.
+export const isFree = (price: { input?: number; output?: number } | undefined): boolean => price?.input === 0 && price?.output === 0;
 
 export type AddOutcome =
   | { kind: "added"; model: UserModel }
@@ -131,11 +139,13 @@ function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price" | "
   const dearest = (kind: PriceRow["tokenKind"]) => at.filter((r) => r.tokenKind === kind).sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];
   const input = dearest("input");
   const output = dearest("output");
+  const request = dearest("request");
   if (!input || !output) return {};
   return {
     price: {
       input: input.usdPerMTok,
       output: output.usdPerMTok,
+      ...(request ? { request: request.usdPerMTok } : {}),
       source: input.source,
       // The older of the two dates: neither price was read before it.
       dateRead: input.dateRead < output.dateRead ? input.dateRead : output.dateRead,
@@ -162,15 +172,16 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
   return ids.map((model) => {
     const location = added.get(model)?.location ?? plugin.connect.locations(model)[0] ?? "global";
     const name = names.get(model);
+    const priced = priceOf(rowsByModel.get(model) ?? [], location);
     return {
       model,
       ...(name && name !== model ? { name } : {}),
       location,
-      ...priceOf(rowsByModel.get(model) ?? [], location),
+      ...priced,
       callable: plugin.connect.canCall(model),
       accountLeftOut: account !== undefined && !account.models.has(model),
       noToolUse: plugin.connect.noToolUse?.(model),
-      notes: plugin.connect.modelNotes?.(model) ?? [],
+      notes: [...(isFree(priced.price) ? [FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
       added: added.get(model),
     };
   });
@@ -320,6 +331,8 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
       return `${short}'s reply names another model${o.reply?.repliedModel ? ` (${o.reply.repliedModel})` : ""}, not ${o.model}, so ${o.model} was not added.`;
     case "budget_spent":
       return `This month's budget for ${name} is spent, so the test call waits until the 1st.`;
+    case "not_passed":
+      return `${o.model} did not pass in your latest Test all models run, so it cannot be added from it.`;
     default:
       return plugin ? reasonText(o.reason, plugin, o.model) : `${short} refused the test call.`;
   }
@@ -335,6 +348,8 @@ export function refusalFix(o: Extract<AddOutcome, { kind: "refused" }>, plugin: 
       return `Raise the budget on Budgets, then pick ${o.model} again.`;
     case "not_connected":
       return "Open Providers and connect it.";
+    case "not_passed":
+      return `Choose ${o.model} in the list above to run its own test call.`;
     default:
       return "";
   }
