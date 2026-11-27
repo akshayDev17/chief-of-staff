@@ -64,9 +64,12 @@ export interface BarParts {
   over: number;
 }
 
+// How far one count is above the other, 0 when under half a cent.
+const beyond = (usd: number, than: number): number => (usd - than >= 0.005 ? usd - than : 0);
+
 export function barParts(budgetUsd: number, ledgerUsd: number, key: KeyFigure): BarParts {
   const reported = "usage" in key ? key.usage.monthlyUsd : 0;
-  const extra = Math.max(0, ledgerUsd - reported);
+  const extra = "usage" in key ? beyond(ledgerUsd, reported) : ledgerUsd;
   const spent = reported + extra;
   return { reported, extra, spent, left: Math.max(0, budgetUsd - spent), over: Math.max(0, spent - budgetUsd) };
 }
@@ -115,8 +118,8 @@ function regions(input: BudgetBarInput, p: BarParts): Region[] {
       name: read ? "Counted by the app, not in OpenRouter's figure yet" : "Counted by the app",
       usd: p.extra,
       what: read
-        ? "Calls the app counted this month that OpenRouter's figure for this key does not include: OpenRouter may not have counted them yet, or they were made with an earlier key, before you connected again. Each is OpenRouter's own cost for that call, from its reply."
-        : "Every call the app counted this month, each at OpenRouter's own cost from its reply.",
+        ? "Calls the app counted this month that OpenRouter's figure for this key does not include: OpenRouter may not have counted them yet, or they were made with an earlier key, before you connected again. Each is OpenRouter's own cost for that call, from its reply, or its list price when the reply reported none."
+        : "Every call the app counted this month, each at OpenRouter's own cost from its reply, or at list price when the reply reported none.",
       links: [{ ...ACTIVITY, label: "Check the calls on OpenRouter's Activity page" }],
     },
     {
@@ -151,10 +154,8 @@ export function renderBudgetBar(input: BudgetBarInput): string {
     ? `${money(p.spent)} of ${budgetText(input.budgetUsd)} · over by ${money(p.over)}`
     : `${money(p.spent)} of ${budgetText(input.budgetUsd)} · ${money(p.left)} left`;
   const k = input.key;
-  const gap =
-    "usage" in k && p.reported - input.ledgerUsd >= 0.005
-      ? ` OpenRouter's figure is ${money(p.reported - input.ledgerUsd)} more than the app's own count; the bar shows the larger.`
-      : "";
+  const ahead = "usage" in k ? beyond(p.reported, input.ledgerUsd) : 0;
+  const gap = ahead ? ` OpenRouter's figure is ${money(ahead)} more than the app's own count; the bar shows the larger.` : "";
   const source =
     "usage" in k
       ? `Source: OpenRouter's own figure for the Chief of staff key, ${money(p.reported)} at ${hhmm(k.readAt)}, plus what the app counted beyond it. The app's own count this month, which stops calls at the budget: ${money(input.ledgerUsd)}.${gap}`

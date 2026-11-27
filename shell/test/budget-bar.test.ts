@@ -80,6 +80,15 @@ describe("the bar's three parts", () => {
     expect(barParts(60, 9, read({ monthlyUsd: 10 }))).toEqual({ reported: 10, extra: 0, spent: 10, left: 50, over: 0 });
   });
 
+  it("has no striped part when the two counts differ by less than half a cent", () => {
+    expect(barParts(60, 0.1 + 0.2, read({ monthlyUsd: 0.3 }))).toEqual({ reported: 0.3, extra: 0, spent: 0.3, left: 59.7, over: 0 });
+    const html = renderBudgetBar({ budgetUsd: 60, ledgerUsd: 0.1 + 0.2, key: read({ monthlyUsd: 0.3 }) });
+    expect(html).not.toContain('data-region="est"');
+    expect(html).not.toContain("more than the app's own count");
+    expect(barParts(60, 0.3, read({ monthlyUsd: 0.304 })).extra).toBe(0);
+    expect(renderBudgetBar({ budgetUsd: 60, ledgerUsd: 0.3, key: read({ monthlyUsd: 0.304 }) })).not.toContain("more than the app's own count");
+  });
+
   it("is all the app's own count when OpenRouter's figure could not be read", () => {
     expect(barParts(30, 4, { unread: "OpenRouter did not answer" })).toEqual({ reported: 0, extra: 4, spent: 4, left: 26, over: 0 });
   });
