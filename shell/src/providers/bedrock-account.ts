@@ -175,9 +175,9 @@ export async function readAccountStates(
 const hhmm = (iso: string): string => `${iso.slice(11, 16)} UTC`;
 
 // The minute a refresh after the one at checkedAt may run, or undefined once it may.
-export function refreshAgainFrom(checkedAt: string, now: Date): string | undefined {
+export function refreshAgainFrom(checkedAt: string, now: Date): Date | undefined {
   const next = new Date(checkedAt).getTime() + REFRESH_SECONDS * 1000;
-  return next > now.getTime() ? hhmm(new Date(Math.ceil(next / 60_000) * 60_000).toISOString()) : undefined;
+  return next > now.getTime() ? new Date(Math.ceil(next / 60_000) * 60_000) : undefined;
 }
 
 const updateNote = (): string =>
@@ -199,7 +199,7 @@ export async function refreshBedrockModels(
   if (!plugin || !connection) return { kind: "not_connected", problem: "Amazon Bedrock is not connected." };
   const last = await readAccountCheck(db, userId);
   const again = last ? refreshAgainFrom(last.checkedAt, now) : undefined;
-  if (again) return { kind: "too_soon", problem: `The list was refreshed at ${hhmm(last!.checkedAt)}; refresh it again from ${again}.` };
+  if (again) return { kind: "too_soon", problem: `The list was refreshed at ${hhmm(last!.checkedAt)}; refresh it again from ${hhmm(again.toISOString())}.` };
 
   // (a) The model list, at most once a minute for everyone.
   const snapshot = await currentSnapshot(db);

@@ -143,10 +143,10 @@ function refreshLine(input: ModelsSectionInput): string {
   const read = input.catalogReadAt ? `Bedrock's model list read ${hhmm(input.catalogReadAt)} on ${nbDate(input.catalogReadAt.slice(0, 10))}` : "Bedrock's model list not read yet";
   const checked = c ? ` · your AWS account checked ${hhmm(c.checkedAt)}` : "";
   const again = c ? refreshAgainFrom(c.checkedAt, input.now) : undefined;
-  const wait = again ? ` Refresh it again from ${again}.` : "";
+  const wait = again ? ` Refresh it again from ${hhmm(again.toISOString())}.` : "";
   const notes = [c?.catalogError, c?.note].filter(Boolean).map((n) => `<p class="small muted">${esc(n!)}</p>`).join("");
   return `<form class="row" method="post" action="${action("bedrock", "refresh")}" style="margin:6px 0">
-<button type="submit" class="btn small refresh"${wait ? " disabled" : ""}>Refresh model list</button><span class="small muted">${read}${checked}. Refresh reads the list again now and checks, in your own AWS account, each Marketplace model's terms and Anthropic's form.${wait}</span>
+<button type="submit" class="btn small refresh"${again ? ` disabled data-enable-at="${again.getTime()}"` : ""}>Refresh model list</button><span class="small muted">${read}${checked}. Refresh reads the list again now and checks, in your own AWS account, each Marketplace model's terms and Anthropic's form.${wait}</span>
 </form>${notes}`;
 }
 
@@ -218,6 +218,9 @@ export const TIER_VARS = `
 
 // The listbox's behaviour. Without it the <noscript> select is the list.
 export const MODELS_JS = `
+document.querySelectorAll("button[data-enable-at]").forEach(function (b) {
+  setTimeout(function () { b.disabled = false; }, Number(b.getAttribute("data-enable-at")) - Date.now());
+});
 document.querySelectorAll("form[data-listbox]").forEach(function (form) {
   var button = form.querySelector(".lb-btn"), list = form.querySelector("[role=listbox]"), input = form.querySelector("[data-model-input]");
   if (!button || !list || !input) return;

@@ -662,7 +662,7 @@ describe("Refresh model list", () => {
 
     const page = await (await open(plugins, at(1))).text();
     // Refreshed this minute: the button is off until the next one.
-    expect(page).toContain("<button type=\"submit\" class=\"btn small refresh\" disabled>Refresh model list</button>");
+    expect(page).toContain(`<button type="submit" class="btn small refresh" disabled data-enable-at="${at(2).getTime()}">Refresh model list</button>`);
     expect(page).toContain("Refresh it again from 10:02 UTC.");
     expect(await (await open(plugins, at(2))).text()).toContain("<button type=\"submit\" class=\"btn small refresh\">Refresh model list</button>");
     expect(page).toContain("Bedrock's model list read 10:01 UTC on 2026&#8209;11&#8209;25 · your AWS account checked 10:01 UTC.");
@@ -683,7 +683,7 @@ describe("Refresh model list", () => {
     // Refreshed at 10:03:30: the time shown is the minute the button turns back on.
     expect((await refresh(plugins, at(3.5), readCatalog)).status).toBe(303);
     const waiting = await (await open(plugins, at(4.25))).text();
-    expect(waiting).toContain("<button type=\"submit\" class=\"btn small refresh\" disabled>Refresh model list</button>");
+    expect(waiting).toContain(`<button type="submit" class="btn small refresh" disabled data-enable-at="${at(5).getTime()}">Refresh model list</button>`);
     expect(waiting).toContain("Refresh it again from 10:05 UTC.");
     expect(await (await refresh(plugins, at(4.25), readCatalog)).text()).toContain("refresh it again from 10:05 UTC.");
     expect((await refresh(plugins, at(4.5), readCatalog)).status).toBe(303);
