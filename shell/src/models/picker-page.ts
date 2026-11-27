@@ -400,7 +400,7 @@ html:not(.js) .t-note { display: flex; }
 .pick-btn { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 5px 10px 5px 12px; border: 1px solid var(--control); border-radius: var(--radius-control); background: var(--surface); text-align: left; transition: border-color var(--t); }
 .pick-btn:hover { border-color: var(--control-hover); }
 .pick-btn[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } /* taste-skill-ignore: focus ring, not a shadow */
-.pick-btn[disabled] { cursor: default; background: var(--raised); border-color: var(--border); }
+.pick-btn[disabled] { cursor: default; background: transparent; border-style: dashed; border-color: var(--control); }
 .pick-btn .chev { flex: none; display: inline-flex; color: var(--muted); }
 .pick-btn .chev svg { width: 12px; height: 12px; }
 .task[data-dirty] .pick-btn[data-changed] { border-color: var(--accent); }
