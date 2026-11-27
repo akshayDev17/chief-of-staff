@@ -89,7 +89,9 @@ describe("the same filter on both pages", () => {
     const find = html.match(/<div class="find" data-find="by-models" data-noun="models" hidden>[\s\S]*?\n<\/div>/)![0];
     expect(find).toContain(MAKER_FILTER_HTML);
     expect(find).toContain(MAKER_CHIPS_HTML);
-    expect(html).toContain('data-maker="maker-2" data-maker-name="Maker 2"');
+    expect(html).toContain('data-maker="maker-2" data-maker-name="Maker 2" data-calls="1" data-in="10" data-out="1" data-cost="0.12"');
+    // The Shown line waits hidden above the month's total.
+    expect(html).toMatch(/<tfoot><tr class="shown" data-shown hidden><th scope="row">Shown[\s\S]*?<\/tr><tr><th scope="row">This month/);
     expect(html).toContain("<script>");
     expect(html.match(/<script>[\s\S]*<\/script>/)![0]).toContain(MAKER_FILTER_JS);
   });
@@ -241,6 +243,32 @@ describe("with the page's own controls", () => {
     expect(p.dispatch("keydown", p.input, "Escape").defaultPrevented).toBe(true);
     expect(p.shown()).toEqual([0, 2]);
     expect(p.filter.classList.contains("open")).toBe(true);
+  });
+
+  it("on Usage: while a search or the makers narrow the rows, a Shown line sums the rows shown above the month's total", () => {
+    const p = perModelBox(ROWS.map((r, i) => ({ ...r, calls: i + 1, cost: [1.25, 0.004, 0.37, 0, 0.001][i]! })));
+    expect(p.sub.hidden).toBe(true);
+    p.dispatch("click", p.toggle);
+    p.tick("Anthropic");
+    expect(p.sub.hidden).toBe(false);
+    // Rows 0 and 2: 1 + 3 calls, $1.25 + $0.37.
+    expect([p.sums.calls!.textContent, p.sums.in!.textContent, p.sums.out!.textContent, p.sums.cost!.textContent, p.sums["calls-text"]!.textContent]).toEqual(["4", "200", "20", "$1.62", "4 calls"]);
+    // It sticks just above the month's total.
+    expect(p.sumCells.every((c) => (c as unknown as { style: { bottom: string } }).style.bottom === "40px")).toBe(true);
+    p.tick("Anthropic", false);
+    p.tick("Meta");
+    expect(p.sums.cost!.textContent).toBe("under $0.01");
+    expect(p.sums["calls-text"]!.textContent).toBe("9 calls");
+    p.type("muse");
+    expect(p.sums.cost!.textContent).toBe("under $0.01");
+    expect(p.sums["calls-text"]!.textContent).toBe("5 calls");
+    p.type("gpt");
+    expect(p.sub.hidden).toBe(true);
+    p.dispatch("click", p.clear);
+    expect(p.sub.hidden).toBe(true);
+    p.type("haiku");
+    expect([p.sub.hidden, p.sums.cost!.textContent, p.sums["calls-text"]!.textContent]).toEqual([false, "$0.37", "3 calls"]);
+    expect(p.sent).toEqual([]);
   });
 
   it("on Providers: the count says how many show, and the search's Escape clears only the search", () => {
