@@ -220,7 +220,7 @@ describe("Test all models", () => {
     const luna = rowOf(rows, "test-luna");
     expect(luna).toContain('data-state="fails"');
     expect(luna).toContain(`<span class="pill bad">Doesn't work</span>`);
-    expect(luna).toMatch(/<span class="meta why">No such model\. · <button[^>]*>Details<\/button> · <span class="later">Latest test couldn&#39;t run: [^<]+<\/span><\/span>/);
+    expect(luna).toMatch(/<span class="meta why">No such model\. · <button[^>]*>Details<\/button> · <span class="later">Latest test couldn&#39;t run\. [^<]+<\/span><\/span>/);
     expect(luna).toContain("openrouter replied: 404");
     expect(luna).not.toContain('<span class="pill">Busy</span>');
     // Still usable: the outcome tag.
@@ -232,9 +232,9 @@ describe("Test all models", () => {
     expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num bad">1<\/span>/);
     // The result under the row: the verdict first, then the newer outcome.
     const under = rowOf(modelParts(await tableInput({ view: { results: [{ model: "test-luna" }] } })).rows, "test-luna");
-    expect(under).toMatch(/<strong>No such model\.<\/strong>[\s\S]*?<p class="later">Latest test couldn&#39;t run: /);
+    expect(under).toMatch(/<strong>No such model\.<\/strong>[\s\S]*?<div class="later"><p>Latest test couldn&#39;t run\. /);
     const carried = rowOf(modelParts(await tableInput({ view: { results: [{ model: "test-luna", reason: "budget_spent" }] } })).rows, "test-luna");
-    expect(carried).toMatch(/<strong>No such model\.<\/strong><\/span>[\s\S]*?<p class="later">Latest test couldn&#39;t run: this month&#39;s budget is spent\.<\/p>/);
+    expect(carried).toMatch(/<strong>No such model\.<\/strong><\/span>[\s\S]*?<div class="later"><p>This test couldn&#39;t run\. This month&#39;s budget is spent\.<\/p><div class="acts"><a class="btn small outline" href="[^"]*\/budgets">Budgets<\/a><\/div><\/div>/);
   });
 
   it("keeps a usable model usable when the user disconnects or the budget runs out while Test all is queued", async () => {

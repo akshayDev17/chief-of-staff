@@ -170,7 +170,6 @@ export const formatCost = (n: number): string => {
   return n < 0.0001 ? "under $0.0001" : `$${n.toFixed(4)}`;
 };
 
-const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
 const joinAnd = (a: string[]): string => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a.at(-1)}`);
 
 export const ICON = {
@@ -209,15 +208,87 @@ const shortName = (r: OfferRow): string => {
   return n.includes(": ") ? n.slice(n.indexOf(": ") + 2) : n;
 };
 
-// What a row's state is, for the strip and the script's filters: the
-// model's latest verdict.
+// ---------- the one rule for what a row shows ----------
+
+// What a row's test state is made of: whether it is blocked (its account
+// leaves it out, a router has no cap, the app can't call it, it has no
+// price) or being tested in a run; the model's latest verdict; and the
+// newest refusal that says nothing about the model (models/test-model.ts
+// isVerdict), newer than that verdict, from the user's own Test (carried in
+// the view) or from a run.
+export interface RowFacts {
+  blocked: boolean;
+  testing: boolean;
+  verdict?: { state: "passed" } | { state: "failed"; result: TestRecord };
+  refusal?: { result: TestRecord; from: "test" | "run" };
+}
+
 type RowState = "works" | "fails" | "pending" | "blocked";
-const rowState = (r: OfferRow, shown: Map<string, ShownTest>): RowState => {
-  if (blockKind(r)) return "blocked";
-  const s = shown.get(r.model);
-  const verdict = s && s.state !== "testing" ? s.verdict : undefined;
-  return verdict === "passed" ? "works" : verdict === "failed" ? "fails" : "pending";
-};
+export type RowAction = "credits" | "test-again" | "budgets";
+export type RowTag = "doesnt-work" | "needs-credit" | "busy" | "couldnt-test";
+
+// One test record as the row shows it, with the actions that answer it.
+export interface Shown {
+  result: TestRecord;
+  actions: RowAction[];
+}
+
+// What the row shows: `state` for the strip and the filters (the verdict);
+// its tag; `lead`, the failure its reason line and its result lead with;
+// `note`, a newer refusal under a failed verdict, after it; `passed`, a
+// result that says it passed; `askAdmin`, the reason a friend's Ask Admin
+// sends: the refusal just hit, else the lead's.
+export interface RowView {
+  state: RowState;
+  tag?: RowTag;
+  lead?: Shown;
+  note?: Shown & { from: "test" | "run" };
+  passed: boolean;
+  askAdmin?: TestRefusal;
+}
+
+const actionsFor = (r: TestRecord): RowAction[] =>
+  r.reason === "no_credits" ? ["credits"] : r.reason === "busy" ? ["test-again"] : r.reason === "budget_spent" ? ["budgets"] : [];
+const shownOf = (result: TestRecord): Shown => ({ result, actions: actionsFor(result) });
+
+// A failed verdict leads, as "Doesn't work", with a newer refusal as its
+// note; otherwise the refusal leads. An outcome tag (Needs credit, Busy,
+// Couldn't test) shows only on a model still usable: passed and not blocked.
+// While a run tests the row, only the user's own Test shows.
+export function describeRow(f: RowFacts): RowView {
+  const state: RowState = f.blocked ? "blocked" : f.testing ? "pending" : f.verdict?.state === "passed" ? "works" : f.verdict?.state === "failed" ? "fails" : "pending";
+  const failed = !f.testing && f.verdict?.state === "failed" ? f.verdict.result : undefined;
+  const refusal = f.testing && f.refusal?.from === "run" ? undefined : f.refusal;
+  if (failed) {
+    const note = refusal ? { ...shownOf(refusal.result), from: refusal.from } : undefined;
+    return { state, tag: "doesnt-work", lead: shownOf(failed), ...(note ? { note } : {}), passed: false, askAdmin: (note ?? shownOf(failed)).result.reason };
+  }
+  if (refusal) {
+    const usable = !f.blocked && !f.testing && f.verdict?.state === "passed";
+    const reason = refusal.result.reason;
+    const tag: RowTag | undefined = usable ? (reason === "no_credits" ? "needs-credit" : reason === "busy" ? "busy" : "couldnt-test") : undefined;
+    return { state, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, askAdmin: reason };
+  }
+  return { state, passed: !f.testing && f.verdict?.state === "passed" };
+}
+
+// The facts of `r`'s row, from its shown test and the view.
+function rowFacts(r: OfferRow, input: ModelsTableInput): RowFacts {
+  const s = input.shown.get(r.model);
+  const res = input.view.results?.find((x) => x.model === r.model);
+  let refusal: RowFacts["refusal"];
+  if (res?.reason) {
+    const refused: Refused = { kind: "refused", model: r.model, reason: res.reason, ...(r.free ? { free: true } : {}) };
+    const fix = refusalFix(refused, input.plugin);
+    refusal = { result: { reason: res.reason, text: refusalText(refused, input.plugin), ...(fix ? { fix } : {}), ...(res.reply ? { reply: res.reply } : {}) }, from: "test" };
+  }
+  const blocked = Boolean(blockKind(r));
+  if (!s || s.state === "testing") return { blocked, testing: s?.state === "testing", ...(refusal ? { refusal } : {}) };
+  const run = s.notVerdict ? s.result : s.later;
+  refusal ??= run ? { result: run, from: "run" } : undefined;
+  const verdict: RowFacts["verdict"] = s.notVerdict ? (s.verdict === "passed" ? { state: "passed" } : undefined) : s.state === "passed" ? { state: "passed" } : { state: "failed", result: s.result };
+  return { blocked, testing: false, ...(verdict ? { verdict } : {}), ...(refusal ? { refusal } : {}) };
+}
 
 const running = (input: ModelsTableInput): boolean => Boolean(input.run && !input.run.finishedAt);
 const primaryIf = (input: ModelsTableInput, step: Step): string => (input.step === step ? "primary" : "outline");
@@ -227,7 +298,7 @@ function counts(input: ModelsTableInput): { w: number; f: number; p: number; t: 
   let f = 0;
   let p = 0;
   for (const r of input.rows) {
-    const s = rowState(r, input.shown);
+    const s = describeRow(rowFacts(r, input)).state;
     if (s === "works") w++;
     else if (s === "fails") f++;
     else if (s === "pending") p++;
@@ -266,19 +337,15 @@ function errPart(input: ModelsTableInput): string {
 
 // ---------- the rows ----------
 
-// "Latest test couldn't run: <its plain line>", for a refusal newer than a
-// failed verdict.
-const laterNote = (text: string): string => `Latest test couldn't run: ${lowerFirst(text)}`;
+const TAGS: Record<RowTag, string> = {
+  "doesnt-work": `<span class="pill bad">Doesn't work</span>`,
+  "needs-credit": '<span class="pill warn">Needs credit</span>',
+  busy: '<span class="pill">Busy</span>',
+  "couldnt-test": `<span class="pill">Couldn't test</span>`,
+};
 
-// A failed verdict is "Doesn't work"; on a model still usable, a refusal
-// that says nothing about the model names what kept the test from answering.
-function failTag(failed: { result: TestRecord; verdict?: string; notVerdict?: true }): string {
-  if (!failed.notVerdict) return `<span class="pill bad">Doesn't work</span>`;
-  if (failed.verdict !== "passed") return "";
-  if (failed.result.reason === "no_credits") return '<span class="pill warn">Needs credit</span>';
-  if (failed.result.reason === "busy") return '<span class="pill">Busy</span>';
-  return `<span class="pill">Couldn't test</span>`;
-}
+// "Latest test couldn't run. <its plain line, as written>".
+const noteLine = (note: NonNullable<RowView["note"]>): string => `${note.from === "test" ? "This test" : "Latest test"} couldn't run. ${note.result.text}`;
 
 function priceHtml(r: OfferRow, input: ModelsTableInput): string {
   const p = input.plugin.provider;
@@ -329,51 +396,44 @@ function replyText(plugin: ProviderPlugin, reply: TestRecord["reply"]): string {
   return `${esc(plugin.connect.guide.short)} replied: ${esc(parts.join(" · "))}`;
 }
 
-// The result under a row: one plain line, the one action, the provider's
-// own words collapsed.
-function resultHtml(r: OfferRow, input: ModelsTableInput): string {
+// A record's reply, fix and links, for Details; `omit` is a link shown as a button.
+function detailParts(plugin: ProviderPlugin, r: TestRecord, omit: string | undefined): string[] {
+  const links = (r.links ?? []).filter((l) => l.href !== omit).map((l) => newTab(l, "ext")).join(" · ");
+  return [r.reply ? replyText(plugin, r.reply) : "", r.fix ? esc(r.fix) : "", links].filter(Boolean);
+}
+
+// The result under a row: the lead's plain line and its actions, the note
+// with its own, the provider's own words collapsed.
+function resultHtml(r: OfferRow, input: ModelsTableInput, v: RowView): string {
   const { plugin } = input;
   const p = plugin.provider;
-  const res = input.view.results!.find((x) => x.model === r.model)!;
   const hide = `<button type="button" class="link hide" data-hide="${esc(r.model)}">Hide</button>`;
-  const latest = input.shown.get(r.model);
-  const failedVerdict = latest?.state === "failed" && latest.verdict === "failed" && !latest.notVerdict ? latest : undefined;
-  let record: TestRecord | undefined;
-  let later: string | undefined;
-  if (res.reason) {
-    const refused: Refused = { kind: "refused", model: r.model, reason: res.reason, ...(r.free ? { free: true } : {}) };
-    const refusal: TestRecord = { reason: res.reason, text: refusalText(refused, plugin), fix: refusalFix(refused, plugin), ...(res.reply ? { reply: res.reply } : {}) };
-    if (failedVerdict) {
-      record = failedVerdict.result;
-      later = refusal.text;
-    } else record = refusal;
-  } else if (latest && latest.state !== "testing") {
-    if (latest.state === "passed") return `<div class="result ok" role="status"><p class="v">${ICON.ok}<span><strong>${esc(shortName(r))} passed.</strong> Tasks can use it.</span>${hide}</p></div>`;
-    record = latest.result;
-    later = latest.later?.text;
-  }
-  if (!record) return "";
+  if (v.passed) return `<div class="result ok" role="status"><p class="v">${ICON.ok}<span><strong>${esc(shortName(r))} passed.</strong> Tasks can use it.</span>${hide}</p></div>`;
+  if (!v.lead) return "";
   const credits = plugin.connect.guide.credits;
-  const acts = [
-    record.reason === "no_credits" && credits ? newTab(credits, "btn small outline ext") : "",
-    record.reason === "busy"
-      ? `<form method="post" action="${action(p, "test")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><button type="submit" class="btn small outline" data-k="again-${esc(r.model)}" data-busy="Testing…">Test again</button></form>`
-      : "",
-    record.reason === "budget_spent" ? `<a class="btn small outline" href="${BUDGETS_PATH}">Budgets</a>` : "",
-    input.viewer === "friend" && record.reason
-      ? `<form method="post" action="${action(p, "model-help")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><input type="hidden" name="reason" value="${esc(record.reason)}"><button type="submit" class="btn small outline" data-k="help-${esc(r.model)}">Ask Admin for help</button></form>`
-      : "",
-  ].join("");
-  const usedBy = input.usedBy.get(r.model) ?? [];
+  const ACTION: Record<RowAction, string> = {
+    credits: credits ? newTab(credits, "btn small outline ext") : "",
+    "test-again": `<form method="post" action="${action(p, "test")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><button type="submit" class="btn small outline" data-k="again-${esc(r.model)}" data-busy="Testing…">Test again</button></form>`,
+    budgets: `<a class="btn small outline" href="${BUDGETS_PATH}">Budgets</a>`,
+  };
+  const ask =
+    input.viewer === "friend" && v.askAdmin
+      ? `<form method="post" action="${action(p, "model-help")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><input type="hidden" name="reason" value="${esc(v.askAdmin)}"><button type="submit" class="btn small outline" data-k="help-${esc(r.model)}">Ask Admin for help</button></form>`
+      : "";
+  const acts = (s: Shown, withAsk: boolean): string => {
+    const html = s.actions.map((a) => ACTION[a]).join("") + (withAsk ? ask : "");
+    return html ? `<div class="acts">${html}</div>` : "";
+  };
+  const usedBy = v.tag === "doesnt-work" ? (input.usedBy.get(r.model) ?? []) : [];
   const none = usedBy.filter((u) => !u.fallback).map((u) => u.task);
   const used = [
     ...usedBy.flatMap((u) => (u.fallback ? [`<p>${esc(u.task)} runs on its fallback ${esc(u.fallback)} now.</p>`] : [])),
     none.length ? `<p>${esc(joinAnd(none))} ${none.length === 1 ? "reads" : "read"} “Choose a model” now.</p>` : "",
   ].join("");
-  const links = (record.links ?? []).filter((l) => l.href !== credits?.href).map((l) => newTab(l, "ext")).join(" · ");
-  const det = [record.reply ? `<p>${replyText(plugin, record.reply)}</p>` : "", record.fix ? `<p>${esc(record.fix)}</p>` : "", links ? `<p>${links}</p>` : ""].join("");
-  const cls = record.reason === "no_credits" ? "warn" : "bad";
-  return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(record.text)}</strong></span>${hide}</p>${later ? `<p class="later">${esc(laterNote(later))}</p>` : ""}${used}${acts ? `<div class="acts">${acts}</div>` : ""}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
+  const note = v.note ? `<div class="later"><p>${esc(noteLine(v.note))}</p>${acts(v.note, true)}</div>` : "";
+  const det = [...detailParts(plugin, v.lead.result, credits?.href), ...(v.note ? detailParts(plugin, v.note.result, credits?.href) : [])].map((d) => `<p>${d}</p>`).join("");
+  const cls = v.lead.result.reason === "no_credits" ? "warn" : "bad";
+  return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(v.lead.result.text)}</strong></span>${hide}</p>${used}${acts(v.lead, !v.note)}${note}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
 }
 
 function capEditor(r: OfferRow, input: ModelsTableInput): string {
@@ -403,10 +463,7 @@ function noticeHtml(r: OfferRow, input: ModelsTableInput): string {
 function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, string>): string {
   const { plugin, view } = input;
   const p = plugin.provider;
-  const shown = input.shown.get(r.model);
-  const state = rowState(r, input.shown);
-  // The failed test the row reports, which may be no verdict on the model.
-  const failed = shown?.state === "failed" ? shown : undefined;
+  const v = describeRow(rowFacts(r, input));
   const kind = blockKind(r);
   const makerKey = r.model.split("/")[0]!;
   const maker = makerNames.get(makerKey) ?? makerKey;
@@ -417,7 +474,7 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   // on hundreds of rows says nothing); the strip's Works cell finds them.
   let tags = "";
   if (r.free) tags += '<span class="pill free">Free</span>';
-  if (failed) tags += failTag(failed);
+  if (v.tag) tags += TAGS[v.tag];
   const resultHere = view.results?.some((x) => x.model === r.model) ?? false;
   const plainMeta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span></span>`;
   let meta: string;
@@ -425,23 +482,24 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   else if (kind === "router") meta = `<span class="meta">Priced per call by the model it picks</span>`;
   else if (kind === "not_callable") meta = `<span class="meta" title="${esc(plugin.connect.notCallableReason(r.model))}">Can't be tested · ${esc(plugin.connect.notCallableReason(r.model))}</span>`;
   else if (kind === "no_price") meta = `<span class="meta">No price yet · <span data-hl>${id}</span></span>`;
-  else if (r.cap && !failed) {
+  else if (r.cap && !v.lead) {
     meta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped · <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span>`;
-  } else if (failed && !resultHere) {
-    const later = failed.later ? ` · <span class="later">${esc(laterNote(failed.later.text))}</span>` : "";
-    meta = `<span class="meta why">${esc(failed.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button>${later}</span>`;
+  } else if (v.lead && !resultHere) {
+    const note = v.note ? ` · <span class="later">${esc(noteLine(v.note))}</span>` : "";
+    meta = `<span class="meta why">${esc(v.lead.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button>${note}</span>`;
   } else meta = plainMeta;
   let extra = "";
   if (view.cap === r.model && r.router) extra = capEditor(r, input);
   else if (view.notice?.model === r.model) extra = noticeHtml(r, input);
-  else if (resultHere) extra = resultHtml(r, input);
-  else if (failed) {
-    const res = failed.result;
-    const det = [`<span>${esc(maker)} · ${id}</span>`, res.reply ? `<span>${replyText(plugin, res.reply)}</span>` : "", res.fix ? `<span>${esc(res.fix)}</span>` : ""].join("");
+  else if (resultHere) extra = resultHtml(r, input, v);
+  else if (v.lead) {
+    const omit = plugin.connect.guide.credits?.href;
+    const parts = [`${esc(maker)} · ${id}`, ...detailParts(plugin, v.lead.result, omit), ...(v.note ? detailParts(plugin, v.note.result, omit) : [])];
+    const det = parts.map((d) => `<span>${d}</span>`).join("");
     extra = `<div class="det" id="det-${esc(anchor)}" data-det-panel hidden>${det}</div>`;
   }
   const hay = esc(`${r.name ?? ""} ${name} ${maker} ${makerKey} ${r.model}`.toLowerCase());
-  return `<li class="row" id="${esc(anchor)}" data-id="${id}" data-maker="${esc(makerKey)}" data-maker-name="${esc(maker)}" data-hay="${hay}" data-state="${state}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(tierText(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
+  return `<li class="row" id="${esc(anchor)}" data-id="${id}" data-maker="${esc(makerKey)}" data-maker-name="${esc(maker)}" data-hay="${hay}" data-state="${v.state}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(tierText(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
 }
 
 function rowsPart(input: ModelsTableInput): string {
@@ -540,7 +598,7 @@ function railPart(input: ModelsTableInput): string {
     const rt = retest.wait
       ? `<button type="button" class="btn outline" disabled data-k="rt"><span>Retest failed${rtN}</span></button>`
       : `<a class="btn outline" href="${esc(viewHref(p, { confirm: "retest" }, "#ta"))}" data-view data-k="rt"><span>Retest failed${rtN}</span></a>`;
-    const rtWhy = retest.wait && !stale && !isRunning ? `<p class="why">Retest failed: ${esc(lowerFirst(retest.wait))}</p>` : !retest.wait && retest.skipped ? `<p class="why">Retest failed skips ${retest.skipped} no longer on the model list.</p>` : "";
+    const rtWhy = retest.wait && !stale && !isRunning ? `<p class="why">Retest failed · ${esc(retest.wait)}</p>` : !retest.wait && retest.skipped ? `<p class="why">Retest failed skips ${retest.skipped} no longer on the model list.</p>` : "";
     act = `<div class="two">${ta}${rt}</div>${why ? `<div class="why">${why}</div>` : ""}${rtWhy}`;
   }
   return `<h3 id="ta">Test all</h3><p class="runline">${line}</p>${staleBox}<div class="ta-act">${act}</div>`;
