@@ -141,6 +141,8 @@ describe("Admin · Price table", () => {
     expect(html).toContain("OpenRouter models API: ok");
     expect(html).toContain("openai/gpt-6-luna");
     expect(html).toContain("openrouter.ai</a>, read 2026-11-27");
+    expect(html).toContain("Free (:free) models, which a $0 account can use, allow 20 requests a minute");
+    expect(html).not.toContain("does not offer");
     expect(html).not.toMatch(/Bedrock|Foundry|Vertex|maintainer-read/);
     expect(displayRows(rows).find((r) => r.model === "anthropic/claude-haiku-5.5")).toMatchObject({ input: 0.1, longInput: 0.5 });
   });
