@@ -661,7 +661,10 @@ describe("Refresh model list", () => {
     });
 
     const page = await (await open(plugins, at(1))).text();
-    expect(page).toContain("<button type=\"submit\" class=\"btn small ghost\">Refresh model list</button>");
+    // Refreshed this minute: the button is off until the next one.
+    expect(page).toContain("<button type=\"submit\" class=\"btn small\" disabled>Refresh model list</button>");
+    expect(page).toContain("Refresh it again from 10:02 UTC.");
+    expect(await (await open(plugins, at(2))).text()).toContain("<button type=\"submit\" class=\"btn small\">Refresh model list</button>");
     expect(page).toContain("Bedrock's model list read 10:01 UTC on 2026&#8209;11&#8209;25 · your AWS account checked 10:01 UTC.");
     const haiku = entry(page, "Claude Haiku 4.5");
     expect(haiku).toContain("accept terms on first pick · needs Anthropic&#39;s form");
