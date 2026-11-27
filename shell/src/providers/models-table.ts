@@ -494,7 +494,8 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   else if (kind === "not_callable") meta = `<span class="meta" title="${esc(plugin.connect.notCallableReason(r.model))}">Can't be tested · ${esc(plugin.connect.notCallableReason(r.model))}</span>`;
   else if (kind === "no_price") meta = `<span class="meta">No price yet · <span data-hl>${id}</span></span>`;
   else if (r.cap && !v.lead) {
-    meta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped · <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span>`;
+    // Only the maker and ID clip; Change cap always shows whole, even on a phone.
+    meta = `<span class="meta capped"><span class="clip"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped</span><span class="cg">&nbsp;· <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span></span>`;
   } else if (v.lead && !resultHere) {
     const note = v.note ? ` · <span class="later">${esc(noteLine(v.note))}</span>` : "";
     meta = `<span class="meta why">${esc(v.lead.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button>${note}</span>`;
@@ -523,11 +524,13 @@ function rowsPart(input: ModelsTableInput): string {
 
 // ---------- the list foot: what the list is, collapsed ----------
 
+const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
 function footPart(input: ModelsTableInput): string {
   const short = esc(input.plugin.connect.guide.short);
   const d = input.catalog?.dropped;
   const dropped = d
-    ? `<li>Every model ${short} lists is here but the ones no test can pass: ${d.batch} “:batch” variants (they answer no chat call), ${d.alias} “~” aliases (each points to a model listed under its own ID), ${d.router} routers no price cap can bound (a panel of models, or another maker's router) and ${d.unusable ?? 0} models that give audio, images or video, give no text, or list no price.</li>`
+    ? `<li>Every model ${short} lists is here but the ones no test can pass: ${counted(d.batch, "“:batch” variant", "“:batch” variants")} (they answer no chat call), ${counted(d.alias, "“~” alias", "“~” aliases")} (each points to a model listed under its own ID), ${counted(d.router, "router no price cap can bound", "routers no price cap can bound")} (a panel of models, or another maker's router) and ${counted(d.unusable ?? 0, "model that gives audio, images or video, gives no text, or lists no price", "models that give audio, images or video, give no text, or list no price")}.</li>`
     : `<li>Every model ${short} lists is here.</li>`;
   const terms = input.plugin.connect.freeModelTerms;
   const free = terms && input.rows.some((r) => r.free)

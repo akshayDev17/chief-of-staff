@@ -119,7 +119,7 @@ describe("a $0 OpenRouter account", () => {
     expect(entry(html, "openai/gpt-6-luna")).not.toContain("pill free");
     // Never testable, so never shown; About this list counts it.
     expect(entry(html, MUSIC)).toBe("");
-    expect(html).toContain("1 models that give audio, images or video, give no text, or list no price.");
+    expect(html).toContain("1 model that gives audio, images or video, gives no text, or lists no price.");
     expect(html).toContain("Free models work without credit. OpenRouter allows free models 20 requests a minute, and 50 a day");
     expect(html).toContain("https://openrouter.ai/settings/privacy");
   });

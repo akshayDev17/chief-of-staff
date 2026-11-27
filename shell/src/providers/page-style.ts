@@ -179,6 +179,9 @@ h2 { font-size: var(--fs-h2); line-height: 26px; font-weight: 700; }
 .nm .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { grid-column: 1; font-size: var(--fs-small); line-height: 18px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta .link { font-size: 13px; }
+.meta.capped { display: flex; }
+.meta.capped .clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.meta.capped .cg { flex: none; white-space: pre; }
 .meta.why { color: var(--text); white-space: normal; } /* the reason and its Details link always show whole */
 .price { grid-column: 2; grid-row: 1; text-align: right; font-size: 14px; white-space: nowrap; }
 .tier { grid-column: 2; grid-row: 2; text-align: right; font-size: var(--fs-small); line-height: 18px; color: var(--muted); white-space: nowrap; }
