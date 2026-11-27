@@ -34,6 +34,7 @@
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { esc } from "../prices/page";
 import type { Dropped } from "../prices/openrouter";
+import { makerKey, makerRowAttrs, nameMakers } from "../models/maker-filter";
 import { DEFAULT_CAP } from "../models/price-caps";
 import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type OfferRow, type Refused, type TestRefusal } from "../models/test-model";
 import { isCurrentRun, type RetestPlan, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
@@ -185,23 +186,6 @@ export const ICON = {
 };
 
 const newTab = (l: Link, cls: string): string => `<a class="${cls}" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
-
-// A model's maker, from its provider-given name ("Anthropic: Claude …") where
-// the name has one, else the provider's own name for its own models, else the
-// ID's prefix ("anthropic/…").
-export function makers(rows: OfferRow[], plugin: ProviderPlugin): Map<string, string> {
-  const names = new Map<string, string>();
-  for (const r of rows) {
-    const key = r.model.split("/")[0]!;
-    const named = r.name?.includes(": ") ? r.name.split(": ")[0]!.trim() : undefined;
-    if (named && !names.has(key)) names.set(key, named);
-  }
-  for (const r of rows) {
-    const key = r.model.split("/")[0]!;
-    if (!names.has(key)) names.set(key, key === plugin.provider ? plugin.connect.guide.name : key);
-  }
-  return names;
-}
 
 const shortName = (r: OfferRow): string => {
   const n = r.name ?? r.model;
@@ -476,8 +460,8 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   const p = plugin.provider;
   const v = describeRow(rowFacts(r, input));
   const kind = blockKind(r);
-  const makerKey = r.model.split("/")[0]!;
-  const maker = makerNames.get(makerKey) ?? makerKey;
+  const makerId = makerKey(r.model);
+  const maker = makerNames.get(makerId) ?? makerId;
   const name = shortName(r);
   const id = esc(r.model);
   const anchor = rowAnchor(r.model);
@@ -510,15 +494,16 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
     const det = parts.map((d) => `<span>${d}</span>`).join("");
     extra = `<div class="det" id="det-${esc(anchor)}" data-det-panel hidden>${det}</div>`;
   }
-  const hay = esc(`${r.name ?? ""} ${name} ${maker} ${makerKey} ${r.model}`.toLowerCase());
-  return `<li class="row" id="${esc(anchor)}" data-id="${id}" data-maker="${esc(makerKey)}" data-maker-name="${esc(maker)}" data-hay="${hay}" data-state="${v.state}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(tierText(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
+  const hay = esc(`${r.name ?? ""} ${name} ${maker} ${makerId} ${r.model}`.toLowerCase());
+  return `<li class="row" id="${esc(anchor)}" data-id="${id}"${makerRowAttrs(r.model, maker)} data-hay="${hay}" data-state="${v.state}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(tierText(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
 }
 
 function rowsPart(input: ModelsTableInput): string {
   if (!input.rows.length) {
     return `<li class="empty"><p>No model is listed yet. Refresh reads ${esc(input.plugin.connect.guide.short)}'s list now.</p></li>`;
   }
-  const makerNames = makers(input.rows, input.plugin);
+  const { plugin } = input;
+  const makerNames = nameMakers(input.rows.map((r) => ({ id: r.model, ...(r.name ? { name: r.name } : {}) })), { key: plugin.provider, name: plugin.connect.guide.name });
   return input.rows.map((r) => rowHtml(r, input, makerNames)).join("\n");
 }
 

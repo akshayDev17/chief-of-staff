@@ -3,6 +3,8 @@
 // type (Georgia, the stone ground, the one blue accent), with a dark theme.
 // Grid at 1440: column 1152 = list 792 + rail 360.
 
+import { MAKER_FILTER_CSS } from "../models/maker-filter";
+
 export const PAGE_STYLE = `
 :root {
   color-scheme: light dark;
@@ -121,27 +123,8 @@ h2 { font-size: var(--fs-h2); line-height: 26px; font-weight: 700; }
 .count { margin-left: auto; font-size: var(--fs-small); color: var(--muted); white-space: nowrap; }
 .count b { color: var(--text); font-weight: 400; }
 
-.maker { position: relative; }
-.maker-btn { gap: 8px; }
-.maker-btn .n { font-family: var(--figures); background: var(--text); color: var(--surface); border-radius: 999px; min-width: 20px; height: 20px; padding: 0 6px; font-size: 12px; display: none; align-items: center; justify-content: center; }
-.maker-btn.on .n { display: inline-flex; }
-.maker-btn svg { width: 12px; height: 12px; color: var(--muted); }
-.pop { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; width: 300px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: 0 10px 28px var(--shadow); padding: 10px; display: none; } /* taste-skill-ignore: a menu that floats */
-.maker.open .pop { display: block; }
-.pop input[type="search"] { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--control); border-radius: var(--radius-control); font-size: 14px; background: var(--surface); }
-.pop input[type="search"]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } /* taste-skill-ignore: focus ring */
-.pop ul { max-height: 280px; overflow-y: auto; margin: 8px -4px 0; }
-.pop li label { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 4px; cursor: pointer; font-size: 14px; }
-.pop li label:hover { background: var(--raised); }
-.pop li input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; flex: none; }
-.pop li .c { margin-left: auto; color: var(--muted); font-size: var(--fs-small); }
-.pop .none { padding: 10px 8px; color: var(--muted); font-size: var(--fs-small); }
-.pop .pop-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--rule); margin-top: 8px; padding-top: 8px; font-size: var(--fs-small); }
-.chips { display: none; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
-.chips.on { display: flex; }
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 10px; border-radius: 999px; background: var(--active); border: 0; font-size: 13px; }
-.chip svg { width: 10px; height: 10px; color: var(--muted); }
-.chip:hover { background: var(--chip-hover); }
+${MAKER_FILTER_CSS}
+.chips { padding: 0 16px 10px; }
 
 .strip-wrap { padding: 2px 16px 14px; }
 .strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
@@ -268,7 +251,6 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
   .search { flex: 1 1 100%; order: 1; }
   .maker { order: 2; }
   .count { order: 3; }
-  .pop { width: min(300px, calc(100vw - 32px)); }
   .chips { padding: 0 12px 10px; }
   .list-head { padding: 8px 12px; }
   .strip-wrap { padding: 2px 12px 12px; }

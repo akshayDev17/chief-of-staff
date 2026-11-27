@@ -62,6 +62,7 @@ import type { AccountInfo, ConnectionFields, PluginRegistry, ProviderPlugin } fr
 
 import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, type Check } from "./check";
 import { formatCost, ICON, isRunning, MAX_RESULTS, modelParts, nextStep, parseView, rowAnchor, viewQuery, type ModelsTableInput, type Step, type View, type Viewer } from "./models-table";
+import { MAKER_CHIPS_HTML, MAKER_FILTER_HTML } from "../models/maker-filter";
 import { NOSCRIPT_STYLE, PAGE_STYLE } from "./page-style";
 import { PAGE_SCRIPT } from "./page-script";
 import type { SecretStore } from "./secrets";
@@ -182,10 +183,10 @@ export function renderMain(state: PageState): string {
 <div class="pane">
 <div class="toolbar">
 <div class="search" role="search">${ICON.search}<input type="search" id="pick-q" name="q" aria-label="Search models by name, maker or ID" aria-controls="pick-list" placeholder="Search name, maker or ID" autocomplete="off" spellcheck="false"><button type="button" class="clear-x" data-clear-q aria-label="Clear search">${ICON.x}</button></div>
-<div class="maker" data-maker></div>
+${MAKER_FILTER_HTML}
 <p class="count" id="pick-count" aria-live="polite"><span class="num">${table.rows.length}</span> models</p>
 </div>
-<div class="chips" id="pick-chips"></div>
+${MAKER_CHIPS_HTML}
 <div data-part="err">${parts.err}</div>
 <div class="strip-wrap" data-part="strip">${parts.strip}</div>
 <div class="list-head" data-part="head">${parts.head}</div>
