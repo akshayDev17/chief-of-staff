@@ -255,19 +255,19 @@ document.querySelectorAll("form[data-listbox]").forEach(function (form) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e.key === "ArrowUp" ? options.length - 1 : active); }
   });
   list.addEventListener("keydown", function (e) {
-    var page = 8;
+    var page = 8, now = Date.now(), searching = typed !== "" && now - typedAt <= 700;
     if (e.key === "ArrowDown") { e.preventDefault(); move(active + 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); move(active - 1); }
     else if (e.key === "Home") { e.preventDefault(); move(0); }
     else if (e.key === "End") { e.preventDefault(); move(options.length - 1); }
     else if (e.key === "PageDown") { e.preventDefault(); move(active + page); }
     else if (e.key === "PageUp") { e.preventDefault(); move(active - page); }
-    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(active); }
+    else if (e.key === "Enter" || (e.key === " " && !searching)) { e.preventDefault(); choose(active); }
     else if (e.key === "Escape") { e.preventDefault(); close(true); }
     else if (e.key === "Tab") { close(false); }
-    else if (e.key.length === 1 && /\\S/.test(e.key)) {
-      var now = Date.now();
-      typed = now - typedAt > 700 ? e.key.toLowerCase() : typed + e.key.toLowerCase();
+    else if (e.key.length === 1) {
+      if (e.key === " ") e.preventDefault();
+      typed = searching ? typed + e.key.toLowerCase() : e.key.toLowerCase();
       typedAt = now;
       for (var k = 0; k < options.length; k++) {
         if (options[k].getAttribute("data-model").toLowerCase().indexOf(typed) === 0) { move(k); break; }
