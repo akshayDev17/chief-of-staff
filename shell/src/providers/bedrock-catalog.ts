@@ -1,5 +1,5 @@
 // Bedrock's own model list, and which priced model each Bedrock model ID is
-// (T17: Add a model lists every chat model Bedrock sells at a listed price,
+// (T17: the model list on the Connect screen lists every chat model Bedrock sells at a listed price,
 // of every model family).
 //
 //   readBedrockCatalog(fetcher, env, now) -> CatalogRead      the daily refresh
@@ -87,6 +87,8 @@ export interface PricedName {
 export interface ReviewedModels {
   names: Record<string, string>;
   noToolUse: Array<{ prefix: string; tested: string; evidence: string }>;
+  // Providers and model-ID prefixes Bedrock does not sell through AWS Marketplace.
+  notMarketplace: { providers: string[]; models: string[] };
 }
 
 export const REVIEWED: ReviewedModels = reviewedFile;

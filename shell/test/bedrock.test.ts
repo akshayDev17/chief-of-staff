@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import template from "../bedrock-template/template.json";
+import { ACCOUNT_CHECKS_SINCE } from "../src/providers/bedrock-account";
 import { AWS_AUDIENCE, AWS_SUBJECT, bedrockPlugin, BEDROCK_MODEL_IDS, MARKETPLACE_TERMS_SINCE, olderTemplate, quickCreateLink, ROLE_NAME, STACK_NAME, usageFromConverse } from "../src/providers/bedrock";
 import { ProviderRefusal, type Failure } from "../src/proxy/plugin";
 import { APP_ORIGIN, decodeJwt, issuerKey, issuerKeys, scriptedFetch, stsCredentials, stsError, type Sent } from "./issuer-fixture";
@@ -97,11 +98,16 @@ describe("the Bedrock role template", () => {
   type Statement = { Sid?: string; Effect: string; Action: string | string[]; Resource: unknown; Condition?: Record<string, Record<string, string[]>> };
   const statements = (): Statement[] => role.Policies.flatMap((p) => p.PolicyDocument.Statement as Statement[]);
 
-  it("allows model invocation, accepting Bedrock models' Marketplace terms and reading its own stack, nothing else", () => {
+  it("allows model invocation, accepting Bedrock models' Marketplace terms, reading their access state and its own stack, nothing else", () => {
     expect(statements().flatMap((s) => [s.Action].flat()).sort()).toEqual([
       "aws-marketplace:Subscribe", "aws-marketplace:Unsubscribe", "aws-marketplace:ViewSubscriptions",
+      "bedrock:GetFoundationModelAvailability", "bedrock:GetUseCaseForModelAccess",
       "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "cloudformation:DescribeStacks",
     ]);
+    // Both are Read actions with no resource type (the service authorization reference).
+    expect(statements().find((s) => s.Sid === "ReadModelAccessState")).toEqual({
+      Sid: "ReadModelAccessState", Effect: "Allow", Action: ["bedrock:GetFoundationModelAvailability", "bedrock:GetUseCaseForModelAccess"], Resource: "*",
+    });
     expect(statements().find((s) => s.Action === "cloudformation:DescribeStacks")!.Resource).toEqual({ Ref: "AWS::StackId" });
     expect(statements().every((s) => s.Effect === "Allow")).toBe(true);
   });
@@ -121,8 +127,9 @@ describe("the Bedrock role template", () => {
     expect(terms).toHaveLength(2);
   });
 
-  it("is at least the version whose role accepts the terms", () => {
+  it("is at least the version whose role accepts the terms and reads the account's model states", () => {
     expect(olderTemplate(template.Metadata.TemplateVersion, MARKETPLACE_TERMS_SINCE)).toBe(false);
+    expect(olderTemplate(template.Metadata.TemplateVersion, ACCOUNT_CHECKS_SINCE)).toBe(false);
   });
 });
 
@@ -276,14 +283,17 @@ describe("the Bedrock Connect test call", () => {
 });
 
 describe("the Bedrock guide", () => {
-  it("says the role accepts Marketplace terms by itself, and names the update for a stack on template 1.0.0", () => {
+  it("says the role accepts Marketplace terms by itself, that models are chosen below Connect, and names the update for a stack before 1.2.0", () => {
     const { steps } = bedrockPlugin(envWith()).connect.guide;
     expect(steps.join(" ")).not.toMatch(/invoke-only|accept each one's terms once in the Bedrock console/);
     expect(steps).toContain(
-      "The Connect test call runs on Amazon Nova 2 Lite, which AWS sells itself. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on its first call, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+      "The Connect test call always runs on Amazon Nova 2 Lite, which AWS sells itself, whatever models you choose. Claude and OpenAI GPT (not gpt-oss) models are sold through AWS Marketplace: the role accepts each one's terms by itself on the first call to it, when you choose it, which can take up to 15 minutes. Every other model family needs nothing. For Claude models older than Claude Opus 4.7, AWS also asks its one-time use-case form.",
+    );
+    expect(steps).toContain(
+      "Once it passes, choose your models in the list below it: each runs its own test call once. <strong>Refresh model list</strong> reads Bedrock's list again now and checks, in your own account, which models still need their terms accepted or Anthropic's form.",
     );
     expect(steps.at(-1)).toBe(
-      `Connected before, and Providers shows “Stack template version 1.0.0”? Update the stack once so its role can accept those terms: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose <strong>Update</strong>, then <strong>Replace existing template</strong> with this Amazon S3 URL: ${TEMPLATE_URL}. Keep the parameters, tick the same acknowledgement and submit.`,
+      `Connected before, and Providers shows “Stack template version 1.0.0” or “1.1.0”? Update the stack once so its role can accept those terms and read each model's state for Refresh model list: in AWS CloudFormation, select the “${STACK_NAME}” stack, choose <strong>Update</strong>, then <strong>Replace existing template</strong> with this Amazon S3 URL: ${TEMPLATE_URL}. Keep the parameters, tick the same acknowledgement and submit.`,
     );
   });
 });

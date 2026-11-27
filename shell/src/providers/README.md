@@ -66,8 +66,8 @@ list, read daily by the app's own role and matched to the price table,
 Claude on Foundry (`/anthropic/v1/messages`) and on Vertex AI (`rawPredict`),
 Chat Completions for every other Foundry model
 (`/openai/v1/chat/completions`, by the user's deployment name) and
-`generateContent` for Gemini on Vertex AI. The last two came with Add a model
-(T17, `src/models/README.md`) and are checked live in M2 step 3. Add a model
+`generateContent` for Gemini on Vertex AI. The last two came with the model list
+(T17, `src/models/README.md`) and are checked live in M2 step 3. The model list
 lists every chat model each provider sells at a listed price, of every
 family; a model no caller here reaches yet (on Vertex AI, any publisher but
 Anthropic and Google) shows "not offered yet" until a follow-up fix adds it.

@@ -102,6 +102,22 @@ export async function readStoredBedrockCatalog(db: D1Database, snapshotId: numbe
   return r ? (JSON.parse(r.catalog) as BedrockCatalog) : undefined;
 }
 
+// Bedrock's model list read again now (Refresh model list), kept with the
+// current snapshot in place of the one read with it; false when there is no
+// snapshot yet to keep it with.
+export async function saveBedrockCatalog(db: D1Database, catalog: BedrockCatalog): Promise<boolean> {
+  const snapshot = await currentSnapshot(db);
+  if (!snapshot) return false;
+  await db
+    .prepare(
+      `INSERT INTO bedrock_catalogs (snapshot_id, region, read_at, catalog) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (snapshot_id) DO UPDATE SET region = excluded.region, read_at = excluded.read_at, catalog = excluded.catalog`,
+    )
+    .bind(snapshot.id, catalog.region, catalog.readAt, JSON.stringify(catalog))
+    .run();
+  return true;
+}
+
 export async function readSnapshotRows(db: D1Database, snapshotId: number): Promise<PriceRow[]> {
   const { results } = await db.prepare("SELECT * FROM price_rows WHERE snapshot_id = ?").bind(snapshotId).all<RowRecord>();
   return results.map(toRow);

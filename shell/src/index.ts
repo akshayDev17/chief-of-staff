@@ -5,13 +5,14 @@ import { refreshPrices } from "./prices/refresh";
 import { addAlert, currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
 import { accessDenied, readAccessIdentity } from "./access";
 import { handleIssuerRequest, PUBLIC_ISSUER_PATHS, readAppOrigin } from "./issuer";
+import { readBedrockCatalog } from "./providers/bedrock-catalog";
+import { regionOf } from "./providers/bedrock";
 import { runDueChecks } from "./providers/check";
 import { readProviderPlugins, type ProvidersEnv } from "./providers/index";
 import { handleProviders, isProvidersPath } from "./providers/page";
-import { handleAddModel, isAddModelPath } from "./models/page";
 import { handleTaskModels, isTaskModelsPath } from "./models/picker-page";
 import { handleBudgets } from "./proxy/budgets-page";
-import { BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH } from "./paths";
+import { ADD_MODEL_PATH, BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH } from "./paths";
 import { userFromAccess } from "./users";
 
 // Variables and secrets the provider plug-ins and the Google price reader
@@ -83,15 +84,21 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleProviders(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", appOrigin: readAppOrigin(env), now });
+      return handleProviders(request, {
+        db: env.DB,
+        plugins: await readProviderPlugins(env, env.DB),
+        userId: user.id,
+        viewer: "owner",
+        appOrigin: readAppOrigin(env),
+        now,
+        readCatalog: (at) => readBedrockCatalog(fetch, env, regionOf(env), at),
+      });
     }
-    // Models › Setup › Add a model, for the signed-in user (T17); every
-    // viewer is the owner until invitations bring friends (T45).
-    if (isAddModelPath(url.pathname)) {
-      const now = new Date();
-      const user = await userFromAccess(env.DB, claims, now);
-      if (!user) return accessDenied();
-      return handleAddModel(request, { db: env.DB, plugins: await readProviderPlugins(env, env.DB), userId: user.id, viewer: "owner", now });
+    // The old Models › Setup › Add a model page and its forms: models are
+    // chosen on each provider's Connect screen now, so they lead there.
+    if (url.pathname === ADD_MODEL_PATH || url.pathname.startsWith(`${ADD_MODEL_PATH}/`)) {
+      const provider = url.searchParams.get("provider") ?? /^\/([a-z]+)\//.exec(url.pathname.slice(ADD_MODEL_PATH.length))?.[1];
+      return Response.redirect(`${url.origin}${PROVIDERS_PATH}${provider && /^[a-z]+$/.test(provider) ? `?provider=${provider}` : ""}`, 303);
     }
     // Models › Setup › Model for each task, for the signed-in user (T18);
     // every viewer is the owner until invitations bring friends (T45).

@@ -69,8 +69,20 @@ describe("under /chief-of-staff", () => {
     expect(((await jwks.json()) as { keys: unknown[] }).keys).toHaveLength(1);
   });
 
+  it("leads the old Add a model page and its forms to the providers' Connect screens", async () => {
+    for (const [path, to] of [
+      ["/chief-of-staff/models/setup/add", "/chief-of-staff/models/setup/providers"],
+      ["/chief-of-staff/models/setup/add?provider=foundry", "/chief-of-staff/models/setup/providers?provider=foundry"],
+      ["/chief-of-staff/models/setup/add/vertex/pick", "/chief-of-staff/models/setup/providers?provider=vertex"],
+    ]) {
+      const response = await signedIn(path!);
+      expect(response.status, path).toBe(303);
+      expect(new URL(response.headers.get("location")!).pathname + new URL(response.headers.get("location")!).search, path).toBe(to);
+    }
+  });
+
   it("links every screen under the prefix", async () => {
-    for (const screen of ["providers", "budgets", "add", "tasks"]) {
+    for (const screen of ["providers", "budgets", "tasks"]) {
       const response = await signedIn(`/chief-of-staff/models/setup/${screen}`);
       expect(response.status, screen).toBe(200);
       const paths = [...(await response.text()).matchAll(/(?:href|action)="(\/[^"]*)"/g)].map((m) => m[1]!);

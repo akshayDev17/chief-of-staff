@@ -32,7 +32,7 @@
 // for output) and the model that answered in `modelVersion`. The Gemini
 // caller follows Gemini's generateContent format and is checked live in M2
 // step 3 (T10). A model of any other publisher Vertex AI sells at a listed
-// price is not called yet: a known shortfall against Add a model's list of
+// price is not called yet: a known shortfall against the model list's rule of
 // every chat model of every family (T17, design-v3 1.5), not a rule, closed
 // by a follow-up fix.
 //

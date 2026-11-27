@@ -1,9 +1,11 @@
 import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addModel } from "../src/models/add";
-import { ADD_MODEL_PATH, PROVIDERS_PATH } from "../src/paths";
-import { handleAddModel } from "../src/models/page";
+import { PROVIDERS_PATH } from "../src/paths";
 import { handleProviders } from "../src/providers/page";
+import { readAccountCheck } from "../src/providers/bedrock-account";
+import type { BedrockCatalog, CatalogRead } from "../src/providers/bedrock-catalog";
+import { readBedrockOffer } from "../src/providers/bedrock-catalog";
 import { askAdminForHelp, chooseRegion, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, runDueChecks } from "../src/providers/check";
 import { bedrockPlugin, TEST_MODEL } from "../src/providers/bedrock";
 import type { BedrockOffer, ModelOffer } from "../src/providers/bedrock-catalog";
@@ -49,7 +51,13 @@ beforeEach(async () => {
 
 // AWS as the scenario has it: whether the user's stack exists, and what Converse says.
 function awsWorld(offer?: BedrockOffer) {
-  const world = { stack: false, converse: (_sent: Sent): Response => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3 } }) };
+  const world = {
+    stack: false,
+    template: "1.0.0",
+    // Bedrock's control plane in the user's account (Refresh model list).
+    useCase: (): Response => Response.json({ message: "You have not filled out the request form." }, { status: 404, headers: { "x-amzn-ErrorType": "ResourceNotFoundException" } }),
+    availability: (_modelId: string): Response => Response.json({ agreementAvailability: { status: "AVAILABLE" }, authorizationStatus: "AUTHORIZED", entitlementAvailability: "AVAILABLE", regionAvailability: "AVAILABLE" }),
+    converse: (_sent: Sent): Response => Response.json({ output: { message: { content: [{ text: "OK" }] } }, usage: { inputTokens: 38, outputTokens: 3 } }) };
   const { fetcher, sent } = scriptedFetch([
     [/sts\.us-east-1/, (s: Sent) => {
       const action = new URLSearchParams(s.body).get("Action");
@@ -57,7 +65,9 @@ function awsWorld(offer?: BedrockOffer) {
       return world.stack ? stsCredentials("AssumeRole", "ASIAUSER") : stsError("AccessDenied", "User: arn:aws:sts::111122223333:assumed-role/chief-of-staff-app/chief-of-staff is not authorized to perform: sts:AssumeRole");
     }],
     [/bedrock-runtime/, (s: Sent) => world.converse(s)],
-    [/cloudformation/, () => new Response("<Outputs><member><OutputKey>TemplateVersion</OutputKey><OutputValue>1.0.0</OutputValue></member></Outputs>")],
+    [/cloudformation/, () => new Response(`<Outputs><member><OutputKey>TemplateVersion</OutputKey><OutputValue>${world.template}</OutputValue></member></Outputs>`)],
+    [/^https:\/\/bedrock\.us-east-1\.amazonaws\.com\/use-case-for-model-access$/, () => world.useCase()],
+    [/^https:\/\/bedrock\.us-east-1\.amazonaws\.com\/foundation-model-availability\//, (s: Sent) => world.availability(decodeURIComponent(s.url.split("/").at(-1)!))],
   ]);
   const plugins = {
     bedrock: bedrockPlugin({ APP_ORIGIN, ISSUER_KEYS, AWS_APP_ROLE_ARN: "arn:aws:iam::111122223333:role/chief-of-staff-app", BEDROCK_TEMPLATE_URL: "https://t.example/v1.0.0.json" }, fetcher, () => T0, offer),
@@ -430,7 +440,7 @@ describe("Bedrock's own list and the models it no longer offers", () => {
     }
   });
 
-  it("refuses the test model on Add a model and in a task call when the list drops or refuses it, with its reason", async () => {
+  it("refuses the test model in the model list and in a task call when the list drops or refuses it, with its reason", async () => {
     const reasons = ["Bedrock's own model list marks it legacy, or no longer as a chat model", "priced by prompt length"];
     for (const [i, verdict] of verdicts.entries()) {
       const { world, plugins, sent } = awsWorld(listSaying({ [TEST_MODEL]: verdict }));
@@ -485,8 +495,9 @@ describe("Bedrock's own list and the models it no longer offers", () => {
     await connectBedrock(plugins);
     await setBudget(env.DB, userId, "bedrock", 30, "typed", T0);
     const before = converseUrls(sent).length;
-    const page = await (await handleAddModel(new Request(`${APP_ORIGIN}${ADD_MODEL_PATH}?provider=bedrock`), { db: env.DB, plugins, userId, viewer: "owner", now: T0 })).text();
-    const row = page.slice(page.indexOf("<strong>DeepSeek v3.2</strong>"), page.indexOf("</tr>", page.indexOf("<strong>DeepSeek v3.2</strong>")));
+    const page = await (await handleProviders(new Request(`${APP_ORIGIN}${PROVIDERS_PATH}?provider=bedrock`), { db: env.DB, plugins, userId, viewer: "owner", appOrigin: APP_ORIGIN, now: T0 })).text();
+    const at = page.indexOf('data-model="DeepSeek v3.2"');
+    const row = page.slice(at, page.indexOf("</li>", at));
     expect(row).toContain("$0.60 in · $2.40 out");
     expect(row).toContain("not offered yet: Bedrock&#39;s own model list marks it legacy, or no longer as a chat model");
     expect(row).not.toContain("no price yet");
@@ -586,5 +597,121 @@ describe("the Connect test call's model", () => {
     expect(after).toContain(`<strong>Region</strong> for ${TEST_MODEL}</label>`);
     expect(after).toContain('<option value="us-east-1" selected>US cross-Region from us-east-1</option>');
     expect(converseUrls(sent).some((u) => u.includes("claude-haiku-4-5"))).toBe(false);
+  });
+});
+
+describe("Refresh model list", () => {
+  const HAIKU_45 = "anthropic.claude-haiku-4-5-20251001-v1:0";
+  const chat = (modelId: string, modelName: string, providerName: string) => ({
+    modelId, modelName, providerName, inputModalities: ["TEXT"], outputModalities: ["TEXT"], inferenceTypesSupported: ["INFERENCE_PROFILE"], lifecycle: "ACTIVE",
+  });
+  const catalog = (readAt: string): BedrockCatalog => ({
+    region: "us-east-1",
+    readAt,
+    models: [chat("amazon.nova-2-lite-v1:0", "Nova 2.0 Lite", "Amazon"), chat(HAIKU_45, "Claude Haiku 4.5", "Anthropic")],
+    profiles: [
+      { id: "global.amazon.nova-2-lite-v1:0", models: [{ region: "", modelId: "amazon.nova-2-lite-v1:0" }] },
+      { id: `global.${HAIKU_45}`, models: [{ region: "", modelId: HAIKU_45 }] },
+    ],
+  });
+  const controlPlane = (sent: Sent[]) => sent.filter((s) => s.url.startsWith("https://bedrock.us-east-1.amazonaws.com/")).map((s) => decodeURIComponent(new URL(s.url).pathname));
+  const open = (plugins: ReturnType<typeof awsWorld>["plugins"], now: Date, readCatalog?: (now: Date) => Promise<CatalogRead>, init: RequestInit = {}, path = "?provider=bedrock") =>
+    handleProviders(new Request(`${APP_ORIGIN}${PROVIDERS_PATH}${path}`, init), { db: env.DB, plugins, userId, viewer: "owner", appOrigin: APP_ORIGIN, now, readCatalog });
+  const refresh = (plugins: ReturnType<typeof awsWorld>["plugins"], now: Date, readCatalog?: (now: Date) => Promise<CatalogRead>) =>
+    open(plugins, now, readCatalog, { method: "POST", body: new URLSearchParams(), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } }, "/bedrock/refresh");
+  const entry = (page: string, model: string) => page.slice(page.indexOf(`data-model="${model}"`), page.indexOf("</li>", page.indexOf(`data-model="${model}"`)));
+
+  // The list the daily refresh read, and the plug-in built from it as each request builds it.
+  async function listed(template: string) {
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-25T06:00:00Z",
+      status: "good",
+      results: [],
+      rows: [
+        price("bedrock", "Nova 2.0 Lite", "input", 0.1), price("bedrock", "Nova 2.0 Lite", "output", 0.5),
+        price("bedrock", "Claude Haiku 4.5", "input", 1), price("bedrock", "Claude Haiku 4.5", "output", 5),
+      ],
+      bedrockCatalog: catalog("2026-11-25T06:00:00.000Z"),
+    });
+    const aws = awsWorld((await readBedrockOffer(env.DB, "us-east-1"))!);
+    aws.world.stack = true;
+    aws.world.template = template;
+    await connectBedrock(aws.plugins);
+    aws.sent.length = 0;
+    return aws;
+  }
+
+  it("reads the list again with the app's role, then the account's terms and form with the user's role, and notes them on each entry without blocking a pick", async () => {
+    const { world, plugins, sent } = await listed("1.2.0");
+    world.availability = (id) =>
+      Response.json({ agreementAvailability: { status: id === HAIKU_45 ? "NOT_AVAILABLE" : "AVAILABLE" }, authorizationStatus: "AUTHORIZED", entitlementAvailability: "AVAILABLE", regionAvailability: "AVAILABLE" });
+    const reads: Date[] = [];
+    const readCatalog = async (now: Date): Promise<CatalogRead> => {
+      reads.push(now);
+      return { ok: true, catalog: catalog(now.toISOString()) };
+    };
+    const response = await refresh(plugins, at(1), readCatalog);
+    expect(response.status).toBe(303);
+    expect(reads).toEqual([at(1)]);
+    // Only the Marketplace-sold model is read; Nova is AWS's own.
+    expect(controlPlane(sent)).toEqual(["/use-case-for-model-access", `/foundation-model-availability/${HAIKU_45}`]);
+    expect(await readAccountCheck(env.DB, userId)).toMatchObject({
+      checkedAt: at(1).toISOString(), form: "not_filled",
+      models: { "Claude Haiku 4.5": { agreement: "NOT_AVAILABLE", authorization: "AUTHORIZED", entitlement: "AVAILABLE", region: "AVAILABLE" } },
+    });
+
+    const page = await (await open(plugins, at(1))).text();
+    expect(page).toContain("<button type=\"submit\" class=\"btn small ghost\">Refresh model list</button>");
+    expect(page).toContain("Bedrock's model list read 10:01 UTC on 2026&#8209;11&#8209;25 · your AWS account checked 10:01 UTC.");
+    const haiku = entry(page, "Claude Haiku 4.5");
+    expect(haiku).toContain("accept terms on first pick · needs Anthropic&#39;s form");
+    expect(haiku).not.toContain("aria-disabled");
+    expect(entry(page, TEST_MODEL)).not.toContain("lb-notes");
+    expect(page).not.toContain("Update the stack for live account checks");
+
+    // A minute between refreshes, per user.
+    const again = await refresh(plugins, at(1.5), readCatalog);
+    expect(again.status).toBe(429);
+    expect(await again.text()).toContain("The list was refreshed at 10:01 UTC; refresh it again from 10:02 UTC.");
+    expect(reads).toHaveLength(1);
+    expect(controlPlane(sent)).toHaveLength(2);
+    expect((await refresh(plugins, at(2), readCatalog)).status).toBe(303);
+  });
+
+  it("marks each model's state unknown on a stack older than 1.2.0, with the update to make, and reads nothing in the account", async () => {
+    const { plugins, sent } = await listed("1.1.0");
+    expect((await refresh(plugins, at(1), async (now) => ({ ok: true, catalog: catalog(now.toISOString()) }))).status).toBe(303);
+    expect(controlPlane(sent)).toEqual([]);
+    const page = await (await open(plugins, at(1))).text();
+    expect(page).toContain("Update the stack for live account checks: in AWS CloudFormation, select the “chief-of-staff” stack, choose Update, then Replace existing template with the app&#39;s template 1.2.0");
+    expect(entry(page, "Claude Haiku 4.5")).toContain("account state unknown");
+    expect(entry(page, "Claude Haiku 4.5")).not.toContain("aria-disabled");
+  });
+
+  it("says the role was refused the reads, as for an older stack, when the stack's version is not known", async () => {
+    const { world, plugins } = await listed("1.2.0");
+    world.useCase = () => Response.json({ message: "not authorized to perform: bedrock:GetUseCaseForModelAccess" }, { status: 403, headers: { "x-amzn-ErrorType": "AccessDeniedException" } });
+    await refresh(plugins, at(1));
+    expect(await readAccountCheck(env.DB, userId)).toMatchObject({ form: "unknown", models: { "Claude Haiku 4.5": "unknown" } });
+    expect((await readAccountCheck(env.DB, userId))!.note).toMatch(/^Update the stack for live account checks/);
+  });
+
+  it("keeps the list it has when Bedrock's list cannot be read again, and still checks the account", async () => {
+    const { world, plugins, sent } = await listed("1.2.0");
+    world.useCase = () => Response.json({ formData: "eyJjb21wYW55TmFtZSI6Im1lIn0=" });
+    await refresh(plugins, at(1), async () => ({ ok: false, error: "ListFoundationModels answered 403 AccessDeniedException" }));
+    const page = await (await open(plugins, at(1))).text();
+    expect(page).toContain("Bedrock&#39;s model list could not be read again (ListFoundationModels answered 403 AccessDeniedException); the list read 06:00 UTC on 2026-11-25 stays in use.");
+    expect(page).toContain("Bedrock's model list read 06:00 UTC");
+    expect(entry(page, "Claude Haiku 4.5")).not.toContain("needs Anthropic");
+    expect(controlPlane(sent)).toHaveLength(2);
+  });
+
+  it("forgets the account's states on Disconnect", async () => {
+    const { plugins } = await listed("1.2.0");
+    await refresh(plugins, at(1));
+    expect(await readAccountCheck(env.DB, userId)).toBeDefined();
+    await open(plugins, at(2), undefined, { method: "POST", body: new URLSearchParams(), headers: { "content-type": "application/x-www-form-urlencoded", origin: APP_ORIGIN } }, "/bedrock/disconnect");
+    expect(await readAccountCheck(env.DB, userId)).toBeUndefined();
   });
 });

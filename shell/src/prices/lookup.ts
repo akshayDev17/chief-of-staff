@@ -10,7 +10,7 @@
 //
 //   lookupTier(db, { provider, model }) -> "Smallest" | "Middle" | "Strongest" | undefined
 //
-// The model's one tier at that provider, for Add a model (T17), the per-task
+// The model's one tier at that provider, for the model list (T17), the per-task
 // picker (T18) and the usage ledger (T12); see tiers.ts for the price it
 // comes from.
 

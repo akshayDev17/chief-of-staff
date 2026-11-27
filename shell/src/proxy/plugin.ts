@@ -9,6 +9,7 @@
 // provider is one plug-in: Models › Setup › Providers shows a "Connect
 // <Provider>" button for every registered plug-in.
 
+import type { AccountStates } from "../providers/bedrock-account";
 import type { Provider, SourceId } from "../prices/types";
 
 // A connection's fields, exactly as the plug-in's Connect method stored them.
@@ -172,7 +173,7 @@ export interface ConnectMethod {
   // a model (T17) even while the table has no price for them ("no price yet").
   knownModels: readonly string[];
   // Whether the plug-in can call the model: it knows the provider's own ID
-  // for it and speaks its format. Add a model lists every chat model the
+  // for it and speaks its format. The model list (models-panel.ts) lists every chat model the
   // provider sells at a listed price, of every family (T17), and a model the
   // plug-in cannot call yet is shown as "not offered yet" with
   // `notCallableReason`, never picked.
@@ -181,17 +182,17 @@ export interface ConnectMethod {
   // words after "not offered yet: " ("the app has no Foundry ID for it").
   notCallableReason(model: string): string;
   // False for a model the provider no longer offers (Bedrock: one its own
-  // list marks LEGACY), which Add a model leaves out unless the user already
+  // list marks LEGACY), which the model list leaves out unless the user already
   // added it. Absent: every model is listed.
   listed?(model: string): boolean;
   // For a model known to make no tool call (a live call with one tool got
   // none, or a refusal), the check that found it ("tested live on Gemma 3 4B
-  // (google.gemma-3-4b-it): no tool call"), shown on Add a model; the
+  // (google.gemma-3-4b-it): no tool call"), shown in the model list; the
   // per-task picker marks the model too. Absent, or undefined: no such fault
   // is known.
   noToolUse?(model: string): string | undefined;
   // Foundry only: the deployment name the guide asks the user to keep, the
-  // model's ID, filled in on Add a model and changed by a user who named the
+  // model's ID, suggested in the model list and changed by a user who named the
   // deployment differently; undefined for a model it cannot call. Absent
   // where the provider names the model itself.
   deploymentName?(model: string): string | undefined;
@@ -218,6 +219,10 @@ export interface ConnectMethod {
   // The version of the provider-side assets the user's grant was made with
   // (Bedrock: the template version in the user's own stack), when it can be read.
   readSetupVersion?(credential: unknown, connection: ConnectionFields): Promise<string | undefined>;
+  // Bedrock's Refresh model list: what the user's own account says of each
+  // model (`modelIds`: price-table name -> the provider's model ID) and of
+  // Anthropic's use-case form (src/providers/bedrock-account.ts).
+  readAccountStates?(credential: unknown, modelIds: Record<string, string>): Promise<AccountStates>;
 }
 
 export interface ProviderPlugin {

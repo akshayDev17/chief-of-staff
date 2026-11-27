@@ -183,6 +183,36 @@ describe("Models › Setup › Providers", () => {
     expect(await text(await open(plugins))).toContain("<strong>Region:</strong> US cross-Region from us-east-1, chosen by you.");
   });
 
+  it("lists the provider's models below a passed Connect in an accessible dropdown, with prices and coloured strengths, and tests a chosen one there", async () => {
+    const failing = world(undefined, false);
+    await post(failing, "/bedrock/connect", { accountId: "123456789012" });
+    expect(await text(await open(failing))).not.toContain('role="listbox"');
+
+    const plugins = world();
+    await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
+    const page = await text(await open(plugins, "?provider=bedrock"));
+    expect(page).toContain('<h3 id="bedrock-models-h">Your models at Amazon Bedrock</h3>');
+    expect(page).toContain('<button type="button" class="lb-btn" id="bedrock-models-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="bedrock-models" aria-labelledby="bedrock-models-label bedrock-models-button" hidden>Choose a model to test</button>');
+    expect(page).toContain('<ul role="listbox" id="bedrock-models" class="lb" aria-labelledby="bedrock-models-label" tabindex="-1" hidden>');
+    expect(page).toContain('<li role="option" id="opt-bedrock-Nova-2-0-Lite" data-model="Nova 2.0 Lite" aria-selected="false">');
+    expect(page).toContain('<span class="lb-name">Nova 2.0 Lite</span><span class="tier tier-s">Smallest</span>');
+    expect(page).toContain("$0.10 in · $0.50 out per million tokens · Global, chosen by the app");
+    // The strengths' bands, each with its own colour and its name in words.
+    expect(page).toContain('<span class="tier tier-s">Smallest</span> under $0.50 per million tokens, <span class="tier tier-m">Middle</span> $0.50 to under $2.50, <span class="tier tier-l">Strongest</span> $2.50 and up.');
+    // Without scripts, a plain list does the same.
+    expect(page).toContain('<noscript><div class="row"><select class="f" name="model" aria-label="Model"><option value="Nova 2.0 Lite">Nova 2.0 Lite · $0.10 in · $0.50 out · Smallest</option></select>');
+    expect(page).toContain('document.querySelectorAll("form[data-listbox]")');
+    // The old page is gone from the links.
+    expect(page).not.toContain("/models/setup/add");
+    expect(page).toContain('<a class="btn" href="/chief-of-staff/models/setup/tasks">Next: the model for each task</a>');
+
+    const chosen = await post(plugins, "/bedrock/choose", { model: "Nova 2.0 Lite" });
+    expect(chosen.status).toBe(200);
+    const result = await text(chosen);
+    expect(result).toContain("<strong>Nova 2.0 Lite added.</strong> Its test call ran once and passed.");
+    expect(result).toContain('<li role="option" id="opt-bedrock-Nova-2-0-Lite" data-model="Nova 2.0 Lite" aria-selected="false" class="added">');
+  });
+
   it("shows the monthly budget once set", async () => {
     const plugins = world();
     await post(plugins, "/bedrock/connect", { accountId: "123456789012" });
@@ -309,6 +339,6 @@ describe("the Worker's providers route", () => {
   });
 
   it("links Providers from the Budgets page", async () => {
-    expect(await (await send("/chief-of-staff/models/setup/budgets")).text()).toContain('<a href="/chief-of-staff/models/setup/providers">Providers</a>');
+    expect(await (await send("/chief-of-staff/models/setup/budgets")).text()).toContain('<a href="/chief-of-staff/models/setup/providers">Providers and models</a>');
   });
 });

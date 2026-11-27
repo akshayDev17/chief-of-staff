@@ -51,6 +51,20 @@ account:
   - Models AWS sells itself (Amazon Nova, and the other providers
     `notMarketplace` in `src/providers/bedrock-models.json` names) need none
     of this, so a 1.0.0 role still connects and runs the Connect test call.
+- **Reading each model's access state** (since 1.2.0), for "Refresh model
+  list" on the Connect screen (`src/providers/bedrock-account.ts`):
+  `bedrock:GetFoundationModelAvailability` (a model's Marketplace agreement,
+  authorization, entitlement and region availability in this account) and
+  `bedrock:GetUseCaseForModelAccess` (whether Anthropic's one-time use-case
+  form was filled), both on `*`. The service authorization reference lists
+  both as Read actions with no resource type and no condition key
+  (https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrock.html,
+  read 2026-11-27): "Grants permission to get the availability of a
+  foundation model" and "Grants permission to retrieve a use case for model
+  access". Neither changes anything in the account. A 1.1.0 role is refused
+  them, so its states show as unknown with a note to update the stack; it
+  still connects and its models are still chosen and tested as before. The
+  1.1.0 Marketplace statement is unchanged.
 - **Sessions** of one hour at most (role chaining caps them there anyway).
 
 Deleting the stack deletes the role: that is how a user revokes the app.

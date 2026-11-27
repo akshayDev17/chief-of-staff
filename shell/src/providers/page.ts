@@ -4,6 +4,9 @@
 //
 //   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1][&change=region]
 //   POST /chief-of-staff/models/setup/providers/<id>/connect | retry | region | disconnect | help
+//   POST /chief-of-staff/models/setup/providers/<id>/choose       model, and on Foundry its deployment name
+//   POST /chief-of-staff/models/setup/providers/<id>/model-help   friends only: a chosen model's refusal
+//   POST /chief-of-staff/models/setup/providers/bedrock/refresh   Refresh model list
 //   GET  /chief-of-staff/models/setup/providers/<id>/signed-in   (back from Microsoft's sign-in)
 //   GET  /chief-of-staff/models/setup/providers/<id>/consented   (back from a consent page)
 //
@@ -14,13 +17,21 @@
 // only). There is no table of failure messages: the plug-in's mapping picks
 // the wording. The reply is shown only to the user who made the call.
 // The Usage page, not built yet, is named but not linked.
+//
+// Below a passed Connect, the provider's model list (models-panel.ts): every
+// model it sells at a listed price, chosen and tested on this screen. The
+// old Add a model path redirects here (src/index.ts).
 
-import { ADD_MODEL_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { addModel, listOffer, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
+import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
+import { currentSnapshot, readStoredBedrockCatalog } from "../prices/store";
 import type { Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
 import { readConnection } from "../proxy/connections";
-import type { ConnectionFields, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
+import type { ConnectionFields, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
+import { deleteAccountCheck, readAccountCheck, refreshBedrockModels, type AccountCheck } from "./bedrock-account";
+import type { CatalogRead } from "./bedrock-catalog";
 import {
   askAdminForHelp,
   chooseRegion,
@@ -34,6 +45,7 @@ import {
   type Check,
   type CheckResult,
 } from "./check";
+import { MODELS_CSS, MODELS_JS, modelsSection, TIER_VARS } from "./models-panel";
 
 // Who is looking: the owner, or a friend the owner invited (who says
 // "Admin" for the owner and gets "Ask Admin for help").
@@ -44,6 +56,8 @@ export interface ProviderPanel {
   connection?: ConnectionFields;
   check?: Check;
   monthlyBudget?: number;
+  // The selected panel's model list, once its Connect has passed.
+  models?: { rows: OfferRow[]; accountCheck?: AccountCheck; catalogReadAt?: string };
 }
 
 export interface ProvidersPageInput {
@@ -56,6 +70,8 @@ export interface ProvidersPageInput {
   changeRegion: boolean;
   problem?: string;
   said?: string;
+  // The result of choosing a model, shown under the model list.
+  outcome?: AddOutcome;
   now: Date;
 }
 
@@ -196,7 +212,11 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
       ? `<p class="small muted" style="margin-top:6px">Only you see the provider's reply. “Ask Admin for help” sends only this item's name and the plain reason.</p>`
       : "";
   const grantHelp = plugin.connect.grantHelp && check?.state !== "passed" ? plugin.connect.grantHelp({ userId: input.userId, connection }) : "";
-  return `${head}${disconnect}${grantHelp}${dialog}${regionLine(panel, input.changeRegion)}${budget}${resultBox(panel, input.viewer)}${template}${note}`;
+  const models =
+    (check?.state === "passed" || input.outcome) && panel.models
+      ? modelsSection({ plugin, viewer: input.viewer, rows: panel.models.rows, outcome: input.outcome, accountCheck: panel.models.accountCheck, catalogReadAt: panel.models.catalogReadAt, formatCost })
+      : "";
+  return `${head}${disconnect}${grantHelp}${dialog}${regionLine(panel, input.changeRegion)}${budget}${resultBox(panel, input.viewer)}${template}${note}${models}`;
 }
 
 export function renderProvidersPage(input: ProvidersPageInput): string {
@@ -224,15 +244,15 @@ export function renderProvidersPage(input: ProvidersPageInput): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${refresh}
 <title>Models · Providers · Chief of staff</title>
-<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${TIER_VARS}${MODELS_CSS}</style>
 </head>
 <body>
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><strong>Providers</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="${ADD_MODEL_PATH}">Add a model</a> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
+<p class="small" style="margin:-4px 0 10px"><strong>Providers and models</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
 <h2>Model providers</h2>
-<p>Foundry, Bedrock and Vertex AI are the only providers. You never give the app a key: you let it call your models from inside your own account, and you can take that back there at any time.</p>
+<p>Foundry, Bedrock and Vertex AI are the only providers. You never give the app a key: you let it call your models from inside your own account, and you can take that back there at any time. Once a provider is connected, choose its models right below.</p>
 ${intro}
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
@@ -240,7 +260,7 @@ ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` :
 <nav class="row" aria-label="Providers" style="margin-top:10px"><span class="seg">${tabs}</span></nav>
 <div style="margin-top:10px">${panelHtml(selected, input)}</div>
 </section>
-<div class="row" style="margin-top:12px"><a class="btn" href="${ADD_MODEL_PATH}">Next: pick a model</a></div>
+<div class="row" style="margin-top:12px"><a class="btn" href="${TASK_MODELS_PATH}">Next: the model for each task</a></div>
 </main>
 <script>
 document.querySelectorAll("[data-copy]").forEach(function (b) {
@@ -250,7 +270,7 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
 });
 document.querySelectorAll("form[data-reload]").forEach(function (f) {
   f.addEventListener("submit", function () { setTimeout(function () { location.reload(); }, 2000); });
-});
+});${MODELS_JS}
 </script>
 </body>
 </html>`;
@@ -298,7 +318,7 @@ async function pageInput(
   viewer: Viewer,
   url: URL,
   now: Date,
-  extra: { problem?: string; said?: string; selected?: Provider } = {},
+  extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {},
 ): Promise<ProvidersPageInput> {
   const registered = PROVIDER_ORDER.filter((p) => plugins[p]);
   const panels = await Promise.all(
@@ -311,6 +331,16 @@ async function pageInput(
   );
   const asked = url.searchParams.get("provider");
   const selected = extra.selected ?? (registered.find((p) => p === asked) ?? (viewer === "friend" ? panels.find((p) => p.plugin.connect.guide.recommendedForFriends)?.plugin.provider : undefined) ?? registered[0]!);
+  // Only the selected panel's model list is read: it prices every model.
+  const shown: ProviderPanel | undefined = panels.find((p) => p.plugin.provider === selected);
+  if (shown?.connection && (shown.check?.state === "passed" || extra.outcome)) {
+    const snapshot = selected === "bedrock" ? await currentSnapshot(db) : undefined;
+    shown.models = {
+      rows: await listOffer(db, plugins, userId, selected),
+      accountCheck: selected === "bedrock" ? await readAccountCheck(db, userId) : undefined,
+      catalogReadAt: snapshot ? (await readStoredBedrockCatalog(db, snapshot.id))?.readAt : undefined,
+    };
+  }
   return {
     viewer,
     userId,
@@ -320,25 +350,41 @@ async function pageInput(
     changeRegion: url.searchParams.get("change") === "region",
     problem: extra.problem,
     said: extra.said,
+    outcome: extra.outcome,
     now,
   };
 }
 
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
-const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|retry|region|disconnect|help|signed-in|consented))?$`);
+const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|retry|region|disconnect|help|choose|model-help|refresh|signed-in|consented))?$`);
+
+// The refusals of a chosen model a friend can ask Admin about, by the sentence they saw.
+const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<AddRefusal | PlainReason>([
+  "not_set_up", "not_allowed_yet", "switching_on", "no_such_model", "region_unavailable", "no_permission", "data_retention",
+  "busy", "app_not_configured", "no_reply", "refused", "wrong_model", "bad_deployment", "budget_spent", "cannot_call", "no_price",
+]);
 
 export const isProvidersPath = (pathname: string): boolean => ROUTE.test(pathname);
 
 // Every route is scoped to the signed-in user.
 export async function handleProviders(
   request: Request,
-  input: { db: D1Database; plugins: PluginRegistry; userId: string; viewer: Viewer; appOrigin: string | undefined; now: Date },
+  input: {
+    db: D1Database;
+    plugins: PluginRegistry;
+    userId: string;
+    viewer: Viewer;
+    appOrigin: string | undefined;
+    now: Date;
+    // Bedrock's model list read now with the app's own role (Refresh model list).
+    readCatalog?: (now: Date) => Promise<CatalogRead>;
+  },
 ): Promise<Response> {
   const { db, plugins, userId, viewer, now } = input;
   const url = new URL(request.url);
   const [, providerPart, verb] = ROUTE.exec(url.pathname) ?? [];
-  const page = async (extra: { problem?: string; said?: string; selected?: Provider } = {}, status = 200) =>
+  const page = async (extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
     html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
   const back = (provider: string) => Response.redirect(`${url.origin}${providerHref(provider)}`, 303);
 
@@ -380,7 +426,32 @@ export async function handleProviders(
     }
     case "disconnect":
       await disconnectProvider(db, userId, provider);
+      if (provider === "bedrock") await deleteAccountCheck(db, userId);
       return back(provider);
+    case "choose": {
+      const deployment = form.has("deployment") ? field("deployment") : undefined;
+      const outcome = await addModel(db, plugins, { userId, provider, model: field("model"), deployment, now });
+      return page({ outcome, selected: provider }, outcome.kind === "added" ? 200 : 400);
+    }
+    case "refresh": {
+      if (provider !== "bedrock") return new Response(null, { status: 404 });
+      const problem = await refreshBedrockModels(db, plugins, { userId, readCatalog: input.readCatalog, now });
+      return problem ? page({ problem, selected: provider }, 429) : back(provider);
+    }
+    case "model-help": {
+      // "Ask Admin for help" on a chosen model: its name and the plain
+      // reason only, never the provider's reply.
+      if (viewer !== "friend") return new Response(null, { status: 403 });
+      const reason = field("reason");
+      const model = field("model").slice(0, 120);
+      if (!MODEL_HELP_REASONS.has(reason) || !model) return page({ problem: "There is nothing to ask about here.", selected: provider }, 400);
+      const text = refusalText({ kind: "refused", model, reason: reason as AddRefusal }, plugins[provider], "friend");
+      await db
+        .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
+        .bind(userId, `Choose a model: ${model}`, text, now.toISOString())
+        .run();
+      return page({ said: "Sent to Admin: this item's name and its plain reason only.", selected: provider });
+    }
     case "help": {
       // A friend asks Admin; the owner has no one above to ask.
       if (viewer !== "friend") return new Response(null, { status: 403 });
