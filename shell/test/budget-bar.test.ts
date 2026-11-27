@@ -108,7 +108,7 @@ describe("the bar", () => {
       expect(html).toContain(`data-region="${id}" aria-label="${label}" aria-describedby="bbt-${id}" aria-expanded="false"></button><div class="bb-tip bb-tip-${id}" id="bbt-${id}">`);
     }
     expect(html.match(/href="https:\/\/openrouter.ai\/activity" target="_blank" rel="noopener noreferrer"/g)).toHaveLength(3);
-    expect(html).toContain("$9.40 of $60 · $50.60 left");
+    expect(html).toContain(`<span class="small">$9.40 of $60 by the app's count · $50.60 left</span>`);
     expect(html).toContain("read at 10:41 UTC");
     expect(html).toContain("The app's own count this month, which stops calls at the budget: $9.40.");
     expect(html).toContain('href="/chief-of-staff/models/setup/budgets">Change the budget</a>');
@@ -120,18 +120,20 @@ describe("the bar", () => {
     expect(regions(html)).toEqual([["real", "16.67"], ["left", undefined]]);
     expect(html).toContain("Counted by the app, not in OpenRouter&#39;s figure yet $0.00</li>");
     expect(html).toContain("OpenRouter's figure is $1.00 more than the app's own count; the bar shows the larger.");
+    expect(html).toContain(`<span class="small">$10.00 of $60 by OpenRouter's figure · $50.00 left</span>`);
   });
 
   it("says when OpenRouter's figure could not be read, and shows the app's own count", () => {
     const html = renderBudgetBar({ budgetUsd: 30, ledgerUsd: 4, key: { unread: "OpenRouter did not answer" } });
     expect(regions(html)).toEqual([["est", "13.33"], ["left", undefined]]);
     expect(html).toContain("OpenRouter's own figure could not be read just now (OpenRouter did not answer), so the bar shows the app's own count this month");
+    expect(html).toContain(`<span class="small">$4.00 of $30 by the app's count · $26.00 left</span>`);
   });
 
   it("is full past the budget and says by how much", () => {
     const html = renderBudgetBar({ budgetUsd: 10, ledgerUsd: 12, key: read({ monthlyUsd: 11 }) });
     expect(regions(html)).toEqual([["real", "91.67"], ["est", "8.33"]]);
-    expect(html).toContain("$12.00 of $10 · over by $2.00");
+    expect(html).toContain(`<span class="small">$12.00 of $10 by the app's count · over by $2.00</span>`);
   });
 
   it("warns when the key's own limit on OpenRouter comes before the budget, else notes it", () => {
@@ -169,7 +171,7 @@ describe("the bar on the Models pages", () => {
     await setBudget(env.DB, userId, "openrouter", 31, "accepted", NOW);
     const html = await (await budgetsPage()).text();
     expect(html).toContain('<div class="bb" data-budget-bar>');
-    expect(html).toContain("$1.75 of $31 · $29.25 left");
+    expect(html).toContain(`<span class="small">$1.75 of $31 by the app's count · $29.25 left</span>`);
     expect(html).toContain("Spent, as OpenRouter reports it $1.50</li>");
     expect(html).toContain("Counted by the app, not in OpenRouter&#39;s figure yet $0.25</li>");
     expect(html).toContain('href="#amount-openrouter">Change the budget</a>');

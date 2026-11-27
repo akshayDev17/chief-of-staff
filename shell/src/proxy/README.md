@@ -110,6 +110,10 @@ three parts:
   key before the user connected again.
 - **Empty, budget left**: the budget less the larger of the two counts.
 
+The line above the bar gives that larger count against the budget and names
+whose it is: "by OpenRouter's figure" when OpenRouter's figure is more than
+half a cent above the app's count, otherwise "by the app's count".
+
 Under the bar the page shows the app's own count, which is what stops calls,
 and any gap between that count and OpenRouter's figure. When the key has its
 own credit limit on OpenRouter, the page shows that limit and what is left of

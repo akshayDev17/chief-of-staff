@@ -197,8 +197,8 @@ export interface SpendGap {
 
 const HALF_CENT = 0.005;
 
-export function spendGap(ledgerUsd: number, key: KeyFigure | undefined, beforeKeyUsd: number): SpendGap | undefined {
-  if (!key || !("usage" in key)) return undefined;
+export function spendGap(ledgerUsd: number, key: KeyFigure, beforeKeyUsd: number): SpendGap | undefined {
+  if (!("usage" in key)) return undefined;
   const reportedUsd = key.usage.monthlyUsd;
   if (Math.abs(ledgerUsd - reportedUsd) < HALF_CENT) return undefined;
   const explained = beforeKeyUsd >= HALF_CENT && Math.abs(ledgerUsd - beforeKeyUsd - reportedUsd) < HALF_CENT;
@@ -224,13 +224,13 @@ function gapNote(gap: SpendGap, keySince: string | undefined): string {
 }
 
 // The line on OpenRouter's figure for the current key: why it differs from
-// the app's count, or, while connected, why it could not be read; nothing
-// when the two agree, or when there is no key to read (the Connect banner
-// says so).
+// the app's count, or, while connected with no budget set, why it could not
+// be read (with a budget, the bar says so); nothing when the two agree, or
+// when there is no key to read (the Connect banner says so).
 function keyNote(input: UsagePageInput): string {
   const { key } = input;
   if ("unread" in key) {
-    return input.connected ? `<div class="gap"><p class="small">The app could not read OpenRouter's figure for your current key just now, so it cannot check its count against it: ${esc(key.unread)}.</p></div>` : "";
+    return input.connected && input.budgetUsd === undefined ? `<div class="gap"><p class="small">The app could not read OpenRouter's figure for your current key just now, so it cannot check its count against it: ${esc(key.unread)}.</p></div>` : "";
   }
   const gap = spendGap(input.usage.total.costUsd, key, input.usage.beforeKeyUsd);
   return gap ? gapNote(gap, input.keySince) : "";
@@ -428,19 +428,20 @@ export interface UsageDeps {
 export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
   const { db, userId, now } = deps;
   const keySince = await connectedAt(db, userId, "openrouter");
-  const [providers, budget, usage, connection, catalog] = await Promise.all([
+  const [providers, budget, usage, connection, catalog, key] = await Promise.all([
     connectedProviders(db, userId),
     readBudget(db, userId, "openrouter"),
     readMonthUsage(db, userId, now, keySince),
     readConnection(db, userId, "openrouter"),
     readCurrentCatalog(db),
+    // Read whatever the budget: without a key in the vault it asks nothing.
+    readKeyFigure(deps.secrets, userId, now, deps.fetcher),
   ]);
   return {
     now,
     connected: providers.includes("openrouter"),
     budgetUsd: budget?.monthlyUsd,
-    // Read whatever the budget: without a key in the vault it asks nothing.
-    key: await readKeyFigure(deps.secrets, userId, now, deps.fetcher),
+    key,
     connection,
     ...(keySince ? { keySince: keySince.toISOString() } : {}),
     usage,

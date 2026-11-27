@@ -109,7 +109,7 @@ describe("Models › Setup › Budgets", () => {
     const html = await (await send("?per_day=5")).text();
     expect(html).toContain('<p class="ok-line">Budget set: $31 a month</p>');
     // The month's spend is the budget bar's; with no key in the vault it is the app's own count.
-    expect(html).toContain("$0.00 of $31 · $31.00 left");
+    expect(html).toContain(`<span class="small">$0.00 of $31 by the app's count · $31.00 left</span>`);
     expect(html).not.toContain("Until it is set");
   });
 

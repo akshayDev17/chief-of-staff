@@ -125,7 +125,7 @@ describe("the page", () => {
     expect(html).toContain('<div class="bb" data-budget-bar>');
     // OpenRouter says $1.50; the app counted $1.72: the bar shows the larger.
     expect(html).toContain('<span class="big">$1.72</span><span class="of">/ $30 (6%)</span>');
-    expect(html).toContain("$1.72 of $30 · $28.28 left");
+    expect(html).toContain(`<span class="small">$1.72 of $30 by the app's count · $28.28 left</span>`);
     expect(html).toContain("The app's own count this month, which stops calls at the budget: $1.72.");
     expect(html).toContain('href="/chief-of-staff/models/setup/budgets">Change the budget</a>');
     expect(html.match(/<tfoot><tr><th scope="row">This month<span class="u-sub u-phone">4 calls<\/span><\/th><td class="num wide">4<\/td><td class="num wide">3,500<\/td><td class="num wide">300<\/td><td class="num">\$1\.72<\/td><\/tr><\/tfoot>/g)).toHaveLength(2);
@@ -342,6 +342,7 @@ describe("when OpenRouter's figure and the app's count differ", () => {
     await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
     const { html } = await page(keyFetch(0.9));
     expect(html).toContain('<span class="big">$0.20</span><span class="of">/ $30 (under 1%)</span>');
+    expect(html).toContain(`<span class="small">$0.90 of $30 by OpenRouter's figure · $29.10 left</span>`);
     expect(html).toContain("OpenRouter's figure for your current key, $0.90, and the app's count, $0.20, differ.");
   });
 
@@ -353,12 +354,24 @@ describe("when OpenRouter's figure and the app's count differ", () => {
     expect((await page(keyFetch(0.2))).html).not.toContain('<div class="gap">');
   });
 
-  it("says, in one line, when OpenRouter's figure could not be read, and why", async () => {
+  it("says, in one line with no budget set, when OpenRouter's figure could not be read, and why", async () => {
+    await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: HASH }, LATER);
+    await testSecrets().put(userId, "openrouter", "key", ISSUED_KEY, LATER);
+    await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
+    const { html } = await page(fakeFetch({ currentKey: () => new Response("upstream down", { status: 503 }) }));
+    expect(html).toContain('<span class="of">no budget set</span>');
+    expect(html).toContain('<div class="gap"><p class="small">The app could not read OpenRouter\'s figure for your current key just now, so it cannot check its count against it: OpenRouter refused the request (status 503).</p></div>');
+    expect(html).not.toContain("Why the two figures differ");
+  });
+
+  it("leaves that line to the bar's own source line once a budget is set", async () => {
     await reconnectedOn(LATER);
     await call({ costUsd: 0.2, at: new Date("2026-11-25T10:00:00Z") });
     const { html } = await page(fakeFetch({ currentKey: () => new Response("upstream down", { status: 503 }) }));
-    expect(html).toContain('<div class="gap"><p class="small">The app could not read OpenRouter\'s figure for your current key just now, so it cannot check its count against it: OpenRouter refused the request (status 503).</p></div>');
-    expect(html).not.toContain("Why the two figures differ");
+    expect(html).toContain("OpenRouter's own figure could not be read just now (OpenRouter refused the request (status 503)), so the bar shows the app's own count this month");
+    expect(html).toContain(`<span class="small">$0.20 of $30 by the app's count · $29.80 left</span>`);
+    expect(html).not.toContain("The app could not read OpenRouter's figure");
+    expect(html).not.toContain('<div class="gap">');
   });
 
   it("says so on a $0 key with no budget set too, from the same read Providers makes", async () => {

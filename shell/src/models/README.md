@@ -155,8 +155,9 @@ line under the figures says why, with the detail collapsed: each Connect makes
 a new key and records when (`connected_at`), so this month's calls from before
 then were made with an earlier key and are not in its figure. When those do
 not account for the difference, the line says only that the two differ. When
-OpenRouter's figure cannot be read while OpenRouter is connected, the line
-says so, and why, instead.
+OpenRouter's figure cannot be read while OpenRouter is connected and no
+budget is set, the line says so, and why, instead; with a budget set, the
+bar's own source line says it.
 
 With nothing to show yet, the page highlights one next action, the first
 missing: Connect OpenRouter, then Set a budget, then Test a model. After a
