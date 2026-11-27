@@ -290,7 +290,7 @@ export function classify(failure: Failure, connection?: ConnectionFields): { rea
     case 402:
       return {
         reason: "no_credits",
-        fix: `Add credits on OpenRouter, or raise this key's limit there. ${KEY_LIMIT_FIX} The account line above says which.`,
+        fix: "Add credits on OpenRouter, or raise this key's limit on its page there. The account line above says which.",
         links: [link("Add credits", SETTINGS_CREDITS), ...keyLinks(connection)],
       };
     case 403:

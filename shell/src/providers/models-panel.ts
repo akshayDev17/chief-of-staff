@@ -97,11 +97,13 @@ function option(row: OfferRow, input: ModelsSectionInput): string {
   const p = row.price;
   const price = p
     ? `<span class="lb-price">${usd(p.input)} in · ${usd(p.output)} out per million tokens</span><span class="lb-src small muted" title="${esc(SOURCES[p.source].label)}">${esc(SOURCES[p.source].label)}, read ${nbDate(p.dateRead)}</span>`
-    : `<span class="lb-price"><span class="pill warn">no price yet</span></span>`;
+    : row.callable
+      ? `<span class="lb-price"><span class="pill warn">no price yet</span></span>`
+      : "";
   const tier = row.tier ? `<span class="tier ${tierClass[row.tier]}">${row.tier}</span>` : "";
   const free = row.free ? `<span class="pill free">Free</span>` : "";
   // With no price, the price line already says "no price yet".
-  const whyNote = why && !p ? why.replace(/^no price yet: /, "") : why;
+  const whyNote = why && !p && row.callable ? why.replace(/^no price yet: /, "") : why;
   const notes = [...entryNotes(row), ...(whyNote ? [whyNote] : [])];
   const noteHtml = notes.length ? `<span class="lb-notes small">${notes.map((n) => esc(n)).join(" · ")}</span>` : "";
   const name = row.name ? ` <span class="small muted">${esc(row.name)}</span>` : "";
@@ -239,17 +241,17 @@ export function modelsSection(input: ModelsSectionInput): string {
   const head = `<h3 id="${p}-models-h">Test a model</h3>
 <p class="small">Choose a model, then test it. A passed model is yours for tasks.</p>`;
   if (!input.rows.length) {
-    return `<section class="models" id="${TEST_ANCHOR}" tabindex="-1" aria-labelledby="${p}-models-h">${head}
+    return `<section class="models" id="${TEST_ANCHOR}" aria-labelledby="${p}-models-h">${head}
 <p class="small muted">No model is listed yet: Refresh model list reads the list now.</p>${refreshLine(input)}</section>`;
   }
   const choosable = input.rows.filter((r) => !blockedReason(r, plugin));
   const label = (r: OfferRow) => `${r.model}${r.free ? " · Free" : r.price ? ` · ${usd(r.price.input)} in · ${usd(r.price.output)} out` : ""}${r.tier ? ` · ${r.tier}` : ""}`;
   const fallback = `<noscript><div class="row"><select class="f" name="model" aria-label="Model"><option value="">Choose a model</option>${choosable.map((r) => `<option value="${esc(r.model)}">${esc(label(r))}</option>`).join("")}</select><button type="submit" class="btn">Test</button></div></noscript>`;
-  return `<section class="models" id="${TEST_ANCHOR}" tabindex="-1" aria-labelledby="${p}-models-h">
+  return `<section class="models" id="${TEST_ANCHOR}" aria-labelledby="${p}-models-h">
 ${head}
 ${outcomeBox(input)}
-<form method="post" action="${action(p, "choose")}#${TEST_ANCHOR}" class="choose" data-listbox>
-<input type="hidden" data-model-input value="">
+<form method="post" action="${action(p, "choose")}#${TEST_ANCHOR}" class="choose" autocomplete="off" data-listbox>
+<input type="hidden" data-model-input value="" autocomplete="off">
 <span class="small" id="${list}-label"><strong>Model</strong> <span class="muted">(${input.rows.length} listed, ${choosable.length} can be chosen)</span></span>
 <div class="lb-wrap">
 <button type="button" class="lb-btn" id="${list}-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="${list}" aria-labelledby="${list}-label ${list}-button" hidden>Choose a model</button>
@@ -266,10 +268,9 @@ ${testAllSection(input)}
 }
 
 export const MODELS_CSS = `
-.models { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; scroll-margin-top: 12px; border-radius: 10px; }
-.models:target, .models.arrived { animation: arrive 2.4s ease-out 1; outline: 2px solid var(--accent); outline-offset: 6px; }
+.models { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; scroll-margin-top: 12px; }
+.models:target, .models.arrived { animation: arrive 2.4s ease-out 1; outline: 2px solid var(--accent); outline-offset: 4px; border-top-color: transparent; border-radius: 10px; padding: 10px 8px 8px; }
 @keyframes arrive { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
-.models:focus { outline: 2px solid var(--accent); outline-offset: 6px; }
 .models h3 { margin: 0 0 4px; font-size: 1rem; }
 .tier { display: inline-block; font-size: .72rem; font-weight: 600; line-height: 1.4; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
 .tier-s { color: var(--tier-s); background: var(--tier-s-soft); }
@@ -289,6 +290,7 @@ export const MODELS_CSS = `
 .lb-name { font-weight: 600; overflow-wrap: anywhere; }
 .lb-price { font-size: .85rem; font-variant-numeric: tabular-nums; }
 .lb-src, .lb-notes { color: var(--muted); overflow-wrap: anywhere; }
+.models > .tc { margin: 6px 0 10px; }
 .test-row { margin-top: 8px; }
 .test-row .btn { overflow-wrap: anywhere; text-align: left; }
 ul.about { margin: 0; padding-left: 18px; }
@@ -346,17 +348,25 @@ document.querySelectorAll("form[data-listbox]").forEach(function (form) {
     list.setAttribute("aria-activedescendant", o.id);
     o.scrollIntoView({ block: "nearest" });
   }
-  function choose(i) {
-    var o = options[i];
-    if (!o || o.getAttribute("aria-disabled") === "true") return;
+  function select(o) {
     options.forEach(function (x) { x.setAttribute("aria-selected", "false"); });
     o.setAttribute("aria-selected", "true");
     input.value = o.getAttribute("data-model");
     button.textContent = input.value;
     test.textContent = "Test with " + input.value + "?";
     test.disabled = false;
+  }
+  function choose(i) {
+    var o = options[i];
+    if (!o || o.getAttribute("aria-disabled") === "true") return;
+    select(o);
     close(false);
     test.focus();
+  }
+  // A value the browser restored on reload shows as chosen, or is dropped.
+  if (input.value) {
+    var restored = options.filter(function (o) { return o.getAttribute("data-model") === input.value && o.getAttribute("aria-disabled") !== "true"; })[0];
+    if (restored) select(restored); else input.value = "";
   }
   button.addEventListener("click", function () { list.hidden ? open(active) : close(true); });
   button.addEventListener("keydown", function (e) {
@@ -394,7 +404,10 @@ document.querySelectorAll("form[data-listbox]").forEach(function (form) {
   if (location.hash === "#${TEST_ANCHOR}") {
     var section = document.getElementById("${TEST_ANCHOR}");
     if (section) section.classList.add("arrived");
-    button.focus({ preventScroll: true });
+    // After the page has loaded and the browser has moved to the anchor
+    // itself, so focus stays on the dropdown.
+    var focusDropdown = function () { setTimeout(function () { button.focus({ preventScroll: true }); }, 0); };
+    if (document.readyState === "complete") focusDropdown(); else window.addEventListener("load", focusDropdown);
   }
 });
 document.querySelectorAll("[data-reload-every]").forEach(function (el) {

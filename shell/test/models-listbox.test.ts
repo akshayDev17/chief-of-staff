@@ -34,11 +34,14 @@ function element(attrs: Record<string, string> = {}) {
   };
 }
 
-function page(models: string[], hash = "") {
+// The page with a value already in the hidden field, as a reload restores it.
+const pageWith = (models: string[], value: string) => page(models, "", value);
+
+function page(models: string[], hash = "", restoredValue = "") {
   const options = models.map((m, i) => element({ id: `opt-${i}`, "data-model": m, "aria-selected": "false" }));
   const button = element();
   const list = Object.assign(element(), { querySelectorAll: () => options });
-  const input = element();
+  const input = Object.assign(element(), { value: restoredValue });
   const test = Object.assign(element(), { disabled: true, textContent: "Test" });
   const section = element({ id: "test" });
   const submitted: string[] = [];
@@ -54,13 +57,15 @@ function page(models: string[], hash = "") {
     querySelector: () => null,
     getElementById: (id: string) => (id === "test" ? section : null),
   });
+  const loaded: Array<() => void> = [];
+  const window = { addEventListener: (type: string, fn: () => void) => { if (type === "load") loaded.push(fn); } };
   const location = {
     hash,
     reload: () => navigated.push("reload"),
     assign: (u: string) => navigated.push(u),
   };
-  new Function("document", "location", MODELS_JS)(document, location);
-  return { button, list, input, test, options, section, form, submitted, navigated };
+  new Function("document", "location", "window", MODELS_JS)(document, location, window);
+  return { button, list, input, test, options, section, form, submitted, navigated, load: () => loaded.forEach((fn) => fn()) };
 }
 
 const MODELS = ["Claude Haiku 4.5", "Claude Opus 4.7", "Claude Sonnet 5.5", "Nova 2.0 Lite"];
@@ -100,12 +105,31 @@ describe("choosing a model", () => {
   });
 
   it("highlights the section and focuses the dropdown when the page opens at #test", () => {
+    vi.useFakeTimers();
     const at = page(MODELS, "#test");
     expect(at.section.classList.has("arrived")).toBe(true);
+    // Focus moves once the page has loaded and the browser has moved to the anchor itself.
+    vi.runAllTimers();
+    expect(at.button.focused).toBe(0);
+    at.load();
+    vi.runAllTimers();
+    vi.useRealTimers();
     expect(at.button.focused).toBe(1);
     const elsewhere = page(MODELS);
     expect(elsewhere.section.classList.has("arrived")).toBe(false);
     expect(elsewhere.button.focused).toBe(0);
+  });
+});
+
+describe("a model the browser restored on reload", () => {
+  it("shows as chosen, with Test with <model>? ready, and an unknown one is dropped", () => {
+    const restored = pageWith(MODELS, "Claude Opus 4.7");
+    expect(restored.button.textContent).toBe("Claude Opus 4.7");
+    expect(restored.test.disabled).toBe(false);
+    expect(restored.test.textContent).toBe("Test with Claude Opus 4.7?");
+    const gone = pageWith(MODELS, "gone/model");
+    expect(gone.input.value).toBe("");
+    expect(gone.test.disabled).toBe(true);
   });
 });
 

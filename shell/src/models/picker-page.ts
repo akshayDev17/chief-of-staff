@@ -121,25 +121,37 @@ function freeTap(input: PickerPageInput): string {
   if (!set.length) return "";
   const allFree = input.offered.every((m) => m.free);
   const why = allFree
-    ? "Your models that passed are all free, so the app proposes none: a free model is never proposed, because it is rate-limited and its providers may log prompts."
-    : `${set.length === 1 ? "One task has" : `${set.length} tasks have`} no proposed model, and your free models can take ${set.length === 1 ? "it" : "them"}.`;
-  return `<div class="banner" role="note"><p style="margin:0 0 6px">${esc(why)} You can still use them: one tap sets ${set.length === TASKS.length ? "every task" : set.length === 1 ? "that task" : "those tasks"} to them, by the proposal's own rule (the cheapest at the task's strength, another free model as its fallback). You can change any task afterwards.</p>
-<form method="post" action="${TASK_MODELS_PATH}/use-free"><button type="submit" class="btn">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "that task" : "those tasks"}</button></form></div>`;
+    ? "Your models that passed are all free, so the app proposes none."
+    : `${set.length === 1 ? "One task has" : `${set.length} tasks have`} no proposed model. Your free models can take ${set.length === 1 ? "it" : "them"}.`;
+  return `<div class="banner" role="note"><p style="margin:0 0 6px">${esc(why)}</p>
+<form method="post" action="${TASK_MODELS_PATH}/use-free"><button type="submit" class="btn">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "that task" : "those tasks"}</button></form>
+<details class="more"><summary>Why free models are not proposed</summary><ul class="small">
+<li>A free model is rate-limited, and its providers may log prompts.</li>
+<li>The tap picks the cheapest free model at each task's strength.</li>
+<li>Another free model becomes its fallback. You can change any task.</li>
+</ul></details></div>`;
 }
 
 function freeTermsLine(input: PickerPageInput): string {
   if (!input.freeTerms || !input.offered.some((m) => m.free)) return "";
   const links = input.freeTerms.links.map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
-  return `<p class="small muted">Free models: ${esc(input.freeTerms.text)} ${links}</p>`;
+  return `<details class="more"><summary>OpenRouter's terms for free models</summary><p class="small muted">${esc(input.freeTerms.text)} ${links}</p></details>`;
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
   const single = onlyModel(input.offered) !== undefined;
   const intro = !input.offered.length
-    ? `<div class="banner warn">Choose a model first: only your own models that passed their test call are offered here. Choose one below a provider's passed Connect. <a href="${PROVIDERS_PATH}">Providers and models</a></div>`
+    ? `<div class="banner warn">Test a model first. Only models that passed are offered here. <a href="${PROVIDERS_PATH}#test">Test a model</a></div>`
     : single
-      ? `<p>You have one model that passed, so every task uses it for now. Choose another model, or run Test all models on <a href="${PROVIDERS_PATH}">Providers and models</a>, and the app proposes a main model and a fallback for each task here.</p>`
-      : `<p>Each task gets a main model and a fallback, another of your models, at the suggested strength for that task, from the models that passed their test. When the main model's provider is busy or fails the call, the fallback answers it. To change a task, choose its provider and model. You can change any of them.${input.offered.some((m) => m.free) ? " A free model is never proposed: a task uses it only when you choose it, with Change or with the one tap for free models." : ""}</p>`;
+      ? `<p>Every task uses your one passed model for now.</p>
+<details class="more"><summary>How to get a fallback</summary><p class="small">Test another model on <a href="${PROVIDERS_PATH}#test">Providers and models</a>. The app then proposes a main model and a fallback for each task.</p></details>`
+      : `<p>Each task gets a main model and a fallback.</p>
+<details class="more"><summary>How it works</summary><ul class="small">
+<li>Both come from your models that passed, at the task's suggested strength.</li>
+<li>When the main model fails a call, the fallback answers it.</li>
+<li>Change any task: choose its provider, then its model.</li>
+${input.offered.some((m) => m.free) ? "<li>A free model is never proposed. Choose it with Change, or the one tap.</li>" : ""}
+</ul></details>`;
   const head = single
     ? `<th>Task</th><th>Suggested strength</th><th>Model now</th><th></th>`
     : `<th>Task</th><th>Suggested strength</th><th>Main</th><th>Fallback (another model)</th><th></th>`;
@@ -223,6 +235,7 @@ form.pick label { color: var(--muted); }
 form.pick select { max-width: 100%; }
 fieldset.pair { border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 8px; margin: 0; display: grid; gap: 4px; }
 fieldset.pair legend { padding: 0 4px; color: var(--muted); }
+.tbl-wrap { margin-top: 10px; }
 `;
 
 const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|use-free|help))?$`);

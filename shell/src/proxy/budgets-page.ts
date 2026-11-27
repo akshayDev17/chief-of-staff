@@ -110,7 +110,12 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
 ${setupTabsLine(BUDGETS_PATH)}
 <h2>Budgets, one per provider</h2>
-<p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st, a task's fallback model there too. The key OpenRouter issued the app also has its own credit limit, set on OpenRouter's page when you connected; OpenRouter stops the key there.</p>
+<p>One monthly budget per provider, counted from the 1st.</p>
+<details class="more"><summary>How a budget works</summary><ul class="small">
+<li>When it is spent, that provider's calls stop until the 1st.</li>
+<li>A task's fallback model there stops too.</li>
+<li>OpenRouter's key has its own credit limit, set on OpenRouter.</li>
+</ul></details>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 <form class="row" method="get" action="${BUDGETS_PATH}" style="margin:8px 0">
 <label class="small" for="per-day">Applications a day you plan</label>
@@ -119,7 +124,7 @@ ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</
 </form>
 ${cards}
 <p class="small muted">A budget is any amount more than $0 a month.</p>
-<div class="row" style="margin-top:12px">${nextAction(BUDGETS_PATH)}</div>
+<div class="row" style="margin-top:12px">${nextAction(BUDGETS_PATH, input.cards.length && input.cards.every((c) => c.budget) ? "btn" : "btn secondary")}</div>
 </main>
 <script>${BAR_JS}
 </script>

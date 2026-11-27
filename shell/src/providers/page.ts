@@ -235,7 +235,7 @@ ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` :
 ${tabs}
 <div style="margin-top:10px">${panelHtml(selected, input)}</div>
 </section>
-<div class="row" style="margin-top:12px">${nextAction(PROVIDERS_PATH)}</div>
+<div class="row" style="margin-top:12px">${nextAction(PROVIDERS_PATH, selected.passedModels ? "btn" : "btn secondary")}</div>
 </main>
 <script>${MODELS_JS}
 </script>
@@ -458,7 +458,7 @@ export async function handleProviders(
     }
     case "test-all": {
       const started = await startTestAll(db, plugins, userId, provider, now);
-      return "problem" in started ? page({ problem: started.problem, selected: provider }, 400) : back(provider, "&tests=all");
+      return "problem" in started ? page({ problem: started.problem, selected: provider }, 400) : back(provider, "&tests=all", `#${provider}-test-all`);
     }
     case "model-help": {
       // "Ask Admin for help" on a chosen model: its name and the plain

@@ -108,7 +108,7 @@ describe("Connect OpenRouter", () => {
     expect(page).toContain("<strong>Connected</strong>");
     expect(page).toContain("key in your vault");
     expect(page).toContain("<strong>Not usable yet:</strong> test a model below.");
-    expect(page).toContain('<section class="models" id="test" tabindex="-1"');
+    expect(page).toContain('<section class="models" id="test" aria-labelledby');
     // The button that sends the test is a real button, disabled until a model is chosen.
     expect(page).toContain('<button type="submit" class="btn" data-test-button disabled hidden>Test</button>');
     expect(page).toContain(">Choose a model</button>");
