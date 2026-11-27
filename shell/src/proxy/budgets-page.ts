@@ -57,8 +57,15 @@ function card(c: ProviderBudgetCard, applicationsADay: number): string {
   const suggestion = s
     ? `<p class="small muted">Suggested · <span class="pill warn">estimate</span> · checked on ${nbDate(s.checkedOn)}</p>
 <p class="big">about ${dollars(s.monthlyUsd)} a month</p>
-<p class="small">Basis: ${applicationsADay} application${applicationsADay === 1 ? "" : "s"} a day, if this provider carried every task, at ${esc(s.model)}'s list prices from the app's price table and the design's tokens per application. Replaced by the figures measured in practice mode.</p>`
-    : `<p class="small muted">No suggestion yet: it is worked out from the list price of a model you pick at this provider (<a href="${PROVIDERS_PATH}">choose one on its Connect screen</a>).</p>`;
+<p class="small">Suggested from ${applicationsADay} application${applicationsADay === 1 ? "" : "s"} a day.</p>
+<details class="more"><summary>How this is worked out</summary><ul class="small">
+<li>At ${esc(s.model)}'s list prices, from the app's price table.</li>
+<li>With the design's tokens per application.</li>
+<li>As if this provider carried every task.</li>
+<li>Replaced by the figures measured in practice mode.</li>
+</ul></details>`
+    : `<p class="small muted">No suggestion yet: <a href="${PROVIDERS_PATH}">choose a model on its Connect screen</a>.</p>
+<details class="more"><summary>How this is worked out</summary><p class="small">From the list price of a model you pick at this provider.</p></details>`;
   const set = c.budget
     ? `<p class="ok-line">Budget set: ${dollars(c.budget.monthlyUsd)} a month</p>`
     : "";
