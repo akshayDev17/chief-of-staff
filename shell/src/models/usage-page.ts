@@ -322,7 +322,6 @@ table.usage tr.empty td > * { vertical-align: middle; }
 .u-name { overflow-wrap: anywhere; }
 .u-sub { display: block; font-size: .8rem; color: var(--muted); font-weight: 400; overflow-wrap: anywhere; white-space: normal; }
 table.usage .num .u-sub { white-space: nowrap; }
-.u-id { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
 .u-phone { display: none; }
 @media (max-width: 639px) {
@@ -330,10 +329,12 @@ table.usage .num .u-sub { white-space: nowrap; }
   table.usage th:first-child { width: 62%; }
   table.usage .num .u-sub { white-space: normal; }
   table.usage { table-layout: fixed; }
+  .u-id { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .u-phone { display: block; }
 }
 /* Per model: the search above it, then its own scroll box. */
 .find { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 8px; }
+.find[hidden] { display: none; }
 .search { position: relative; flex: 0 1 340px; min-width: 0; }
 .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
 .search input { width: 100%; min-height: 36px; padding: 0 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; font-size: .9rem; }

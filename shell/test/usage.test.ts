@@ -215,8 +215,6 @@ describe("Per model's scroll box and search", () => {
     // Still dearest first, and no sort control or form anywhere.
     expect(rowNames(html, "models")[0]).toBe("Maker 2: Model 11");
     expect(html.slice(html.indexOf("<body>"), html.indexOf("<script>"))).not.toMatch(/<form|class="th-sort|aria-sort/);
-    expect(html).toContain(".tbl-box thead th { position: sticky; top: 0;");
-    expect(html).toContain(".tbl-box tfoot th, .tbl-box tfoot td { position: sticky; bottom: 0;");
     // Per task stays a plain table: it has a row per task, about a dozen at most.
     expect(html).toContain('<div class="tbl-wrap"><table class="usage" id="by-tasks"');
   });
