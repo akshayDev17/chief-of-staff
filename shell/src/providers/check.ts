@@ -139,7 +139,7 @@ export async function connectProvider(
   if (!input.callbackUrl) return notSetUp(plugin, ["APP_ORIGIN"]);
   const consentState = randomState();
   const creditLimitUsd = (await readBudget(db, input.userId, input.provider))?.monthlyUsd ?? DEFAULT_CREDIT_LIMIT_USD;
-  const start = await plugin.connect.start({ callbackUrl: input.callbackUrl, consentState, creditLimitUsd });
+  const start = await plugin.connect.start({ callbackUrl: input.callbackUrl, consentState, creditLimitUsd, now: input.now });
   try {
     await secrets.put(input.userId, input.provider, "verifier", start.verifier, input.now);
   } catch (error) {
@@ -196,8 +196,9 @@ export async function finishConsent(
 
 // Disconnect: the key leaves the vault, and the record and its state go; the
 // provider's models stop answering for this user at once. The key itself
-// stays valid on the provider's side until the user deletes it there (the
-// guide says how): OpenRouter lets no app delete a key it was given.
+// stays valid on the provider's side until the user deletes it there:
+// OpenRouter's delete-a-key API takes only a management key (openrouter.ts),
+// so the app cannot.
 export async function disconnectProvider(db: D1Database, secrets: SecretStore, userId: string, provider: Provider): Promise<void> {
   await secrets.remove(userId, provider, "key");
   await secrets.remove(userId, provider, "verifier");

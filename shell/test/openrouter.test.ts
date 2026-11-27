@@ -19,16 +19,17 @@ const memorySecrets = (key?: string): SecretStore => {
 };
 
 describe("Connect OpenRouter: OAuth PKCE", () => {
-  it("sends the user to OpenRouter's own page with an S256 challenge, the state, the label and the credit limit", async () => {
+  it("sends the user to OpenRouter's own page with an S256 challenge, the state, the dated label and the credit limit", async () => {
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch());
-    const { open, verifier } = await plugin.connect.start({ callbackUrl: "https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented", consentState: "s1", creditLimitUsd: 31 });
+    const { open, verifier } = await plugin.connect.start({ callbackUrl: "https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented", consentState: "s1", creditLimitUsd: 31, now: new Date("2026-11-27T14:05:59Z") });
     const url = new URL(open);
     expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
     expect(url.searchParams.get("callback_url")).toBe("https://cos.example.com/chief-of-staff/models/setup/providers/openrouter/consented");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("code_challenge")).toBe(await challengeOf(verifier));
     expect(url.searchParams.get("state")).toBe("s1");
-    expect(url.searchParams.get("key_label")).toBe("Chief of staff");
+    // Each Connect mints a new key, so each label names when it was made.
+    expect(url.searchParams.get("key_label")).toBe("Chief of staff · 2026-11-27 14:05:59 UTC");
     expect(url.searchParams.get("limit")).toBe("31.00");
     // RFC 7636: 43 to 128 characters of the unreserved set; never sent to the browser.
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);

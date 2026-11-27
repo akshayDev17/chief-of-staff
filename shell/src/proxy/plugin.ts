@@ -139,8 +139,12 @@ export interface Guide {
   pages: Link[];
   // How to remove the grant on the provider's side, as a plain sentence.
   revoke: string;
-  // The provider's own pages for that, for a stored connection.
+  // The provider's own pages for that, for a stored connection, the
+  // general page first and the connection's own last.
   revokeLinks(connection: ConnectionFields | undefined): Link[];
+  // Why Connect again makes a new grant rather than reusing the last one, as
+  // a plain sentence; shown collapsed under Connect.
+  newGrantEachTime?: string;
 }
 
 // Where "Connect <Provider>" sends the user, and the one secret the app keeps
@@ -155,8 +159,8 @@ export interface ConnectMethod {
   // The provider's consent page to open. `consentState` is the value it must
   // return; `callbackUrl` is where it returns to; `creditLimitUsd` is the
   // limit to prefill on the key the provider issues, which the user can
-  // change there.
-  start(context: { callbackUrl: string; consentState: string; creditLimitUsd: number }): Promise<ConnectStart>;
+  // change there; `now` is when the user tapped Connect.
+  start(context: { callbackUrl: string; consentState: string; creditLimitUsd: number; now: Date }): Promise<ConnectStart>;
   // Back from the consent page, with the verifier `start` made: the
   // connection's non-secret fields and the key the provider issued. Throws a
   // ConnectProblem, with a plain message, when the page refused or its answer

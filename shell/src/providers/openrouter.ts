@@ -18,10 +18,24 @@
 // Revoking: OpenRouter's delete-a-key API needs a management key ("Delete an
 // existing API key. Authenticate with a management key."; 403 "Only
 // management keys can perform this operation",
-// https://openrouter.ai/docs/api/api-reference/api-keys/delete-an-api-key.md),
-// which is the account owner's own and never the app's. So the app cannot
-// revoke the key: Disconnect deletes it from the vault, and the user deletes
-// it at https://openrouter.ai/settings/keys.
+// https://openrouter.ai/docs/api/api-reference/api-keys/delete-an-api-key.md;
+// "All key management endpoints are under `/api/v1/keys` and require a
+// Management API key", https://openrouter.ai/docs/guides/overview/auth/provisioning-api-keys;
+// both read 2026-11-27), which is the account owner's own and never the
+// app's. No page offers a key a way to delete itself: GET /api/v1/key, the
+// one key route an ordinary key may call, reads it and returns no hash. So
+// the app cannot revoke the key: Disconnect deletes it from the vault, and
+// its confirmation links the key's own page, `https://openrouter.ai/keys/<hash>`,
+// with the hash taken from the record (the SHA-256 of the key, made server
+// side at Connect), where the signed-in owner deletes it.
+//
+// A new key each time: every Authorize trades a fresh code "for a
+// user-controlled API key" (the PKCE page), and the flow has no parameter
+// that names an existing key. The app cannot fetch an old one either: a key
+// is returned only by the exchange that made it, and listing keys needs a
+// management key. So each Connect mints a key, labelled with its date and
+// time (`key_label`, "Prefills the label of the API key that will be
+// created"; the page sets no length limit) so the user can tell them apart.
 //
 // Calls go to OpenRouter's Chat Completions endpoint, in OpenAI's format, on
 // exactly the model chosen: OpenRouter's own model fallback (`models`,
@@ -62,6 +76,8 @@ export const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 // (https://openrouter.ai/docs/faq, read 2026-11-27).
 export const OPENROUTER_ACTIVITY_URL = "https://openrouter.ai/activity";
 export const KEY_LABEL = "Chief of staff";
+// "Chief of staff · 2026-11-27 14:05:59 UTC": the key's label, from when Connect was tapped.
+export const keyLabelAt = (now: Date): string => `${KEY_LABEL} · ${now.toISOString().slice(0, 10)} ${now.toISOString().slice(11, 19)} UTC`;
 export const APP_TITLE = "Chief of staff";
 
 // The test call's request: the smallest that proves a model answers, its
@@ -385,17 +401,19 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
           link("Models API", "https://openrouter.ai/docs/api-reference/list-available-models"),
           link("Usage accounting", "https://openrouter.ai/docs/use-cases/usage-accounting"),
         ],
-        revoke: "delete the “Chief of staff” key in your keys on OpenRouter (Settings → API Keys). Only you can: OpenRouter lets no app delete a key it was given.",
+        revoke: "only you can, on the key's own page. OpenRouter's delete-a-key API takes only your own management key.",
         revokeLinks: keyLinks,
+        newGrantEachTime:
+          "Each Authorize makes a new key: OpenRouter's flow has no way to reuse one. Each is labelled with its date; delete old ones on OpenRouter.",
       },
 
-      async start({ callbackUrl, consentState, creditLimitUsd }) {
+      async start({ callbackUrl, consentState, creditLimitUsd, now }) {
         const verifier = makeVerifier();
         const url = new URL(OPENROUTER_AUTH_URL);
         url.searchParams.set("callback_url", callbackUrl);
         url.searchParams.set("code_challenge", await challengeOf(verifier));
         url.searchParams.set("code_challenge_method", "S256");
-        url.searchParams.set("key_label", KEY_LABEL);
+        url.searchParams.set("key_label", keyLabelAt(now));
         // "a positive amount below 1,000,000 with at most two decimal places".
         url.searchParams.set("limit", (Math.min(999_999.99, Math.max(0.01, Math.round(creditLimitUsd * 100) / 100))).toFixed(2));
         url.searchParams.set("state", consentState);

@@ -21,7 +21,9 @@ read 2026-11-27):
    state value (on the user's check row), and sends the user to
    `https://openrouter.ai/auth` with `callback_url`
    (`<APP_ORIGIN>/chief-of-staff/models/setup/providers/openrouter/consented`),
-   the S256 `code_challenge`, `state`, `key_label=Chief of staff` and `limit`:
+   the S256 `code_challenge`, `state`, `key_label` and `limit`. The label is
+   dated, `Chief of staff · 2026-11-27 14:05:59 UTC` (UTC, when Connect was
+   tapped), because every Authorize mints a new key (below). `limit` is
    the user's monthly OpenRouter budget in the app, or $10 before one is set.
    It is the key's own credit limit on OpenRouter, separate from the app's
    monthly budget: the user can change it, or give it a reset period (say
@@ -52,9 +54,22 @@ The app cannot revoke the key at OpenRouter: deleting a key ("Delete an
 existing API key. Authenticate with a management key.", 403 "Only management
 keys can perform this operation",
 https://openrouter.ai/docs/api/api-reference/api-keys/delete-an-api-key.md,
-read 2026-11-27) needs the account's management key, which the app never
-holds. So the screen tells the user to delete the "Chief of staff" key at
-https://openrouter.ai/settings/keys, with a link to the key's own page.
+read 2026-11-27; "All key management endpoints are under `/api/v1/keys` and
+require a Management API key",
+https://openrouter.ai/docs/guides/overview/auth/provisioning-api-keys, read
+2026-11-27) needs the account's management key, which the app never holds.
+No OpenRouter page offers a key a way to delete itself, and `GET /api/v1/key`
+returns no hash. So Disconnect's confirmation says "Also delete this key on
+OpenRouter." with **Open its page**, `https://openrouter.ai/keys/<key_hash>`
+from the record; the key never reaches the browser. The page Disconnect
+returns to links https://openrouter.ai/settings/keys.
+
+**A new key each time.** Reconnecting cannot reuse a key within OpenRouter's
+documented flow: each Authorize trades a fresh code "for a user-controlled
+API key", no parameter names an existing key, a key is returned only by the
+exchange that made it, and listing keys needs a management key. So each key
+carries its date in its label, and a collapsed "Why a new key each time"
+under Connect says so.
 
 ## The caller
 
