@@ -83,15 +83,21 @@ generation's record (`GET https://openrouter.ai/api/v1/generation?id=<provider_c
 with the user's key: `total_cost`, `tokens_prompt`, `tokens_completion`).
 ## Budgets
 
-One monthly budget per user per provider (`provider_budgets`), required, with
-no default, no daily and no per-model budget. Models › Setup › Budgets
-(`GET`/`POST /chief-of-staff/models/setup/budgets`, `budgets-page.ts`) shows each connected
-provider with a suggestion worked out from the dearest model's list price
-among the user's usable models (`src/models/usable.ts`: those their tasks'
-saved choices use, else all of them) and the design's tokens per application
-(`TOKENS_PER_APPLICATION` in `budgets.ts`, from design-v3 12.2) at the
-applications a day the user plans (5 until they say), marked "estimate" with
-the date its prices were read. The user accepts it or types their own.
+One monthly budget per user for OpenRouter (`provider_budgets`), required,
+with no default, no daily and no per-model budget. Models › Setup › Budgets
+(`GET`/`POST /chief-of-staff/models/setup/budgets`, `budgets-page.ts`)
+suggests one before it is set: the dearest model, for one application, among
+the user's usable models (`src/models/usable.ts`) that their tasks' saved
+choices use, else among all of them, at its price on OpenRouter's list (a
+router at the user's price cap on it), and the design's tokens per
+application (`TOKENS_PER_APPLICATION` in `budgets.ts`, from design-v3 12.2)
+at the applications a day the user plans (5 until they type another; the
+page works the figure out again as it is typed, with no request), marked
+"estimate" with the date its prices were read. The user sets it with one tap
+or types their own, and may change or clear it later; clearing stops model
+calls again. Each happens in place (the page's script posts with
+`Accept: application/json` and swaps in the page's `<main>`); without the
+script the form posts and redirects back, with any problem in a flash cookie.
 
 ### The budget bar
 

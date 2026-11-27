@@ -1,10 +1,20 @@
+// Models › Setup › Budgets (design-v3 1.8): the one monthly OpenRouter
+// budget, its suggestion from the usable models at OpenRouter's list prices,
+// and setting, changing and clearing it in place or, without the script, by
+// post-redirect-get. Every request goes through the Worker, Access included,
+// against a D1 with every migration applied.
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
-import { parseBudget, readBudget, suggestBudget, TOKENS_PER_APPLICATION } from "../src/proxy/budgets";
+import { savePriceCap } from "../src/models/price-caps";
+import { CATALOG_VERSION } from "../src/prices/openrouter";
+import { writeSnapshot } from "../src/prices/store";
+import { monthlyFor, parseBudget, readBudget, readSuggestionBasis, setBudget, suggest, TOKENS_PER_APPLICATION } from "../src/proxy/budgets";
 import { writeConnection } from "../src/proxy/connections";
+import { writeLedgerRow } from "../src/proxy/ledger";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
-import { recordTest, seedPrices, testPlugin, userFor } from "./test-plugin";
+import { element, pageScripts, runScript, type Sent } from "./script-dom";
+import { recordTest, row, seedPrices, TEST_CATALOG, testPlugin, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-25T10:00:00Z");
 const BASE = "https://shell.test/chief-of-staff/models/setup/budgets";
@@ -24,36 +34,92 @@ const send = async (path: string, init: RequestInit = {}, claims: Record<string,
 };
 const post = (fields: Record<string, string>, headers: Record<string, string> = {}) =>
   send("", { method: "POST", body: new URLSearchParams(fields), headers: { "content-type": "application/x-www-form-urlencoded", ...headers } });
+// As the page's script sends it: in place, asking for JSON.
+const postInPlace = async (fields: Record<string, string>) => {
+  const r = await post(fields, { accept: "application/json" });
+  return { status: r.status, location: r.headers.get("location"), body: (await r.json()) as { main: string; focus?: string } };
+};
+const page = async (path = "", headers: Record<string, string> = {}) => (await send(path, { headers })).text();
+const flashOf = (r: Response) => r.headers.get("set-cookie")!.split(";")[0]!;
+const primaries = (html: string) => html.match(/class="btn primary[^"]*"/g)?.length ?? 0;
 
 let ownerId: string;
+
+const routeTask = (userId: string, task: string, main: string, fallback?: string) =>
+  env.DB.prepare(
+    "INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, ?, 'openrouter', ?, ?, ?, 'changed', ?)",
+  )
+    .bind(userId, task, main, fallback ? "openrouter" : null, fallback ?? null, NOW.toISOString())
+    .run();
 
 beforeEach(async () => {
   await seedPrices();
   ownerId = (await userFor("test-sub")).id;
   await writeConnection(env.DB, ownerId, testPlugin(), { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
-  await recordTest(ownerId, "test-sonnet");
+  for (const m of ["test-sonnet", "test-mini"]) await recordTest(ownerId, m);
 });
 
 describe("the suggested budget", () => {
-  it("is the picked model's list price at the design's tokens per application, a month of days", async () => {
-    const s = await suggestBudget(env.DB, [{ provider: "openrouter", model: "test-sonnet", location: "global" }], 5);
+  it("is the dearest usable model at OpenRouter's list prices and the design's tokens, a month of days", async () => {
+    const basis = (await readSuggestionBasis(env.DB, ownerId))!;
     // (51,100 × $3 + 3,225 × $15) per million = $0.201675 an application; × 5 × 30 = $30.25, rounded up.
     expect(TOKENS_PER_APPLICATION).toEqual({ input: 51_100, output: 3_225 });
-    expect(s).toEqual({ monthlyUsd: 31, model: "test-sonnet", applicationsADay: 5, checkedOn: "2026-11-27" });
+    expect(basis).toEqual({
+      from: "usable",
+      perApplicationUsd: 0.201675,
+      model: { model: "test-sonnet", name: "Test Sonnet", inputUsdPerMTok: 3, outputUsdPerMTok: 15, free: false, capped: false, checkedOn: "2026-11-27" },
+    });
+    expect(suggest(basis, 5).monthlyUsd).toBe(31);
+    expect(suggest(basis, 10).monthlyUsd).toBe(61);
+    expect(monthlyFor(0, 5)).toBe(1);
   });
 
-  it("uses the dearest picked model, and skips one with no price", async () => {
-    const s = await suggestBudget(
-      env.DB,
-      [
-        { provider: "openrouter", model: "test-mini", location: "global" },
-        { provider: "openrouter", model: "unpriced", location: "global" },
-      ],
-      10,
-    );
-    // (51,100 × $0.25 + 3,225 × $1) per million × 10 × 30 = $4.8, rounded up.
-    expect(s?.monthlyUsd).toBe(5);
-    expect(await suggestBudget(env.DB, [{ provider: "openrouter", model: "unpriced", location: "global" }], 10)).toBeUndefined();
+  it("is worked from the models the tasks use, once a task uses a usable one, main or fallback", async () => {
+    await routeTask(ownerId, "match", "test-mini");
+    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ from: "tasks", model: { model: "test-mini" }, perApplicationUsd: 0.016 });
+    await routeTask(ownerId, "score", "test-mini", "test-sonnet");
+    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ from: "tasks", model: { model: "test-sonnet" } });
+  });
+
+  it("ignores a task's model that is no longer usable, and has none before any model passed", async () => {
+    await routeTask(ownerId, "match", "test-luna");
+    // test-luna never passed its test: not usable, so not the tasks' basis.
+    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ from: "usable", model: { model: "test-sonnet" } });
+    await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
+    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+    expect(await readSuggestionBasis(env.DB, ownerId)).toBeUndefined();
+  });
+
+  it("follows the current model list's prices, and leaves out a model the list no longer has", async () => {
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-28T06:00:00Z", status: "good", results: [],
+      catalog: { ...TEST_CATALOG, models: TEST_CATALOG.models.filter((m) => m.id !== "test-sonnet").concat({ id: "test-mini", name: "Test Mini 2", tools: true }).filter((m, i, a) => a.findIndex((x) => x.id === m.id) === i) },
+      rows: [{ ...row("test-mini", "input", 2), dateRead: "2026-11-28" }, { ...row("test-mini", "output", 8), dateRead: "2026-11-28" }],
+    });
+    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ model: { model: "test-mini", inputUsdPerMTok: 2, outputUsdPerMTok: 8, checkedOn: "2026-11-28" } });
+  });
+
+  it("prices a router at the user's own price cap on it", async () => {
+    await savePriceCap(env.DB, ownerId, "openrouter", "openrouter/auto", { input: 10, output: 40 }, new Date("2026-11-26T08:00:00Z"));
+    await recordTest(ownerId, "openrouter/auto");
+    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({
+      model: { model: "openrouter/auto", name: "Auto router", inputUsdPerMTok: 10, outputUsdPerMTok: 40, capped: true, checkedOn: "2026-11-26" },
+    });
+  });
+
+  it("labels a free model free, at the $1 floor", async () => {
+    const free = { id: "maker/free-one:free", name: "Maker: Free One (free)", tools: true, free: true as const };
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-28T06:00:00Z", status: "good", results: [],
+      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, free] },
+      rows: [row(free.id, "input", 0), row(free.id, "output", 0)],
+    });
+    await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
+    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+    await recordTest(ownerId, free.id);
+    const html = await page("?per_day=5");
+    expect(html).toContain('From <strong>Maker: Free One (free)</strong> <span class="pill free">free</span>, the dearest model that passed its test.');
+    expect(html).toContain('<span class="num big" data-sugg>$1</span>');
   });
 
   it("parses any positive dollar amount, with no upper limit", () => {
@@ -64,110 +130,209 @@ describe("the suggested budget", () => {
   });
 });
 
-describe("Models › Setup › Budgets", () => {
-  it("shows each connected provider with its suggestion, basis, estimate and checked-on date", async () => {
-    const response = await send("?per_day=5");
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("<h3>OpenRouter</h3>");
-    expect(html).toContain("about $31 a month");
-    expect(html).toContain('<span class="pill warn">estimate</span> · checked on 2026&#8209;11&#8209;27');
-    expect(html).toContain("Suggested from 5 applications a day.");
-    expect(html).toContain("<summary>How this is worked out</summary>");
-    expect(html).toContain("<li>At test-sonnet's list prices, from the app's price table.</li>");
-    expect(html).toContain("Until it is set, this provider's models cannot be called.");
-    expect(html).not.toContain("Google Vertex AI");
-    expect(html).not.toMatch(/design only/i);
+describe("Models › Setup › Budgets, before the budget is set", () => {
+  it("suggests a value with its basis, marked estimate with its checked-on date, and one tap to set it", async () => {
+    const html = await page("?per_day=5");
+    expect(html).toContain('<p class="label">Suggested <span class="pill warn">estimate</span> <span class="meta">checked on 2026&#8209;11&#8209;27</span></p>');
+    expect(html).toContain('<span class="num big" data-sugg>$31</span> <span class="unit">a month</span>');
+    expect(html).toContain('From <strong>Test Sonnet</strong>, the dearest model that passed its test.');
+    expect(html).toContain("<li>Its price on OpenRouter's list: $3.00 in, $15.00 out per million tokens, read 2026&#8209;11&#8209;27.</li>");
+    expect(html).toMatch(/<button type="submit" class="btn primary wide" name="do" value="accept" data-k="accept" data-accept data-label="Set \{usd\} a month">Set \$31 a month<\/button>/);
+    expect(html).toContain("Model calls stay stopped until it is set. Tests still run.");
+    expect(html).not.toContain('<div class="bb" data-budget-bar>');
+    expect(primaries(html)).toBe(1);
   });
 
   it("keeps every visible sentence to 12 words or fewer, the basis under How this is worked out", async () => {
-    // Outside <details> and outside the budget bar's own labels (none here: no budget is set).
-    const visible = (await (await send("?per_day=5")).text())
-      .replace(/<(style|script|title)[\s\S]*?<\/\1>/g, " ")
-      .replace(/<details[\s\S]*?<\/details>/g, " ")
-      // A block element ends a line; an inline one (a link, a pill) does not.
-      .replace(/<\/?(?:p|h\d|li|ul|div|section|form|label|button|input|main|body)\b[^>]*>/g, "\n")
-      .replace(/<[^>]+>/g, " ");
-    const sentences = visible.split(/\n|(?<=[.:?!])\s/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
-    for (const sentence of sentences) expect(sentence.split(" ").length, sentence).toBeLessThanOrEqual(12);
-    expect(visible).not.toContain("practice mode");
+    for (const html of [await page("?per_day=5"), (await setBudget(env.DB, ownerId, "openrouter", 31, "accepted", NOW), await page("?per_day=5"))]) {
+      const visible = html
+        .replace(/<(style|script|title)[\s\S]*?<\/\1>/g, " ")
+        .replace(/<details[\s\S]*?<\/details>/g, " ")
+        .replace(/<div class="bb" data-budget-bar>[\s\S]*?<\/div>\n<\/div>/g, " ")
+        .replace(/<\/?(?:p|h\d|li|ul|div|section|form|label|button|input|main|body|nav)\b[^>]*>/g, "\n")
+        .replace(/<[^>]+>/g, " ");
+      const sentences = visible.split(/\n|(?<=[.:?!])\s/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+      for (const sentence of sentences) expect(sentence.split(" ").length, sentence).toBeLessThanOrEqual(12);
+    }
+  });
+
+  it("says what the month has spent already, which the budget counts, only once there is some", async () => {
+    expect(await page()).not.toContain("Already spent this month");
+    await writeLedgerRow(env.DB, {
+      userId: ownerId, at: NOW, task: "model_test", site: "", provider: "openrouter", model: "test-sonnet", region: "global", pluginVersion: "test", status: 200,
+      inputTokens: 1000, cachedInputTokens: 0, cacheWriteTokens: 0, cacheWrite1hTokens: 0, outputTokens: 10, longPrompt: false, durationMs: 10,
+      costUsd: 1.234, costSource: "reported", costedConservatively: {},
+    });
+    expect(await page()).toContain('<p class="stop">Already spent this month: $1.23. The budget counts it.</p>');
   });
 
   it("works the suggestion at the volume asked for, 5 a day when none is", async () => {
-    expect(await (await send("?per_day=10")).text()).toContain("about $61 a month");
-    expect(await (await send("")).text()).toContain("Suggested from 5 applications a day.");
-    expect(await (await send("?per_day=nope")).text()).toContain("Suggested from 5 applications a day.");
+    expect(await page("?per_day=10")).toContain("Set $61 a month");
+    expect(await page("")).toContain('value="5" aria-label="Applications a day you plan"');
+    expect(await page("?per_day=nope")).toContain("Set $31 a month");
   });
 
-  it("sets the budget when the suggestion is accepted", async () => {
-    const response = await post({ provider: "openrouter", accept: "31", amount: "", per_day: "5" });
-    expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe(`${BASE}?per_day=5`);
+  it("gives a direct action when there is no suggestion: Test a model, with Set budget the one primary", async () => {
+    await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
+    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+    const html = await page();
+    expect(html).toContain('<a class="btn outline" href="/chief-of-staff/models/setup/providers#test" data-k="test">Test a model</a>');
+    expect(html).toMatch(/<button type="submit" class="btn primary" name="do" value="set" data-k="set">Set budget<\/button>/);
+    expect(primaries(html)).toBe(1);
+  });
+
+  it("asks a user who has not connected OpenRouter to connect it, straight to OpenRouter", async () => {
+    const html = await page("", {});
+    expect(html).not.toContain("Not connected");
+    const friend = await (await send("", {}, { sub: "friend-sub", email: "friend@example.com" })).text();
+    expect(friend).toContain('<form method="post" action="/chief-of-staff/models/setup/providers/openrouter/connect"><button type="submit" class="btn primary wide" data-k="connect">Connect OpenRouter</button></form>');
+    expect(friend).not.toContain('name="amount"');
+    expect(primaries(friend)).toBe(1);
+  });
+});
+
+describe("setting, changing and clearing the budget", () => {
+  it("sets the suggestion in place: JSON with the new <main>, the bar, no redirect", async () => {
+    const r = await postInPlace({ do: "accept", per_day: "5" });
+    expect(r.status).toBe(200);
+    expect(r.location).toBeNull();
+    expect(r.body.focus).toBe("next");
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 31, setHow: "accepted" });
-    const html = await (await send("?per_day=5")).text();
-    expect(html).toContain('<p class="ok-line">Budget set: $31 a month</p>');
-    // The month's spend is the budget bar's; with no key in the vault it is the app's own count.
-    expect(html).toContain(`<span class="small">$0.00 of $31 by the app's count · $31.00 left</span>`);
-    expect(html).not.toContain("Until it is set");
+    expect(r.body.main).toContain('<div class="banner ok" role="status">Budget set: $31 a month.</div>');
+    expect(r.body.main).toContain('<div class="bb" data-budget-bar>');
+    expect(r.body.main).toContain('<span class="num big">$31</span> <span class="unit">a month</span>');
+    expect(r.body.main).toContain('<a class="btn primary" href="/chief-of-staff/models/setup/tasks" data-next>Next: the model for each task</a>');
+    expect(primaries(r.body.main)).toBe(1);
+    expect(r.body.main).not.toContain("<!doctype");
   });
 
-  it("sets the budget the user types, however large", async () => {
-    expect((await post({ provider: "openrouter", amount: "12.50", per_day: "5" })).status).toBe(303);
+  it("sets the suggestion the server works out at the volume posted, whatever else is posted", async () => {
+    await postInPlace({ do: "accept", per_day: "10", amount: "", accept: "2" });
+    expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 61, setHow: "accepted" });
+  });
+
+  it("sets, without the script, by post-redirect-get, the confirmation shown once", async () => {
+    const r = await post({ do: "accept", per_day: "5" });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe(`${BASE}?per_day=5`);
+    const shown = await send("?per_day=5", { headers: { cookie: flashOf(r) } });
+    const html = await shown.text();
+    expect(html).toContain("Budget set: $31 a month.");
+    expect(shown.headers.get("set-cookie")).toContain("cos_budgets_flash=; Path=/chief-of-staff/models/setup/budgets; Max-Age=0");
+    expect(await page("?per_day=5")).not.toContain("Budget set: $31 a month.");
+  });
+
+  it("sets and changes the budget the user types, however large", async () => {
+    await postInPlace({ do: "set", amount: "12.50", per_day: "5" });
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 12.5, setHow: "typed" });
-    expect((await post({ provider: "openrouter", amount: "25000", per_day: "5" })).status).toBe(303);
+    const r = await postInPlace({ do: "set", amount: "$25,000", per_day: "5" });
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 25000, setHow: "typed" });
+    expect(r.body.main).toContain('value="25000" data-k="amount"');
   });
 
-  it("sets the typed amount, never the suggestion, when both arrive", async () => {
-    expect((await post({ provider: "openrouter", accept: "31", amount: "12", per_day: "5" })).status).toBe(303);
+  it("refuses an amount that is not a budget under its field, keeping what was typed, in place and without the script", async () => {
+    await setBudget(env.DB, ownerId, "openrouter", 12, "typed", NOW);
+    const r = await postInPlace({ do: "set", amount: "twelve", per_day: "5" });
+    expect(r.status).toBe(400);
+    expect(r.body.focus).toBe("amount");
+    expect(r.body.main).toContain('value="twelve" aria-invalid="true" aria-describedby="amount-err"');
+    expect(r.body.main).toContain('<p class="field-err" id="amount-err" role="alert">Type a budget in dollars, more than $0, for example 30.</p>');
+    const plain = await post({ do: "set", amount: "0", per_day: "5" });
+    expect(plain.status).toBe(303);
+    expect(plain.headers.get("location")).toBe(`${BASE}?per_day=5#amount`);
+    expect(await (await send("?per_day=5", { headers: { cookie: flashOf(plain) } })).text()).toContain('value="0" aria-invalid="true"');
     expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 12, setHow: "typed" });
-    const bad = await post({ provider: "openrouter", accept: "31", amount: "twelve", per_day: "5" });
-    expect(bad.status).toBe(400);
-    expect(await readBudget(env.DB, ownerId, "openrouter")).toMatchObject({ monthlyUsd: 12, setHow: "typed" });
   });
 
-  it("submits the typed amount on Enter: the suggestion has a form of its own", async () => {
-    // Each post form's fields and buttons, as name=value, in page order.
-    const forms: string[][] = [];
-    const field = { element: (e: Element) => void forms.at(-1)!.push(`${e.getAttribute("name") ?? ""}=${e.getAttribute("value") ?? ""}`) };
-    await new HTMLRewriter()
-      .on('form[method="post"]', { element: () => void forms.push([]) })
-      .on('form[method="post"] input', field)
-      .on('form[method="post"] button', field)
-      .transform(await send("?per_day=5"))
-      .text();
-    expect(forms).toEqual([
-      ["provider=openrouter", "per_day=5", "accept=31"],
-      ["provider=openrouter", "per_day=5", "amount=", "="],
-    ]);
+  it("clears the budget after a confirm, both in place; the suggestion comes back and calls stop", async () => {
+    await setBudget(env.DB, ownerId, "openrouter", 31, "accepted", NOW);
+    const ask = await send("?per_day=5&confirm=clear", { headers: { accept: "application/json" } });
+    const confirm = ((await ask.json()) as { main: string }).main;
+    expect(confirm).toContain('<p id="clear-q"><strong>Clear the budget?</strong> Model calls stop until you set one again.</p>');
+    expect(confirm).toContain('data-view data-k="clear-no" data-autofocus>Cancel</a>');
+    expect(await readBudget(env.DB, ownerId, "openrouter")).toBeDefined();
+    const r = await postInPlace({ do: "clear", per_day: "5" });
+    expect(r.status).toBe(200);
+    expect(await readBudget(env.DB, ownerId, "openrouter")).toBeUndefined();
+    expect(r.body.main).toContain("Budget cleared. Model calls stop until you set one.");
+    expect(r.body.main).toContain("Set $31 a month");
+    expect(r.body.main).not.toContain('<div class="bb" data-budget-bar>');
   });
 
-  it("refuses an amount that is not a budget, and a provider not connected", async () => {
-    const bad = await post({ provider: "openrouter", amount: "0", per_day: "5" });
-    expect(bad.status).toBe(400);
-    expect(await bad.text()).toContain("Type a budget in dollars");
-    // A removed provider's name is not a provider any more.
-    expect((await post({ provider: "bedrock", amount: "10" })).status).toBe(400);
-    expect(await readBudget(env.DB, ownerId, "bedrock")).toBeUndefined();
+  it("refuses a user who has not connected OpenRouter, and a form posted from another site", async () => {
+    const friend = await send("", { method: "POST", body: new URLSearchParams({ do: "set", amount: "10" }), headers: { "content-type": "application/x-www-form-urlencoded" } }, { sub: "friend-sub", email: "friend@example.com" });
+    expect(friend.status).toBe(303);
+    const back = await send("", { headers: { cookie: friend.headers.get("set-cookie")!.split(";")[0]! } }, { sub: "friend-sub", email: "friend@example.com" });
+    expect(await back.text()).toContain('<div class="banner warn" role="alert">Connect OpenRouter first. The budget limits its calls.</div>');
+    expect(await readBudget(env.DB, (await userFor("friend-sub")).id, "openrouter")).toBeUndefined();
+    const elsewhere = await post({ do: "set", amount: "10" }, { origin: "https://elsewhere.example" });
+    expect(elsewhere.status).toBe(403);
     expect(await readBudget(env.DB, ownerId, "openrouter")).toBeUndefined();
   });
 
-  it("refuses a form posted from another site", async () => {
-    const response = await post({ provider: "openrouter", amount: "10" }, { origin: "https://elsewhere.example" });
-    expect(response.status).toBe(403);
-    expect(await readBudget(env.DB, ownerId, "openrouter")).toBeUndefined();
-  });
-
-  it("shows each user only their own providers and budgets", async () => {
-    const html = await (await send("", {}, { sub: "friend-sub", email: "friend@example.com" })).text();
-    expect(html).toContain("No provider is connected yet.");
-    expect(html).not.toContain("<h3>OpenRouter</h3>");
-    expect((await post({ provider: "openrouter", amount: "10" })).status).toBe(303);
+  it("keeps each user's budget their own", async () => {
     const friend = (await userFor("friend-sub")).id;
-    expect(await readBudget(env.DB, friend, "openrouter")).toBeUndefined();
+    await writeConnection(env.DB, friend, testPlugin(), { method: "oauth_pkce", key_hash: "c".repeat(64) }, NOW);
+    await setBudget(env.DB, friend, "openrouter", 99, "typed", NOW);
+    expect(await page()).not.toContain("$99");
+    await postInPlace({ do: "clear" });
+    expect(await readBudget(env.DB, friend, "openrouter")).toMatchObject({ monthlyUsd: 99 });
   });
 
   it("refuses an Access token that names no person", async () => {
     expect((await send("", {}, { sub: undefined, email: undefined })).status).toBe(403);
+  });
+});
+
+describe("the page's script", () => {
+  // The few elements the script touches, as the server rendered them; the
+  // document records the script's listeners so a test can fire an event at
+  // an element, as the browser does.
+  function stage(html: string) {
+    const perApp = html.match(/data-per-day data-per-app="([^"]+)"/)![1]!;
+    const field = Object.assign(element({ "data-per-day": "", "data-per-app": perApp }), { value: "5", matches: (s: string) => s === "[data-per-day]" });
+    const figures = [element(), element()];
+    const accept = Object.assign(element({ "data-label": html.match(/data-accept data-label="([^"]+)"/)![1]! }), { textContent: "" });
+    const copies = [element(), element()].map((e) => Object.assign(e, { value: "5" }));
+    const all: Record<string, unknown[]> = { "[data-per-day]": [field], "[data-sugg]": figures, "[data-accept]": [accept], "[data-per-day-copy]": copies };
+    const main = Object.assign(element({ id: "screen" }), {
+      querySelector: (s: string) => all[s]?.[0] ?? null,
+      querySelectorAll: (s: string) => all[s] ?? [],
+      contains: () => true,
+    });
+    const listeners: Record<string, Array<(e: unknown) => void>> = {};
+    const document = {
+      getElementById: (id: string) => (id === "screen" ? main : null),
+      querySelectorAll: () => [],
+      addEventListener: (type: string, fn: (e: unknown) => void) => void (listeners[type] ??= []).push(fn),
+    };
+    const fire = (type: string, target: unknown) => listeners[type]?.forEach((fn) => fn({ target, preventDefault: () => {} }));
+    return { document, fire, field, figures, accept, copies };
+  }
+
+  it("works the suggestion out again as the volume is typed, with the server's own sum, and sends nothing", async () => {
+    const html = await page("?per_day=5");
+    const s = stage(html);
+    const sent: Sent = [];
+    runScript(pageScripts(html), s.document, BASE, sent, { window: { fetch: () => {}, addEventListener: () => {} } });
+    const basis = (await readSuggestionBasis(env.DB, ownerId))!;
+    for (const n of [10, 1, 37, 100]) {
+      s.field.value = String(n);
+      s.fire("input", s.field);
+      const usd = `$${suggest(basis, n).monthlyUsd.toLocaleString("en-US")}`;
+      expect(s.figures.map((f) => f.textContent)).toEqual([usd, usd]);
+      expect(s.accept.textContent).toBe(`Set ${usd} a month`);
+      expect(s.copies.map((c) => c.value)).toEqual([String(n), String(n)]);
+      expect(s.field.getAttribute("aria-invalid")).toBe("false");
+    }
+    // Not a volume: Set is held until it is one, and the last figure stays.
+    for (const bad of ["", "0", "101", "2.5"]) {
+      s.field.value = bad;
+      s.fire("input", s.field);
+      expect(s.field.getAttribute("aria-invalid")).toBe("true");
+      expect(s.accept.disabled).toBe(true);
+    }
+    expect(s.copies.map((c) => c.value)).toEqual(["100", "100"]);
+    expect(sent).toEqual([]);
   });
 });

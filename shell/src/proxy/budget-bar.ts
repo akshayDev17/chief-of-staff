@@ -205,8 +205,13 @@ export const BAR_CSS = `
 // Tapping a part opens its label and tapping it again, elsewhere, or Escape
 // closes it. Keyboard focus on a part opens its label too, and it stays open
 // while focus moves into the label's links; hover needs no script (BAR_CSS).
+// It wires every bar on the page, and `cosBudgetBars()` wires again any bar
+// a page swapped in since (Budgets sets and clears in place); a bar already
+// wired is left as it is.
 export const BAR_JS = `
-document.querySelectorAll("[data-budget-bar]").forEach(function (bar) {
+function cosBudgetBars() { document.querySelectorAll("[data-budget-bar]").forEach(function (bar) {
+  if (bar.hasAttribute("data-wired")) return;
+  bar.setAttribute("data-wired", "");
   var segs = Array.prototype.slice.call(bar.querySelectorAll(".bb-seg"));
   function show(id) { segs.forEach(function (s) { s.setAttribute("aria-expanded", String(s.getAttribute("data-region") === id)); }); }
   function opened() { return segs.filter(function (s) { return s.getAttribute("aria-expanded") === "true"; })[0]; }
@@ -223,5 +228,6 @@ document.querySelectorAll("[data-budget-bar]").forEach(function (bar) {
     if (s && s.nextElementSibling.contains(document.activeElement)) s.focus();
     show("");
   });
-});
+}); }
+cosBudgetBars();
 `;
