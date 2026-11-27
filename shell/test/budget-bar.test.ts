@@ -161,7 +161,7 @@ describe("the bar on the Models pages", () => {
   });
 
   const budgetsPage = () =>
-    handleBudgets(new Request(`${ORIGIN}/chief-of-staff/models/setup/budgets`), env.DB, { openrouter: testPlugin() }, userId, NOW, { secrets: testSecrets(), fetcher });
+    handleBudgets(new Request(`${ORIGIN}/chief-of-staff/models/setup/budgets`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher });
 
   it("is on Budgets once the budget is set, read from OpenRouter server side, the key never on the page", async () => {
     expect(await (await budgetsPage()).text()).not.toContain('<div class="bb" data-budget-bar>');
@@ -179,14 +179,14 @@ describe("the bar on the Models pages", () => {
     expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/key"]);
   });
 
-  it("is not on Providers, which reads no figure from OpenRouter", async () => {
+  it("is not on Providers, which names the budget under Key and budget", async () => {
     await setBudget(env.DB, userId, "openrouter", 31, "accepted", NOW);
     const response = await handleProviders(new Request(`${ORIGIN}/chief-of-staff/models/setup/providers`), {
       db: env.DB, plugins: { openrouter: testPlugin() }, readPlugins: async () => ({ openrouter: testPlugin() }), secrets: testSecrets(),
       userId, viewer: "friend", appOrigin: ORIGIN, now: NOW, fetcher,
     });
     const html = await response.text();
-    expect(html).toMatch(/<strong>Monthly budget:<\/strong> \$31 · <a href="[^"]+">Budgets<\/a><\/p>/);
+    expect(html).toMatch(/<li>Monthly budget here: \$31 · <a href="[^"]+">Budgets<\/a><\/li>/);
     expect(html).not.toContain("data-budget-bar");
     expect(fetcher.sent.map((s) => s.url)).not.toContain("https://openrouter.ai/api/v1/key");
   });

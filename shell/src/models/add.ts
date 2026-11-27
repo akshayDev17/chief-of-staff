@@ -16,8 +16,10 @@
 // plug-in cannot call shows why and cannot be chosen; one with no input and
 // output price shows "no price yet" and cannot be added, because the budget
 // stop needs a real price; the proxy refuses a call to either. A free model
-// ($0 in and out, such as OpenRouter's `:free` ones) carries FREE_NOTE; it is
-// never proposed for a task (models/tasks.ts).
+// (prices/openrouter.ts isTrulyFreeTextModel: it gives only text and every
+// price OpenRouter lists for it is 0) carries FREE_NOTE; it is never proposed
+// for a task (models/tasks.ts). A model at $0 a token that is not free that
+// way says so.
 //
 // The test call goes through the proxy's one pipeline (`sendTestCall`), which
 // prices it and writes its ledger row. Where the reply names its model, a
@@ -27,7 +29,7 @@
 import { readCurrentCatalog, currentSnapshot, readSnapshotRows } from "../prices/store";
 import { modelTier, type Tier } from "../prices/tiers";
 import { isProvider, type PriceRow, type Provider, type SourceId } from "../prices/types";
-import { reasonText } from "../providers/check";
+import { markRevoked, reasonText } from "../providers/check";
 import { readConnection } from "../proxy/connections";
 import type { Link, PlainReason, PluginRegistry, ProviderPlugin, Usage } from "../proxy/plugin";
 import { sendTestCall } from "../proxy/proxy";
@@ -41,6 +43,9 @@ export interface OfferRow {
   // `request`: the provider's fee per call, in USD per million calls, when it lists one.
   price?: { input: number; output: number; request?: number; source: SourceId; dateRead: string; stale: boolean };
   tier?: Tier;
+  // Free by the one rule (prices/openrouter.ts isTrulyFreeTextModel), from
+  // the provider's model list.
+  free: boolean;
   // The plug-in can call it; otherwise `notCallableReason` says why.
   callable: boolean;
   // The user's own account leaves it out (models/account-list.ts).
@@ -77,9 +82,12 @@ export interface UserModel {
 export type AddRefusal = PlainReason | "not_connected" | "not_offered" | "no_price" | "cannot_call" | "wrong_model" | "budget_spent" | "not_passed";
 
 export const FREE_NOTE = "free: rate-limited, and the provider may log prompts";
+export const NOT_FREE_NOTE = "not free: OpenRouter lists other fees for it";
 
-// $0 in and out.
-export const isFree = (price: { input?: number; output?: number } | undefined): boolean => price?.input === 0 && price?.output === 0;
+// The free models of the current model list, by ID.
+export async function readFreeModels(db: D1Database): Promise<Set<string>> {
+  return new Set(((await readCurrentCatalog(db))?.models ?? []).filter((m) => m.free).map((m) => m.id));
+}
 
 export type AddOutcome =
   | { kind: "added"; model: UserModel }
@@ -94,6 +102,8 @@ export type AddOutcome =
       fix?: string;
       links?: Link[];
       location?: string;
+      // The model is free, so a 402 on it is not a paid model's.
+      free?: boolean;
     };
 
 interface UserModelRecord {
@@ -166,6 +176,7 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
   for (const r of rows) rowsByModel.set(r.model, [...(rowsByModel.get(r.model) ?? []), r]);
   const catalog = await readCurrentCatalog(db);
   const names = new Map((catalog?.models ?? []).map((m) => [m.id, m.name]));
+  const free = new Set((catalog?.models ?? []).filter((m) => m.free).map((m) => m.id));
   const added = new Map((await readUserModels(db, userId)).filter((m) => m.provider === provider).map((m) => [m.model, m]));
   const account = await readAccountList(db, userId, provider);
   const ids = [...new Set([...names.keys(), ...rowsByModel.keys(), ...added.keys()])].sort(byText);
@@ -173,15 +184,18 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
     const location = added.get(model)?.location ?? plugin.connect.locations(model)[0] ?? "global";
     const name = names.get(model);
     const priced = priceOf(rowsByModel.get(model) ?? [], location);
+    const isFree = free.has(model);
+    const zeroTokens = priced.price?.input === 0 && priced.price.output === 0;
     return {
       model,
       ...(name && name !== model ? { name } : {}),
       location,
       ...priced,
+      free: isFree,
       callable: plugin.connect.canCall(model),
       accountLeftOut: account !== undefined && !account.models.has(model),
       noToolUse: plugin.connect.noToolUse?.(model),
-      notes: [...(isFree(priced.price) ? [FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
+      notes: [...(isFree ? [FREE_NOTE] : zeroTokens ? [NOT_FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
       added: added.get(model),
     };
   });
@@ -229,7 +243,7 @@ export async function testModel(
   db: D1Database,
   plugin: ProviderPlugin,
   plugins: PluginRegistry,
-  input: { userId: string; model: string; location: string; otherIds: readonly string[]; now: Date; task?: string },
+  input: { userId: string; model: string; location: string; otherIds: readonly string[]; now: Date; task?: string; free?: boolean },
 ): Promise<AddOutcome> {
   const { userId, model, location, now } = input;
   const provider = plugin.provider;
@@ -238,6 +252,7 @@ export async function testModel(
     model,
     reason,
     location,
+    ...(input.free ? { free: true } : {}),
     ...extra,
   });
   const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, request: plugin.connect.testRequest(model) }, () => now, input.task);
@@ -271,6 +286,8 @@ export async function testModel(
   if (outcome.failure) {
     const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
+    // The key was deleted or disabled on the provider's side.
+    if (failure.step === "call" && plain.reason === "not_set_up" && connection) await markRevoked(db, userId, provider, now);
     return refuse(plain.reason, {
       reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,
       fix: plain.fix,
@@ -307,7 +324,7 @@ export async function addModel(
   if (!offer) return { kind: "refused", model, reason: "not_offered" };
   if (!offer.callable || offer.accountLeftOut) return { kind: "refused", model, reason: "cannot_call", location: offer.location };
   if (!offer.price) return { kind: "refused", model, reason: "no_price", location: offer.location };
-  const outcome = await testModel(db, plugin, plugins, { userId, model, location: offer.location, otherIds: offers.map((r) => r.model), now });
+  const outcome = await testModel(db, plugin, plugins, { userId, model, location: offer.location, otherIds: offers.map((r) => r.model), now, free: offer.free });
   if (outcome.kind === "added") await saveUserModel(db, userId, outcome.model);
   return outcome;
 }
@@ -333,8 +350,11 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
       return `This month's budget for ${name} is spent, so the test call waits until the 1st.`;
     case "not_passed":
       return `${o.model} did not pass in your latest Test all models run, so it cannot be added from it.`;
+    case "no_credits":
+      if (o.free) return `${short} asked for credit even for this free model.`;
+      return plugin ? reasonText(o.reason, plugin) : `${short} refused the test call.`;
     default:
-      return plugin ? reasonText(o.reason, plugin, o.model) : `${short} refused the test call.`;
+      return plugin ? reasonText(o.reason, plugin) : `${short} refused the test call.`;
   }
 }
 

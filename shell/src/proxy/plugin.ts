@@ -99,27 +99,23 @@ export interface Failure {
   message: string;
 }
 
-// One model on the user's own account list, as the provider describes it.
-export interface AccountModel {
-  id: string;
-  // List prices in USD per million tokens, when the list gives numbers.
-  inputUsd?: number;
-  outputUsd?: number;
-  contextLength?: number;
-  // It takes text and gives text.
-  text: boolean;
-  // Only moderated endpoints serve it.
-  moderated: boolean;
-  // The date the provider retires it (YYYY-MM-DD), when it names one.
-  expires?: string;
-}
-
-// The account's credit, as the provider reports it. `paid` is "none" when
-// the provider says no paid call can be billed (`why` says why, in plain
-// words after "because"), "unknown" when the provider's figures cannot tell.
-export interface AccountCredit {
-  paid: "none" | "unknown";
-  why?: string;
+// The account behind the user's key, as the provider reports it, read live
+// with that key (OpenRouter's GET /api/v1/key). Shown as the Connect panel's
+// account line, so the user sees why paid calls are refused.
+export interface AccountInfo {
+  // The account has never bought credit (OpenRouter's `is_free_tier`).
+  freeTier: boolean;
+  // Who owns the key: the user's own account, or an organization (its ID).
+  organizationId?: string;
+  // The workspace the key spends in, when the provider names one.
+  workspaceId?: string;
+  // The key's own credit limit and what is left of it; absent: no limit.
+  limitUsd?: number;
+  limitRemainingUsd?: number;
+  limitReset?: string;
+  // What the key has spent, in all and this UTC month.
+  usageUsd: number;
+  usageMonthlyUsd?: number;
   // The account's free-model requests today, when the provider reports them.
   freeDaily?: { used: number; limit: number; remaining: number };
 }
@@ -134,8 +130,10 @@ export interface Guide {
   name: string;
   // "OpenRouter", in "OpenRouter replied:".
   short: string;
-  // Each step, as trusted HTML written in the plug-in.
+  // The action lines, each a short sentence of trusted HTML written in the
+  // plug-in; the rest goes in `about`, shown collapsed under "What this does".
   steps: string[];
+  about: string[];
   // The provider pages the guide was checked against, and the date.
   checkedOn: string;
   pages: Link[];
@@ -177,16 +175,13 @@ export interface ConnectMethod {
   noToolUse?(model: string): string | undefined;
   // Plain notes for the model list's entry ("OpenRouter retires it on …").
   modelNotes?(model: string): string[];
-  // The models the user's own provider account offers, live, read with the
-  // user's credential (OpenRouter's /models/user honours the account's
-  // provider preferences, privacy settings and guardrails). The Connect test
-  // picks its model from this list (providers/test-model.ts); there is no
-  // built-in list to fall back to. Throws a ProviderRefusal when the provider
-  // refuses or sends no list.
-  readAccountModels(credential: unknown): Promise<AccountModel[]>;
-  // What the provider says of the account's credit, read with the user's
-  // credential; undefined when it cannot be read.
-  readAccountCredit?(credential: unknown): Promise<AccountCredit | undefined>;
+  // The IDs of the models the user's own provider account offers, live,
+  // read with the user's credential (OpenRouter's /models/user honours the
+  // account's provider preferences, privacy settings and guardrails). Throws
+  // a ProviderRefusal when the provider refuses or sends no list.
+  readAccountModels(credential: unknown): Promise<string[]>;
+  // The account behind the credential, read live; undefined when it cannot be read.
+  readAccount?(credential: unknown): Promise<AccountInfo | undefined>;
   // The provider's own conditions on its free models, in plain words with the
   // pages that state them, shown wherever free models are offered.
   freeModelTerms?: { text: string; links: Link[] };

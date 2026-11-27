@@ -35,9 +35,9 @@
 // 2026-11-27).
 
 import { readAppOrigin } from "../app-config";
-import { perMillion, type OpenRouterCatalog, type OpenRouterModel } from "../prices/openrouter";
+import type { OpenRouterCatalog, OpenRouterModel } from "../prices/openrouter";
 import { BASE_PATH } from "../paths";
-import { ConnectProblem, ProviderRefusal, type AccountCredit, type AccountModel, type ConnectionFields, type Failure, type Link, type PlainReason, type ProviderPlugin, type Usage } from "../proxy/plugin";
+import { ConnectProblem, ProviderRefusal, type AccountInfo, type ConnectionFields, type Failure, type Link, type PlainReason, type ProviderPlugin, type Usage } from "../proxy/plugin";
 import type { SecretStore } from "./secrets";
 
 export const OPENROUTER_AUTH_URL = "https://openrouter.ai/auth";
@@ -64,11 +64,8 @@ export const OPENROUTER_ACTIVITY_URL = "https://openrouter.ai/activity";
 export const KEY_LABEL = "Chief of staff";
 export const APP_TITLE = "Chief of staff";
 
-// The Connect test call has no model of its own: it is chosen from the
-// user's live /models/user list by the rule in test-model.ts.
-
 // The test call's request: the smallest that proves a model answers, its
-// reply capped at 16 tokens.
+// reply capped at 16 tokens. It runs only on the model the user chose.
 export const TEST_PROMPT = "Reply with the single word OK.";
 export const TEST_MAX_TOKENS = 16;
 
@@ -221,53 +218,42 @@ const FREE_TERMS_LINKS: Link[] = [
   link("Privacy settings", SETTINGS_PRIVACY),
 ];
 
-// One entry of /models/user (the same shape as the public list), as the
-// Connect test's rule reads it.
-export function accountModelOf(m: unknown): AccountModel | undefined {
-  const e = (m ?? {}) as {
-    id?: unknown; pricing?: Record<string, unknown>; context_length?: unknown; expiration_date?: unknown;
-    architecture?: { input_modalities?: unknown; output_modalities?: unknown }; top_provider?: { is_moderated?: unknown };
-  };
-  if (typeof e.id !== "string" || !e.id) return undefined;
-  const text = (v: unknown) => Array.isArray(v) && v.includes("text");
-  const inputUsd = perMillion(e.pricing?.prompt);
-  const outputUsd = perMillion(e.pricing?.completion);
-  return {
-    id: e.id,
-    ...(inputUsd !== undefined ? { inputUsd } : {}),
-    ...(outputUsd !== undefined ? { outputUsd } : {}),
-    ...(typeof e.context_length === "number" && e.context_length > 0 ? { contextLength: e.context_length } : {}),
-    text: text(e.architecture?.input_modalities) && text(e.architecture?.output_modalities),
-    moderated: e.top_provider?.is_moderated === true,
-    ...(typeof e.expiration_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(e.expiration_date) ? { expires: e.expiration_date } : {}),
-  };
-}
-
-// The account's credit from GET /api/v1/key, read with the user's own key
-// (no management key; GET /api/v1/credits needs one: "[Management key]
-// required", https://openrouter.ai/docs/api-reference/get-credits, read
-// 2026-11-27, so the app cannot read the account's balance). The key
-// reports `is_free_tier`, "Whether the user has paid for credits before",
-// `limit_remaining`, "Remaining spending limit in USD" (null: no limit), and
-// `free_model_daily_requests` with `used`, `limit` and `remaining`, the
-// "Free-model (`:free` variant) daily request quota for the account that owns
-// the key" (https://openrouter.ai/docs/api-reference/limits and
-// https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key,
-// read 2026-11-27). An account that never bought credit, or a key whose limit
-// is spent, can pay for no paid call; otherwise the balance is unknown, and a
-// 402 on the test call says it is empty.
-export function accountCreditOf(body: unknown): AccountCredit | undefined {
+// The account behind a key, from GET /api/v1/key's body, read with that key
+// (no management key; GET /api/v1/credits, the account's balance, needs one:
+// "Get total credits purchased and used for the authenticated user.
+// [Management key] required", https://openrouter.ai/docs/api-reference/get-credits,
+// read 2026-11-27, so the app cannot read the balance). The key reports
+// `is_free_tier`, "Whether the user has paid for credits before";
+// `organization_id`, "The ID of the organization that owns this API key, or
+// null when an individual account owns it"; `workspace_id`, "The ID of the
+// workspace this API key spends in"; `limit`, `limit_remaining` and
+// `limit_reset`, the key's own credit limit; `usage` and `usage_monthly`,
+// "OpenRouter credit usage (in USD)" for the key, in all and this UTC month;
+// and `free_model_daily_requests` (`used`, `limit`, `remaining`)
+// (https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key.md
+// and https://openrouter.ai/docs/api-reference/limits, read 2026-11-27).
+// Undefined when the body holds no account.
+export function accountOf(body: unknown): AccountInfo | undefined {
   const d = (body as { data?: Record<string, unknown> } | null)?.data;
-  if (!d || typeof d !== "object") return undefined;
+  if (!d || typeof d !== "object" || typeof d.is_free_tier !== "boolean") return undefined;
   const q = (d.free_model_daily_requests ?? {}) as Record<string, unknown>;
-  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
-  const used = n(q.used);
-  const limit = n(q.limit);
-  const remaining = n(q.remaining);
-  const freeDaily = used !== undefined && limit !== undefined && remaining !== undefined ? { freeDaily: { used, limit, remaining } } : {};
-  if (d.is_free_tier === true) return { paid: "none", why: "your OpenRouter account has no credit", ...freeDaily };
-  if (typeof d.limit_remaining === "number" && d.limit_remaining <= 0) return { paid: "none", why: "this key's credit limit on OpenRouter is used up", ...freeDaily };
-  return { paid: "unknown", ...freeDaily };
+  const used = usd(q.used);
+  const dailyLimit = usd(q.limit);
+  const left = usd(q.remaining);
+  const limit = usd(d.limit);
+  const remaining = usd(d.limit_remaining);
+  const monthly = usd(d.usage_monthly);
+  const id = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  return {
+    freeTier: d.is_free_tier,
+    ...(id(d.organization_id) ? { organizationId: id(d.organization_id) } : {}),
+    ...(id(d.workspace_id) ? { workspaceId: id(d.workspace_id) } : {}),
+    ...(limit !== undefined ? { limitUsd: limit, ...(remaining !== undefined ? { limitRemainingUsd: remaining } : {}) } : {}),
+    ...(limit !== undefined && id(d.limit_reset) ? { limitReset: id(d.limit_reset) } : {}),
+    usageUsd: usd(d.usage) ?? 0,
+    ...(monthly !== undefined ? { usageMonthlyUsd: monthly } : {}),
+    ...(used !== undefined && dailyLimit !== undefined && left !== undefined ? { freeDaily: { used, limit: dailyLimit, remaining: left } } : {}),
+  };
 }
 
 // Your keys on OpenRouter, and this key's own page when its hash is known.
@@ -304,8 +290,8 @@ export function classify(failure: Failure, connection?: ConnectionFields): { rea
     case 402:
       return {
         reason: "no_credits",
-        fix: `Add credits on OpenRouter if your account has none. Otherwise this key's limit is reached: ${KEY_LIMIT_FIX} Free models ($0) work without credit.`,
-        links: [link("Credits", SETTINGS_CREDITS), ...keyLinks(connection)],
+        fix: `Add credits on OpenRouter, or raise this key's limit there. ${KEY_LIMIT_FIX} The account line above says which.`,
+        links: [link("Add credits", SETTINGS_CREDITS), ...keyLinks(connection)],
       };
     case 403:
       if (/\bkey\b.*\blimit\b|\blimit\b.*\bkey\b/i.test(failure.message)) return { reason: "no_credits", fix: KEY_LIMIT_FIX, links: keyLinks(connection) };
@@ -380,9 +366,18 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         name: "OpenRouter",
         short: "OpenRouter",
         steps: [
-          "An OpenRouter account. You pay OpenRouter for your own calls; no one else pays for them. With no credit you can still use OpenRouter’s free models.",
-          "Tap <strong>Connect OpenRouter</strong>. OpenRouter’s own page opens: sign in there and tap <strong>Authorize</strong>. It prefills the new key’s credit limit on OpenRouter with your monthly OpenRouter budget here, or $10 before you set one. That limit belongs to the key on OpenRouter: change it, or give it a reset period (say monthly), on OpenRouter’s page for the key, now or later. The app’s monthly budget is separate.",
-          "OpenRouter issues the app a key for your own account and sends you back here. It goes straight into your vault: you never see, type or paste it. The test call then runs by itself, on the cheapest model your account’s own OpenRouter list offers: a paid one, or a free one when your account has no credit. The result says which model and why.",
+          "Tap <strong>Connect OpenRouter</strong>.",
+          "Sign in on OpenRouter and tap <strong>Authorize</strong>.",
+          "Choose a model below and test it.",
+        ],
+        about: [
+          "OpenRouter gives the app a key for your own account.",
+          "The key goes straight into your vault. You never see it.",
+          "You pay OpenRouter for your own calls. Nobody else does.",
+          "No credit? OpenRouter’s free models still work.",
+          "Authorize prefills the key’s limit with your monthly budget here, else $10.",
+          "That limit is OpenRouter’s, separate from the app’s budget.",
+          "Pick the account or workspace with your credits on OpenRouter’s page.",
         ],
         checkedOn: "2026-11-27",
         pages: [
@@ -450,12 +445,15 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         }
         const data = (body as { data?: unknown } | null)?.data;
         if (!Array.isArray(data)) throw new ProviderRefusal({ step: "models/user", status: response.status, errorName: "no_list", message: "the reply held no model list" });
-        return data.flatMap((m) => accountModelOf(m) ?? []);
+        return data.flatMap((m) => {
+          const id = (m as { id?: unknown } | null)?.id;
+          return typeof id === "string" && id ? [id] : [];
+        });
       },
-      async readAccountCredit(credential) {
+      async readAccount(credential) {
         try {
           const response = await fetcher(OPENROUTER_KEY_URL, { headers: { authorization: `Bearer ${credential as string}`, accept: "application/json" }, signal: AbortSignal.timeout(5_000) });
-          return response.ok ? accountCreditOf(await readBody(response)) : undefined;
+          return response.ok ? accountOf(await readBody(response)) : undefined;
         } catch {
           return undefined;
         }

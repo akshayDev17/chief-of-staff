@@ -293,6 +293,12 @@ export const CONTROLS_CSS = `
 .btn.secondary { background: var(--card); color: var(--accent); }
 .btn:focus-visible, input.f:focus-visible, select.f:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input.f, select.f { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); width: 100%; }
+.btn[aria-disabled] { opacity: .55; cursor: default; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+details.more { margin-top: 6px; }
+details.more > summary { cursor: pointer; color: var(--accent); font-size: .85rem; width: fit-content; }
+details.more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+details.more[open] > summary { margin-bottom: 4px; }
 .ok-line { color: var(--ok); font-weight: 500; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;

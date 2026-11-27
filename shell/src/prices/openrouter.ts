@@ -13,13 +13,31 @@
 //
 // Every model the API lists is kept in the model list (the owner,
 // 2026-11-27: "i would like to list all models and then choose"). It can be
-// chosen when it takes text and gives text, with a prompt and a completion
-// price that are numbers (a free `:free` model at $0 included). The others
-// are listed with the reason they cannot be: a router (`-1`), priced by the
-// model it picks for each call, so the budget stop has no price; a `~…`
-// alias, which OpenRouter moves to the newest model of a line (that model is
-// listed under its own ID, and a reply names it, not the alias); a model that
-// takes or gives no text. Only models that can be chosen get price rows.
+// chosen when it takes text and gives only text (`architecture.output_modalities`
+// exactly `["text"]`), with a prompt and a completion price that are numbers
+// (a free model at $0 included). The others are listed with the reason they
+// cannot be: a router (`-1`), priced by the model it picks for each call, so
+// the budget stop has no price; a `~…` alias, which OpenRouter moves to the
+// newest model of a line (that model is listed under its own ID, and a reply
+// names it, not the alias); a model that takes no text; a model that also
+// gives audio, images or video, whose token prices are not its whole price
+// (OpenRouter lists Google's Lyria music models at "0" per prompt and
+// completion token, `output_modalities` ["text", "audio"], and charges them
+// per clip or song, as their descriptions say; a test call on one was refused
+// with 402 on an account with no credit, 2026-11-27). Only models that can be
+// chosen get price rows.
+//
+// Free: `isTrulyFreeTextModel`, the one rule every screen uses (the test
+// pick, Test all models, the model list and its labels, the proposals and the
+// estimate). A model is free only when it gives only text and every price
+// OpenRouter lists for it is 0: the pricing object's fields are `prompt`,
+// `completion`, `request`, `image`, `image_output`, `audio`, `audio_output`,
+// `input_audio_cache`, `web_search`, `internal_reasoning`,
+// `input_cache_read`, `input_cache_write`, `input_cache_write_1h` and
+// `overrides` (all of them seen in the live list on 2026-11-27; "All pricing
+// values are in USD per token/request/unit. A value of "0" indicates the
+// feature is free", https://openrouter.ai/docs/guides/overview/models). A
+// field not in that list counts too: anything but a 0 there is paid.
 //
 // The list is OpenRouter's public list: the same for every account, and read
 // with no key. Whether a model answers for one user's account (their
@@ -53,6 +71,9 @@ export interface OpenRouterModel {
   expires?: string;
   // The smallest prompt length at which a higher price applies, when any.
   longPromptFrom?: number;
+  // Free by isTrulyFreeTextModel. A catalog stored before this field reads
+  // every model as paid until the next refresh.
+  free?: true;
 }
 
 export interface OpenRouterCatalog {
@@ -60,7 +81,7 @@ export interface OpenRouterCatalog {
   models: OpenRouterModel[];
 }
 
-interface Listed {
+export interface Listed {
   id?: unknown;
   name?: unknown;
   architecture?: { input_modalities?: unknown; output_modalities?: unknown };
@@ -89,11 +110,39 @@ export function perMillion(value: unknown): number | undefined {
 
 const includesText = (modalities: unknown): boolean => Array.isArray(modalities) && modalities.includes("text");
 
+// It gives text and nothing else: `output_modalities` is exactly ["text"].
+export const givesOnlyText = (m: Listed): boolean => {
+  const out = m.architecture?.output_modalities;
+  return Array.isArray(out) && out.length === 1 && out[0] === "text";
+};
+
+// The fields of an `overrides` entry that say when it applies, not what it costs.
+const OVERRIDE_CONDITIONS: ReadonlySet<string> = new Set(["min_prompt_tokens", "utc_days", "utc_start", "utc_end"]);
+
+const isZero = (v: unknown): boolean => (typeof v === "string" || typeof v === "number") && String(v).trim() !== "" && Number(v) === 0;
+
+// Every price in `pricing` is 0, its `overrides` included; any other value,
+// a field the app does not know among them, is a price.
+export function everyPriceZero(pricing: Record<string, unknown> | undefined): boolean {
+  if (!pricing || typeof pricing !== "object") return false;
+  return Object.entries(pricing).every(([field, value]) => {
+    if (field !== "overrides") return isZero(value);
+    if (!Array.isArray(value)) return false;
+    return value.every((o) => o !== null && typeof o === "object" && Object.entries(o as Record<string, unknown>).every(([k, v]) => OVERRIDE_CONDITIONS.has(k) || isZero(v)));
+  });
+}
+
+// Free, by the one rule: it takes text, gives only text, and every price
+// OpenRouter lists for it is 0.
+export const isTrulyFreeTextModel = (m: Listed): boolean =>
+  includesText(m.architecture?.input_modalities) && givesOnlyText(m) && everyPriceZero(m.pricing);
+
 // Why the app cannot call a listed model, or undefined when it can.
 export function blockedReason(m: Listed): string | undefined {
   if (typeof m.id === "string" && m.id.startsWith("~")) return "an alias OpenRouter moves to the newest model of its line: choose that model by its own ID";
   if (!includesText(m.architecture?.input_modalities) || !includesText(m.architecture?.output_modalities)) return "it takes or gives no text, and every task sends and reads text";
   if (String(m.pricing?.prompt ?? "").trim().startsWith("-")) return "OpenRouter prices it by the model it picks for each call, so the budget stop has no price";
+  if (!givesOnlyText(m)) return "it also gives audio, images or video, priced beyond its token rates";
   if (perMillion(m.pricing?.prompt) === undefined || perMillion(m.pricing?.completion) === undefined) return "OpenRouter lists no price for it, and the budget stop needs a real price";
   return undefined;
 }
@@ -175,6 +224,7 @@ export function parseModels(body: unknown, now: Date): { rows: PriceRow[]; catal
       id,
       name,
       tools: Array.isArray(m.supported_parameters) && m.supported_parameters.includes("tools"),
+      ...(isTrulyFreeTextModel(m) ? { free: true as const } : {}),
       ...(expires ? { expires } : {}),
       ...(longPromptFrom ? { longPromptFrom } : {}),
     });

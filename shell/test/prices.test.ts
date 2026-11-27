@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { blockedReason, modelPrices, parseModels, perMillion } from "../src/prices/openrouter";
+import { blockedReason, everyPriceZero, isTrulyFreeTextModel, modelPrices, parseModels, perMillion } from "../src/prices/openrouter";
 import { displayRows, renderPriceTablePage } from "../src/prices/page";
 import { mergeRows, refreshPrices } from "../src/prices/refresh";
 import { currentSnapshot, readCurrentCatalog, readSnapshotRows, recentAlerts, rollBackLatestSnapshot } from "../src/prices/store";
@@ -33,9 +33,47 @@ describe("OpenRouter's model list as the price table", () => {
     expect(auto.blocked).toMatch(/prices it by the model it picks/);
     expect(parsed.catalog.models.find((m) => m.id.startsWith("~"))!.blocked).toMatch(/alias/);
     expect(rowsOf("openrouter/auto")).toEqual([]);
-    expect(parsed.leftOut).toBe(2);
+    // The router, the alias and the music model (below).
+    expect(parsed.leftOut).toBe(3);
     // A model that gives no text cannot do a task.
     expect(blockedReason({ id: "x/image", architecture: { input_modalities: ["text"], output_modalities: ["image"] }, pricing: { prompt: "0.000001", completion: "0.00001" } })).toMatch(/no text/);
+  });
+
+  it("never offers a model that also gives audio, images or video, even at $0 a token", () => {
+    // The captured entry: "0" per prompt and completion token, but it gives
+    // text and audio, and OpenRouter charges it per clip.
+    const lyria = MODELS.data.find((m) => m.id === "google/lyria-3-clip-preview")!;
+    expect(lyria.architecture.output_modalities).toEqual(["text", "audio"]);
+    expect([lyria.pricing.prompt, lyria.pricing.completion]).toEqual(["0", "0"]);
+    expect(isTrulyFreeTextModel(lyria)).toBe(false);
+    const entry = parsed.catalog.models.find((m) => m.id === lyria.id)!;
+    expect(entry.blocked).toBe("it also gives audio, images or video, priced beyond its token rates");
+    expect(entry.free).toBeUndefined();
+    expect(rowsOf(lyria.id)).toEqual([]);
+    expect(blockedReason({ id: "x/pic", architecture: { input_modalities: ["text"], output_modalities: ["image", "text"] }, pricing: { prompt: "0", completion: "0" } })).toMatch(/also gives/);
+  });
+
+  it("calls a model free only when it gives only text and every price it lists is 0", () => {
+    const free = MODELS.data.find((m) => m.id.endsWith(":free"))!;
+    expect(isTrulyFreeTextModel(free)).toBe(true);
+    expect(parsed.catalog.models.find((m) => m.id === free.id)!.free).toBe(true);
+    // Only one fixture entry is free.
+    expect(parsed.catalog.models.filter((m) => m.free).map((m) => m.id)).toEqual([free.id]);
+    // A captured text model's shape (google/gemini-4-neon, 2026-11-27) with its
+    // token prices at 0: its image, audio and web-search prices still make it paid.
+    const imagePriced = {
+      id: "google/gemini-4-neon",
+      architecture: { input_modalities: ["audio", "file", "image", "text", "video"], output_modalities: ["text"] },
+      pricing: { prompt: "0", completion: "0", image: "0.000003", audio: "0.000003", input_audio_cache: "0.00000015", web_search: "0.014", internal_reasoning: "0", input_cache_read: "0", input_cache_write: "0" },
+    };
+    expect(isTrulyFreeTextModel(imagePriced)).toBe(false);
+    expect(isTrulyFreeTextModel({ ...imagePriced, pricing: { prompt: "0", completion: "0", image: "0" } })).toBe(true);
+    // A field the app does not know is a price, and so is any value but 0.
+    expect(everyPriceZero({ prompt: "0", completion: "0", video_second: "0.01" })).toBe(false);
+    expect(everyPriceZero({ prompt: "0", completion: "0", request: "" })).toBe(false);
+    expect(everyPriceZero({ prompt: "0", completion: "0", overrides: [{ min_prompt_tokens: 1000, prompt: "0.000001" }] })).toBe(false);
+    expect(everyPriceZero({ prompt: "0", completion: "0", overrides: [{ utc_days: ["monday"], utc_start: 0, utc_end: 100, prompt: "0", completion: "0" }] })).toBe(true);
+    expect(everyPriceZero(undefined)).toBe(false);
   });
 
   it("lets a free model be chosen at $0, and marks tool support and retirement", () => {
@@ -79,7 +117,7 @@ describe("the daily refresh", () => {
     expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/models"]);
     // No key is sent to read the public list.
     expect(fetcher.sent[0]!.headers.authorization).toBeUndefined();
-    expect(results).toEqual([expect.objectContaining({ source: "openrouter-models", ok: true, unmapped: 2 })]);
+    expect(results).toEqual([expect.objectContaining({ source: "openrouter-models", ok: true, unmapped: 3 })]);
     expect((await currentSnapshot(env.DB))!.id).toBe(snapshotId);
     expect((await readSnapshotRows(env.DB, snapshotId)).every((r) => r.provider === "openrouter" && r.region === "global")).toBe(true);
     expect((await readCurrentCatalog(env.DB))!.readAt).toBe(NOW.toISOString());

@@ -24,9 +24,11 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   with its name, tool support (`supported_parameters`), retirement date
   (`expiration_date`) and, for a model the app cannot call, why: a router
   (`pricing.prompt` `-1`, priced by the model it picks), a `~` alias (moved to
-  the newest model of its line), a model that takes or gives no text. Only
-  models the app can call get price rows. Free (`:free`, $0) models can be
-  chosen. On 2026-11-27 the API listed 477 models, 450 of them choosable.
+  the newest model of its line), a model that takes no text, a model that
+  also gives audio, images or video (its token prices are not its whole
+  price). Only models the app can call get price rows. Free models
+  (`isTrulyFreeTextModel`: only text out, every listed price 0) can be chosen.
+  On 2026-11-27 the API listed 477 models, 434 of them choosable.
 - **Refresh.** Cron `0 6 * * *`, and Refresh model list on the Connect screen
   (at most once a minute). Each stores a dated snapshot; the newest 14 are
   kept. A failed read keeps the last good rows with their own date read,

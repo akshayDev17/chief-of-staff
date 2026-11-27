@@ -172,14 +172,16 @@ export async function runQueuedTests(db: D1Database, plugins: PluginRegistry, no
     .bind(claimedAt, staleBefore, PER_TICK)
     .all<{ run_id: number; user_id: string; provider: Provider; model: string }>();
   if (!results.length) return 0;
-  const otherIds = (await readCurrentCatalog(db))?.models.map((m) => m.id) ?? [];
+  const catalog = (await readCurrentCatalog(db))?.models ?? [];
+  const otherIds = catalog.map((m) => m.id);
+  const free = new Set(catalog.filter((m) => m.free).map((m) => m.id));
   await pooled(results, CONCURRENCY, async (t) => {
     const plugin = plugins[t.provider];
     let row: Omit<ModelTestRow, "model">;
     try {
       if (!plugin) throw new Error("no plug-in");
       const location = plugin.connect.locations(t.model)[0] ?? "global";
-      const outcome = await testModel(db, plugin, plugins, { userId: t.user_id, model: t.model, location, otherIds, now, task: TEST_ALL_TASK });
+      const outcome = await testModel(db, plugin, plugins, { userId: t.user_id, model: t.model, location, otherIds, now, task: TEST_ALL_TASK, free: free.has(t.model) });
       if (outcome.kind === "added") {
         row = { state: "passed", result: { text: "Works now.", test: outcome.model.test }, costUsd: outcome.model.test?.costUsd };
       } else {

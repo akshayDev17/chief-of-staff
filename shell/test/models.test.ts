@@ -78,10 +78,10 @@ describe("Test all models", () => {
     const html = modelsSection({
       plugin, viewer: "owner", rows: await listOffer(env.DB, plugins(), userId, "openrouter"), plan, confirmTestAll: true, testsFilter: "all", formatCost, now: NOW,
     });
-    expect(html).toContain("Test all 3 models?");
+    expect(html).toContain(`Test all 3 models for about ${formatCost(expected)}?`);
     expect(html).toContain(`at most ${TEST_MAX_TOKENS} reply tokens`);
     expect(html).toContain("Run the test");
-    expect(html).toContain("nothing is added to your models");
+    expect(html).toContain("Nothing is added.");
   });
 
   it("runs in the background a few at a time, then shows which work now with the reason, and the real cost", async () => {
@@ -96,7 +96,7 @@ describe("Test all models", () => {
     const run = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(run.finishedAt).toBe(NOW.toISOString());
     expect(run.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "failed"], ["test-sonnet", "passed"]]);
-    expect(run.tests[1]!.result).toMatchObject({ reason: "no_credits", text: "Needs credit on Test openrouter: your account or this key has none left for this paid model.", reply: { status: 402 } });
+    expect(run.tests[1]!.result).toMatchObject({ reason: "no_credits", text: "Needs credit on Test openrouter.", reply: { status: 402 } });
     expect(run.realCostUsd).toBeCloseTo(0.000251, 12);
     // Each test call is in the ledger under its own task; a run adds no model.
     expect(await readUserModels(env.DB, userId)).toEqual([]);
@@ -198,7 +198,7 @@ describe("the model for each task", () => {
   it("never proposes a free model, nor uses one as the only model, until it is chosen with Change", async () => {
     await writeSnapshot(env.DB, {
       takenAt: "2026-11-27T07:00:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, { id: "test-free:free", name: "Test Free", tools: true }] },
+      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, { id: "test-free:free", name: "Test Free", tools: true, free: true }] },
       rows: [row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-free:free", "input", 0), row("test-free:free", "output", 0)],
     });
     expect((await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "test-free:free")?.notes).toEqual([FREE_NOTE]);

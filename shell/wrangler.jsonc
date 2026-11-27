@@ -39,8 +39,7 @@
   ],
   // 06:00 UTC daily: refresh the price table and model list from
   // OpenRouter's models API.
-  // Every minute: the provider checks whose next try is due (T16), and the
-  // queued tests of Test all models.
+  // Every minute: the queued tests of Test all models.
   "triggers": { "crons": ["0 6 * * *", "* * * * *"] }
   // The one secret is never written here: VAULT_KEY (32 random bytes,
   // base64; src/vault.ts, src/providers/secrets.ts), which seals the key

@@ -13,7 +13,6 @@
 
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { isProvider, type Provider } from "../prices/types";
-import { rerunBudgetWait } from "../providers/check";
 import {
   DEFAULT_APPLICATIONS_A_DAY,
   parseBudget,
@@ -27,10 +26,11 @@ import {
 import { BAR_CSS, BAR_JS, readKeyFigure, renderBudgetBar, type KeyFigure } from "./budget-bar";
 import { connectedProviders, readConnection } from "./connections";
 import type { SecretStore } from "../providers/secrets";
-import type { ConnectionFields, PluginRegistry } from "./plugin";
+import type { ConnectionFields } from "./plugin";
 import { monthSpend } from "./ledger";
 import { PROVIDER_NAMES } from "./proxy";
-import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
+import { nextAction, setupTabsLine } from "../models/setup-tabs";
 
 export interface ProviderBudgetCard {
   provider: Provider;
@@ -108,7 +108,7 @@ export function renderBudgetsPage(input: BudgetsPageInput): string {
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers and models</a> · <strong>Budgets</strong> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
+${setupTabsLine(BUDGETS_PATH)}
 <h2>Budgets, one per provider</h2>
 <p>Each provider bills you for the month, so each gets its own monthly budget, counted from the 1st. When one is spent, calls to that provider stop until the 1st, a task's fallback model there too. The key OpenRouter issued the app also has its own credit limit, set on OpenRouter's page when you connected; OpenRouter stops the key there.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
@@ -119,6 +119,7 @@ ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</
 </form>
 ${cards}
 <p class="small muted">A budget is any amount more than $0 a month.</p>
+<div class="row" style="margin-top:12px">${nextAction(BUDGETS_PATH)}</div>
 </main>
 <script>${BAR_JS}
 </script>
@@ -169,13 +170,11 @@ async function pageInput(db: D1Database, userId: string, applicationsADay: numbe
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
 // GET shows the page; POST sets one provider's budget from the typed amount
-// or, when none is typed, the accepted suggestion, re-runs that provider's
-// test call if it was waiting for a spent budget, then shows the page again.
+// or, when none is typed, the accepted suggestion, then shows the page again.
 // Scoped to the signed-in user throughout.
 export async function handleBudgets(
   request: Request,
   db: D1Database,
-  plugins: PluginRegistry,
   userId: string,
   now: Date,
   reader: KeyReader,
@@ -205,6 +204,5 @@ export async function handleBudgets(
     return refuse("Type a budget in dollars, more than $0, for example 30.");
   }
   await setBudget(db, userId, provider, amount, typed ? "typed" : "accepted", now);
-  await rerunBudgetWait(db, plugins, userId, provider, now);
   return Response.redirect(`${url.origin}${BUDGETS_PATH}?per_day=${applicationsADay}`, 303);
 }

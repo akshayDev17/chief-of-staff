@@ -41,7 +41,7 @@ export async function refreshAccountList(
   if (!plugin || !connection) return { problem: "That provider is not connected." };
   let ids: string[];
   try {
-    ids = (await plugin.connect.readAccountModels(await plugin.mintCredential(connection, { userId }))).map((m) => m.id);
+    ids = await plugin.connect.readAccountModels(await plugin.mintCredential(connection, { userId }));
   } catch (error) {
     const said = error instanceof ProviderRefusal ? ` (${error.refusal.status} ${error.refusal.errorName}${error.refusal.message ? `: ${error.refusal.message}` : ""})` : "";
     return { problem: `${plugin.connect.guide.short} did not give your account's model list${said}; the list below is its public one.` };

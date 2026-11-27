@@ -1,12 +1,12 @@
 // Models › Setup › Providers, rendered on the server (design T02 / T16): one
 // "Connect <Provider>" button for every registered plug-in (OpenRouter, the
-// one provider since 2026-11-27), each with its guide, its connection, its
-// monthly budget, its test call and, once connected, its model list.
+// one provider since 2026-11-27), each with its action lines, its
+// connection, its account line and, once connected, the model test.
 //
 //   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1][&test-all=confirm][&tests=all|works|fails]
 //   POST /chief-of-staff/models/setup/providers/<id>/connect      to the provider's own consent page
-//   GET  /chief-of-staff/models/setup/providers/<id>/consented    back from it: the key into the vault, then the test call
-//   POST /chief-of-staff/models/setup/providers/<id>/retry | disconnect | help
+//   GET  /chief-of-staff/models/setup/providers/<id>/consented    back from it: the key into the vault, then to #test
+//   POST /chief-of-staff/models/setup/providers/<id>/disconnect
 //   POST /chief-of-staff/models/setup/providers/<id>/choose       model: its test call runs once
 //   POST /chief-of-staff/models/setup/providers/<id>/model-help   friends only: a chosen model's refusal
 //   POST /chief-of-staff/models/setup/providers/<id>/refresh      Refresh model list
@@ -16,34 +16,37 @@
 // There is no field to fill: Connect sends the user to the provider's own
 // page, where they sign in and authorize the app, and the provider issues the
 // app a key for their account, which goes straight into their vault. The key
-// is never shown on any page.
+// is never shown on any page. Back from that page the user lands at the
+// model test (#test), highlighted, with focus on its dropdown; no test call
+// runs by itself (the owner, 2026-11-27). Connected shows once the provider
+// has authorized the app; the provider is usable once one of the user's
+// models has passed its test call.
 //
-// Each test-call result is three lines: the plain verdict; "<provider>
-// replied:" with the status, the error name and the provider's own message
-// verbatim, in a smaller muted monospace font; then the fix with its buttons
-// ([Open that page] [Try again], and [Ask Admin for help] on friend screens
-// only). There is no table of failure messages: the plug-in's mapping picks
-// the wording. The reply is shown only to the user who made the call.
-// The Usage page, not built yet, is named but not linked.
+// The account line reads the provider's own figures for the key, live,
+// server side, with the key from the vault (OpenRouter's GET /api/v1/key):
+// whether the account has ever bought credit, who owns the key, its limit,
+// what it has spent. It is how a user sees why paid calls are refused.
 //
-// Below a passed Connect, the provider's model list (models-panel.ts): every
-// model it lists, chosen and tested on this screen, and Test all models. The
-// old Add a model path redirects here (src/index.ts).
+// Visible copy is the action lines only; every explanation is collapsed
+// (the owner, 2026-11-27, of the old three-paragraph guide: "why not make it
+// even more verbose ... so that the users learn to read a book in
+// 30seconds?"). The Usage page, not built yet, is named but not linked.
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
-import { addModel, listOffer, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
+import { addModel, listOffer, readUserModels, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
 import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPlan, type TestAllRun } from "../models/test-all";
-import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
+import { nextAction, setupTabsLine } from "../models/setup-tabs";
 import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
 import { refreshPrices } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
 import { readConnection } from "../proxy/connections";
-import type { ConnectionFields, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
+import type { AccountInfo, ConnectionFields, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 
-import { askAdminForHelp, callbackUrl, connectProvider, disconnectProvider, finishConsent, readCheck, runCheck, verdictText, type Check, type CheckResult } from "./check";
-import { MODELS_CSS, MODELS_JS, modelsSection, TIER_VARS, type TestsFilter } from "./models-panel";
+import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, type Check } from "./check";
+import { MODELS_CSS, MODELS_JS, modelsSection, TEST_ANCHOR, TIER_VARS, type TestsFilter } from "./models-panel";
 import type { SecretStore } from "./secrets";
 
 // Who is looking: the owner, or a friend the owner invited (who says
@@ -55,7 +58,11 @@ export interface ProviderPanel {
   connection?: ConnectionFields;
   check?: Check;
   monthlyBudget?: number;
-  // The selected panel's model list, once its Connect has passed.
+  // The selected panel's account, read live; `unread` when it could not be.
+  account?: AccountInfo | "unread";
+  // How many of the user's models at this provider have passed their test call.
+  passedModels?: number;
+  // The selected panel's model list, once connected.
   models?: {
     rows: OfferRow[];
     // When the provider's own list was read, and the account's.
@@ -92,105 +99,85 @@ export const formatCost = (usd: number): string => {
   return usd < 0.0001 ? "under $0.0001" : `$${usd.toFixed(4)}`;
 };
 
-const statusText = (status: number): string => (status === 200 ? "200 OK" : String(status));
+const postButton = (href: string, label: string, cls = "btn small") =>
+  `<form method="post" action="${href}"><button type="submit" class="${cls}">${esc(label)}</button></form>`;
 
-const linkButton = (href: string, label: string) =>
-  `<a class="btn small secondary" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+const money = (n: number): string =>`$${n.toFixed(2)}`;
 
-const postButton = (href: string, label: string, cls = "btn small", hidden = "") =>
-  `<form method="post" action="${href}">${hidden}<button type="submit" class="${cls}">${esc(label)}</button></form>`;
-
-function replyLine(result: CheckResult, plugin: ProviderPlugin): string {
-  const { short } = plugin.connect.guide;
-  const r = result.reply;
-  if (!r) return result.note ? `<p class="tc-reply">${esc(result.note)}</p>` : "";
-  if (result.verdict === "passed") {
-    const text = r.text ? ` · “${esc(r.text)}”` : "";
-    return `<p class="tc-reply">${esc(short)} replied: ${statusText(r.status)}${result.model ? ` · ${esc(result.model)}` : ""}${text}</p>`;
-  }
-  const parts = [statusText(r.status), r.errorName, r.message ? `“${r.message}”` : ""].filter(Boolean).map((p) => esc(p!));
-  return `<p class="tc-reply">${esc(short)} replied: ${parts.join(" · ")}</p>`;
-}
-
-// Which model the test call used and why, by the stated rule; and the
-// account's free-model requests left today, where the provider reports them.
-function pickLine(result: CheckResult): string {
-  const tested = result.model ? `Tested on <strong>${esc(result.model)}</strong>${result.why ? `: ${esc(result.why)}` : ""}.` : "";
-  const d = result.freeDaily;
-  const free = d ? ` ${d.remaining.toLocaleString("en-US")} of ${d.limit.toLocaleString("en-US")} free-model requests left today.` : "";
-  return tested || free ? `<p class="tc-pick small">${tested}${free}</p>` : "";
-}
-
-function resultBox(panel: ProviderPanel, viewer: Viewer): string {
-  const { plugin, check } = panel;
-  const result = check?.result;
-  if (!result) {
-    return `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Checking the connection…</strong></p>
-<p class="tc-fix small">The test call runs by itself. This page refreshes by itself.</p></div>`;
-  }
-  const provider = plugin.provider;
-  if (result.verdict === "passed") {
-    const u = result.usage;
-    const input = u ? u.input + u.cachedInput + u.cacheWrite + u.cacheWrite1h : 0;
-    const spent = u ? `${input} input and ${u.output} output tokens · ${formatCost(result.costUsd ?? 0)} · ` : "";
-    return `<div class="tc tc-ok" role="status"><p class="tc-verdict"><strong>Test call passed</strong> (ran by itself)</p>
-${pickLine(result)}
-${replyLine(result, plugin)}
-<p class="tc-fix small">${spent}connected; a connection has no end date, and the app tells you at once if the key is deleted or disabled on the provider's side.</p></div>`;
-  }
-  const waiting = result.reason === "budget_spent" || result.reason === "no_price";
-  const next = check?.nextTryAt ? `Next try at ${hhmm(check.nextTryAt)} · you can move on to the next item.` : "";
-  if (waiting) {
-    // A spent budget can be raised on the Budgets page; Try again then calls at once.
-    const retry = result.reason === "budget_spent" ? `\n<div class="row">${postButton(action(provider, "retry"), "Try again")}</div>` : "";
-    return `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>${esc(verdictText(result, plugin))}</strong></p>
-${pickLine(result)}
-${replyLine(result, plugin)}
-<p class="tc-fix small">${next}</p>${retry}</div>`;
-  }
-  const links = (result.links ?? []).map((l) => linkButton(l.href, l.label)).join("");
-  const help = viewer === "friend" ? postButton(action(provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
-  return `<div class="tc tc-bad" role="alert"><p class="tc-verdict"><strong>${esc(verdictText(result, plugin))}</strong></p>
-${pickLine(result)}
-${replyLine(result, plugin)}
-<p class="tc-fix small">${esc(result.fix ?? "")}</p>
-<div class="row">${links}${postButton(action(provider, "retry"), "Try again")}${help}</div></div>`;
+// The account line: one row of short facts, with Add credits when the
+// account has never bought any.
+function accountLine(panel: ProviderPanel): string {
+  const a = panel.account;
+  const name = panel.plugin.connect.guide.name;
+  if (!a) return "";
+  if (a === "unread") return `<p class="small acct"><strong>${esc(name)} account:</strong> <span class="muted">could not be read just now.</span></p>`;
+  const facts = [
+    a.freeTier ? "never bought credits" : "has bought credits",
+    a.organizationId ? "organization key" : "personal key",
+    a.limitUsd !== undefined ? `key limit ${money(a.limitUsd)}${a.limitRemainingUsd !== undefined ? `, ${money(a.limitRemainingUsd)} left` : ""}` : "no key limit",
+    `key spent ${formatCost(a.usageUsd)}`,
+  ];
+  const credits = a.freeTier ? ` <a class="btn small" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer">Add credits</a>` : "";
+  const details = [
+    `<li>${a.freeTier ? "This account has never bought credits: paid models answer 402." : "This account has bought credits before."}</li>`,
+    `<li>${a.organizationId ? `Owned by organization ${esc(a.organizationId)}.` : "Owned by your own account, not an organization."}</li>`,
+    a.workspaceId ? `<li>Spends in workspace ${esc(a.workspaceId)}.</li>` : "",
+    a.limitReset ? `<li>The key's limit resets ${esc(a.limitReset)}.</li>` : "",
+    a.usageMonthlyUsd !== undefined ? `<li>This key spent ${esc(formatCost(a.usageMonthlyUsd))} this month.</li>` : "",
+    a.freeDaily ? `<li>${a.freeDaily.remaining.toLocaleString("en-US")} of ${a.freeDaily.limit.toLocaleString("en-US")} free-model requests left today.</li>` : "",
+    `<li>Credits sit on one account or organization. Connect again and pick the one with credits.</li>`,
+  ].join("");
+  return `<p class="small acct"><strong>${esc(name)} account:</strong> ${facts.map(esc).join(" · ")}${credits}</p>
+<details class="more"><summary>About this account</summary><ul class="small about">${details}</ul></details>`;
 }
 
 function connectForm(panel: ProviderPanel): string {
   const { plugin, check } = panel;
   const name = plugin.connect.guide.name;
-  const waiting = check?.consentState ? `<p class="small muted">Waiting for ${esc(name)}: authorize the app on its page, or connect again.</p>` : "";
+  const waiting = check?.consentState ? `<p class="small muted">Waiting for ${esc(name)}. Authorize there, or connect again.</p>` : "";
   return `${waiting}<form method="post" action="${action(plugin.provider, "connect")}">
 <div class="row" style="margin-top:8px"><button type="submit" class="btn">Connect ${esc(name)}</button></div>
-<p class="small muted">${esc(name)}'s own page opens in this tab. There is nothing to type here.</p>
 </form>`;
+}
+
+function aboutConnect(plugin: ProviderPlugin): string {
+  const g = plugin.connect.guide;
+  const pages = g.pages.map((p) => `<a href="${esc(p.href)}" rel="noopener noreferrer">${esc(p.label)}</a>`).join(" · ");
+  return `<details class="more"><summary>What this does</summary><ul class="small about">${g.about.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+<p class="small muted">Checked on ${nbDate(g.checkedOn)} · ${pages}</p></details>`;
 }
 
 function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
   const { plugin, connection, check } = panel;
   const g = plugin.connect.guide;
-  const pages = g.pages.map((p) => `<a href="${esc(p.href)}" rel="noopener noreferrer">${esc(p.label)}</a>`).join(" · ");
-  const head = `<p class="small muted">Guide checked on ${nbDate(g.checkedOn)} against ${esc(g.short)}'s own pages · ${pages}</p>
-<ol class="small">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>`;
-  if (!connection) return `${head}${connectForm(panel)}`;
-  const status = check?.state === "passed" ? "Connected" : check?.state === "revoked" ? "Removed on the provider's side" : "Connecting";
+  const steps = `<ol class="steps">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>`;
+  const help = input.viewer === "friend" ? postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
+  if (!connection) return `${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
+  const revoked = check?.state === "revoked";
+  const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
   const revokeLinks = g.revokeLinks(connection).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ");
-  const disconnect = `<p style="margin-top:8px"><strong>${status}</strong> <span class="pill ok">key in your vault, never shown</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>
-<p class="small muted">To revoke it on ${esc(g.short)}'s side: ${esc(g.revoke)} ${revokeLinks}</p>`;
+  const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
   const dialog = input.confirmDisconnect
     ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
-<p class="small">The app deletes the key from your vault and its models stop answering for you at once. The key itself stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p>
+<p class="small">The app deletes the key from your vault. Its models stop answering for you at once.</p>
+<p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p>
 <div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
     : "";
-  const budget = `<p class="small"><strong>Monthly budget:</strong> ${panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet"} · <a href="${BUDGETS_PATH}">Budgets</a></p>`;
-  const note =
-    input.viewer === "friend"
-      ? `<p class="small muted" style="margin-top:6px">Only you see the provider's reply. “Ask Admin for help” sends only this item's name and the plain reason.</p>`
-      : "";
-  const reconnect = check?.state === "revoked" || (check?.result?.reason === "not_set_up") ? connectForm(panel) : "";
+  const passed = panel.passedModels ?? 0;
+  const usable = revoked
+    ? ""
+    : passed
+      ? `<p class="small ok-line">Usable: ${passed} ${passed === 1 ? "model" : "models"} passed.</p>`
+      : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
+  const budget = panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
+  const keyDetails = `<details class="more"><summary>Key and budget</summary><ul class="small about">
+<li>Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></li>
+<li>To revoke the key on ${esc(g.short)}: ${esc(g.revoke)} ${revokeLinks}</li>
+</ul></details>`;
+  const note = input.viewer === "friend" ? `<p class="small muted">Only you see ${esc(g.short)}'s replies.</p>${passed ? "" : postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small")}` : "";
+  const reconnect = revoked ? `<p class="small">Connect again to get a new key.</p>${connectForm(panel)}` : "";
   const models =
-    (check?.state === "passed" || input.outcome) && panel.models
+    isConnected(connection, check) && panel.models
       ? modelsSection({
           plugin,
           viewer: input.viewer,
@@ -206,7 +193,7 @@ function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
           now: input.now,
         })
       : "";
-  return `${head}${disconnect}${dialog}${budget}${resultBox(panel, input.viewer)}${reconnect}${note}${models}`;
+  return `${head}${dialog}${accountLine(panel)}${usable}${keyDetails}${reconnect}${note}${models}`;
 }
 
 export function renderProvidersPage(input: ProvidersPageInput): string {
@@ -216,14 +203,16 @@ export function renderProvidersPage(input: ProvidersPageInput): string {
       ? `<nav class="row" aria-label="Providers" style="margin-top:10px"><span class="seg">${input.panels
           .map((p) => {
             const on = p === selected;
-            const tick = p.check?.state === "passed" ? ' <span aria-label="connected">✓</span>' : "";
+            const tick = isConnected(p.connection, p.check) ? ' <span aria-label="connected">✓</span>' : "";
             return `<a href="${providerHref(p.plugin.provider)}"${on ? ' class="on" aria-current="page"' : ""}>Connect ${esc(p.plugin.connect.guide.name)}${tick}</a>`;
           })
           .join("")}</span></nav>`
-      : `<h3 style="margin:10px 0 0">Connect ${esc(selected.plugin.connect.guide.name)}${selected.check?.state === "passed" ? ' <span aria-label="connected">✓</span>' : ""}</h3>`;
-  // Refresh while the check or a Test all models run is still going.
-  const running = selected.check?.state === "checking" || (selected.models?.run && !selected.models.run.finishedAt);
-  const refresh = running ? `<meta http-equiv="refresh" content="20">` : "";
+      : `<h3 style="margin:10px 0 0">Connect ${esc(selected.plugin.connect.guide.name)}${isConnected(selected.connection, selected.check) ? ' <span aria-label="connected">✓</span>' : ""}</h3>`;
+  // While a Test all models run goes on, the page shows its progress: a
+  // script reloads it, but never while a model is being chosen
+  // (models-panel.ts MODELS_JS); without scripts, a refresh every 20 seconds.
+  const running = Boolean(selected.models?.run && !selected.models.run.finishedAt);
+  const refresh = running ? `<noscript><meta http-equiv="refresh" content="20"></noscript>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -233,20 +222,20 @@ ${refresh}
 <title>Models · Providers · Chief of staff</title>
 <style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${TIER_VARS}${MODELS_CSS}</style>
 </head>
-<body>
+<body${running ? ' data-reload-every="20"' : ""}>
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><strong>Providers and models</strong> · <a href="${BUDGETS_PATH}">Budgets</a> · <a href="${TASK_MODELS_PATH}">Model for each task</a></p>
+${setupTabsLine(PROVIDERS_PATH)}
 <h2>Model provider</h2>
-<p>OpenRouter is the one provider: through it you reach the models of many makers, paid from your own OpenRouter account. You never give the app a key: OpenRouter issues one to the app for your account when you authorize it on OpenRouter's page, and it goes straight into your vault, never shown. Once connected, choose its models right below.</p>
+<p>OpenRouter reaches every maker's models. You pay it for your own calls.</p>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
 <section class="card">
 ${tabs}
 <div style="margin-top:10px">${panelHtml(selected, input)}</div>
 </section>
-<div class="row" style="margin-top:12px"><a class="btn" href="${TASK_MODELS_PATH}">Next: the model for each task</a></div>
+<div class="row" style="margin-top:12px">${nextAction(PROVIDERS_PATH)}</div>
 </main>
 <script>${MODELS_JS}
 </script>
@@ -295,9 +284,23 @@ label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
 .dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
 .dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; max-width: 420px; width: 100%; }
 .dialog h2 { margin-top: 0; }
-ol.small { padding-left: 20px; overflow-wrap: anywhere; }
-.tc-fix, .tc-pick { overflow-wrap: anywhere; }
+ol.steps { padding-left: 22px; margin: 6px 0; overflow-wrap: anywhere; }
+ol.steps li + li { margin-top: 2px; }
+.status { margin: 8px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.acct { margin: 4px 0; overflow-wrap: anywhere; }
+.acct .btn { margin-left: 4px; }
+.tc-fix { overflow-wrap: anywhere; }
 `;
+// The account behind the user's key, read live with the key from the vault.
+async function readAccount(plugin: ProviderPlugin, connection: ConnectionFields, userId: string): Promise<AccountInfo | undefined> {
+  if (!plugin.connect.readAccount) return undefined;
+  try {
+    return await plugin.connect.readAccount(await plugin.mintCredential(connection, { userId }));
+  } catch {
+    return undefined;
+  }
+}
+
 async function pageInput(
   db: D1Database,
   plugins: PluginRegistry,
@@ -320,8 +323,10 @@ async function pageInput(
   const selected = extra.selected ?? registered.find((p) => p === asked) ?? registered[0]!;
   // Only the selected panel's model list is read: it prices every model.
   const shown: ProviderPanel | undefined = panels.find((p) => p.plugin.provider === selected);
-  if (shown?.connection && (shown.check?.state === "passed" || extra.outcome)) {
+  if (shown?.connection && isConnected(shown.connection, shown.check)) {
     const rows = await listOffer(db, plugins, userId, selected);
+    shown.passedModels = rows.filter((r) => r.added?.test).length;
+    shown.account = (await readAccount(shown.plugin, shown.connection, userId)) ?? "unread";
     shown.models = {
       rows,
       catalogReadAt: (await readCurrentCatalog(db))?.readAt,
@@ -348,7 +353,7 @@ async function pageInput(
 
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 
-const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|retry|disconnect|help|choose|model-help|refresh|test-all|add-tested))?$`);
+const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|disconnect|help|choose|model-help|refresh|test-all|add-tested))?$`);
 
 // The refusals of a chosen model a friend can ask Admin about, by the sentence they saw.
 const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<AddRefusal | PlainReason>([
@@ -383,7 +388,7 @@ export async function handleProviders(
   const [, providerPart, verb] = ROUTE.exec(url.pathname) ?? [];
   const page = async (extra: { problem?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
     html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
-  const back = (provider: string, extra = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}`, 303);
+  const back = (provider: string, extra = "", anchor = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}${anchor}`, 303);
   // The price table and the provider's model list, read now when there is
   // none yet or it is over a minute old.
   const refreshCatalog = async (force: boolean): Promise<void> => {
@@ -401,11 +406,12 @@ export async function handleProviders(
 
   if (verb === "consented") {
     if (request.method !== "GET") return new Response(null, { status: 405 });
-    // The test call needs the provider's model list and prices.
+    // The model test below needs the provider's model list and prices.
     await refreshCatalog(false);
     const outcome = await finishConsent(db, plugins, secrets, { userId, provider, returned: url.searchParams, now });
     if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
-    return back(provider);
+    // Straight to the model test, highlighted, with no call made.
+    return back(provider, "", `#${TEST_ANCHOR}`);
   }
 
   if (request.method !== "POST") return new Response(null, { status: 405 });
@@ -425,9 +431,6 @@ export async function handleProviders(
       if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
       return "open" in outcome ? Response.redirect(outcome.open, 303) : back(provider);
     }
-    case "retry":
-      await runCheck(db, plugins, userId, provider, now);
-      return back(provider);
     case "disconnect":
       await disconnectProvider(db, secrets, userId, provider);
       return back(provider);
@@ -474,8 +477,15 @@ export async function handleProviders(
     case "help": {
       // A friend asks Admin; the owner has no one above to ask.
       if (viewer !== "friend") return new Response(null, { status: 403 });
-      const sent = await askAdminForHelp(db, plugins, userId, provider, now);
-      return page(sent ? { said: "Sent to Admin: this item's name and its plain reason only.", selected: provider } : { problem: "There is nothing to ask about here.", selected: provider }, sent ? 200 : 400);
+      const plugin = plugins[provider]!;
+      const connected = isConnected(await readConnection(db, userId, provider), await readCheck(db, userId, provider));
+      const passed = (await readUserModels(db, userId)).some((m) => m.provider === provider);
+      if (passed) return page({ problem: "There is nothing to ask about here.", selected: provider }, 400);
+      await db
+        .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
+        .bind(userId, `Connect ${plugin.connect.guide.name}`, connected ? "connected, no model has passed yet" : "not connected yet", now.toISOString())
+        .run();
+      return page({ said: "Sent to Admin: this item's name and its plain reason only.", selected: provider });
     }
   }
   return new Response(null, { status: 404 });

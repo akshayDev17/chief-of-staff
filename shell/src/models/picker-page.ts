@@ -32,7 +32,8 @@
 
 import { CONTROLS_CSS, esc, PAGE_CSS } from "../prices/page";
 import type { Provider } from "../prices/types";
-import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { nextAction, setupTabsLine } from "./setup-tabs";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
@@ -177,7 +178,7 @@ ${body}
 <main class="screen">
 <h1>Models</h1>
 <div class="subtabs"><span class="on">Setup</span><span aria-disabled="true">Usage</span></div>
-<p class="small" style="margin:-4px 0 10px"><a href="${PROVIDERS_PATH}">Providers and models</a> · <a href="${BUDGETS_PATH}">Budgets</a> · <strong>Model for each task</strong></p>
+${setupTabsLine(TASK_MODELS_PATH)}
 <h2>Model for each task</h2>
 ${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}</div>` : ""}
 ${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
@@ -185,7 +186,7 @@ ${intro}
 ${freeTap(input)}
 ${freeTermsLine(input)}
 ${table}
-<div class="row" style="margin-top:10px">${accept}<a class="btn${pending ? " secondary" : ""}" href="${BUDGETS_PATH}">Next: budget</a>${help}</div>
+<div class="row" style="margin-top:10px">${accept}${nextAction(TASK_MODELS_PATH, `btn${pending ? " secondary" : ""}`)}${help}</div>
 </main>
 <script>
 document.querySelectorAll("[data-pair]").forEach(function (pair) {

@@ -1,7 +1,8 @@
 # Choosing a model (T17, design-v3 1.5)
 
-There is no separate Add a model page: the model list is on the provider's
-Connect screen, below a passed Connect (Models › Setup › Providers,
+There is no separate Add a model page: the model list is the model test on
+the provider's Connect screen, shown once connected and opened at `#test`
+right after Connect (Models › Setup › Providers,
 `src/providers/models-panel.ts`; logic in `add.ts`), and the old path
 `/chief-of-staff/models/setup/add` redirects there.
 
@@ -25,9 +26,13 @@ Middle, Strongest) as a coloured label naming it in words; and notes: added,
 "no tool use (OpenRouter lists no tool support for it)", "OpenRouter retires
 it on <date>", "priced higher from <n> prompt tokens". An entry cannot be
 chosen, and says why, when the app cannot call it (a router, a `~` alias, a
-model with no text), the account leaves it out, or it has no price yet.
+model with no text, a model that also gives audio, images or video), the
+account leaves it out, or it has no price yet.
 
-**Choosing** a model runs its own test call once, right there, through the
+**Choosing** a model sends nothing: the dropdown reads "Choose a model", and
+choosing one only fills the form and turns the disabled Test button into
+"Test with <model>?". **That button** runs the model's own test call once,
+right there, through the
 proxy (`sendTestCall`, task `test_call`), capped at 16 reply tokens. The model
 is added (a `user_models` row, with the passed call's reply, tokens and cost)
 only when the call passes and the reply names that model (`namesPickedModel`:
@@ -56,13 +61,17 @@ to the user's models. Each model that works has a one-tap **Add**
 no new call; it is refused for a model that did not pass in the user's latest
 run.
 
-A free model ($0 in and out, such as OpenRouter's `:free` ones) reads "free:
+A free model (`src/prices/openrouter.ts` `isTrulyFreeTextModel`: it gives
+only text and every price OpenRouter lists for it is 0, see
+`src/providers/README.md`) carries a Free label and reads "free:
 rate-limited, and the provider may log prompts" in the model list and in the
-picker, and both show the plug-in's terms for free models under them
-(`freeModelTerms`: OpenRouter's request limits and the privacy setting that
-can refuse them, with links). A $0 account can do the whole flow: Connect
-passes on a free model, Test all models shows its paid models as needing
-credit on OpenRouter, and its free models can be added and used for tasks.
+picker, and both show the plug-in's terms for free models (`freeModelTerms`:
+OpenRouter's request limits and the privacy setting that can refuse them,
+with links). A model at $0 a token that is not free that way reads "not free:
+OpenRouter lists other fees for it". A $0 account can do the whole flow:
+Connect makes no call, a free model passes when chosen, Test all models shows
+its paid models as needing credit on OpenRouter, and its free models can be
+added and used for tasks.
 
 `readUserModels(db, userId)` returns the user's added models at every
 provider a plug-in serves (rows left from Bedrock, Vertex AI or Foundry are
