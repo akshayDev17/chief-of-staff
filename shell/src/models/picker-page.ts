@@ -37,7 +37,7 @@ import { modelsSubtabs, nextAction, setupTabsLine } from "./setup-tabs";
 import type { Viewer } from "../providers/page";
 import type { PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
-import { FREE_NOTE } from "./add";
+import { FREE_NOTE } from "./test-model";
 import type { Link } from "../proxy/plugin";
 import { acceptProposals, changeTask, freeRoutes, modelKey, onlyModel, readTaskRoutes, taskById, TASKS, useFreeModels, type ChangeProblem, type Offered, type Route, type Task, type TaskRoute } from "./tasks";
 
@@ -103,7 +103,7 @@ function substituteNote(task: Task, m: Offered, asFallback: boolean): string {
 
 function routeCells(r: TaskRoute, route: Route | undefined, input: PickerPageInput, single: boolean): string {
   if (single) return `<td data-l="Model now">${route ? esc(modelName(route.main, input)) : "–"}</td>`;
-  if (!route) return `<td data-l="Main">none yet: add a model of the suggested strength</td><td data-l="Fallback (another model)">–</td>`;
+  if (!route) return `<td data-l="Main">Choose a model</td><td data-l="Fallback (another model)">–</td>`;
   const tag = r.pending ? ` <span class="pill">proposed</span>` : "";
   const fromProposal = r.pending || r.current?.setHow === "accepted";
   const note = (m: Offered, asFallback: boolean) => (fromProposal ? substituteNote(r.task, m, asFallback) : "");
@@ -139,7 +139,9 @@ function freeTermsLine(input: PickerPageInput): string {
 }
 
 export function renderPickerPage(input: PickerPageInput): string {
-  const single = onlyModel(input.offered) !== undefined;
+  // One usable model and no task whose saved model is no longer usable:
+  // every task uses that model, with nothing to change.
+  const single = onlyModel(input.offered) !== undefined && !input.routes.some((r) => r.unusable);
   const intro = !input.offered.length
     ? `<div class="banner warn">Test a model first. Only models that passed are offered here. <a href="${PROVIDERS_PATH}#test">Test a model</a></div>`
     : single

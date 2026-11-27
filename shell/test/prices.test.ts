@@ -27,14 +27,30 @@ describe("OpenRouter's model list as the price table", () => {
     expect(priceOf("openai/gpt-6-luna", "cache_write")).toBe(0.125);
   });
 
-  it("lists every model OpenRouter lists, and says why it cannot call the router and the alias", () => {
-    expect(parsed.catalog.models.map((m) => m.id)).toEqual(MODELS.data.map((m) => m.id).sort());
+  it("lists every model OpenRouter lists but the never-testable ones, and marks the router for a price cap", () => {
+    const dropped = (id: string) => id.startsWith("~") || id.endsWith(":batch") || id === "google/lyria-3-clip-preview";
+    expect(parsed.catalog.models.map((m) => m.id)).toEqual(MODELS.data.map((m) => m.id).filter((id) => !dropped(id)).sort());
+    expect(parsed.catalog.dropped).toEqual({ batch: 1, alias: 1, router: 0, unusable: 1 });
+    // Every listed model that charges per search or per request, dropped ones too.
+    expect(parsed.catalog.feeModels).toEqual(MODELS.data.filter((m) => Number((m.pricing as unknown as Record<string, string>).web_search ?? 0) > 0 || Number((m.pricing as unknown as Record<string, string>).request ?? 0) > 0).map((m) => m.id).sort());
+    expect(parsed.catalog.feeModels).toContain("~openai/gpt-luna-latest");
+    expect(rowsOf("openai/gpt-oss-20b:batch")).toEqual([]);
+    // The router takes request parameters, so a price cap can hold it; it
+    // has no rows of its own, and gives images too, which the cap prices at 0.
     const auto = parsed.catalog.models.find((m) => m.id === "openrouter/auto")!;
-    expect(auto.blocked).toMatch(/prices it by the model it picks/);
-    expect(parsed.catalog.models.find((m) => m.id.startsWith("~"))!.blocked).toMatch(/alias/);
+    expect(auto).toMatchObject({ router: true });
+    expect(auto.blocked).toBeUndefined();
     expect(rowsOf("openrouter/auto")).toEqual([]);
-    // The router, the alias and the music model (below).
-    expect(parsed.leftOut).toBe(3);
+    // A router no cap can bound is dropped: one that takes no request
+    // parameters (a panel of models, say), or one another maker publishes.
+    const router = (id: string, supported_parameters: string[]) => ({ id, name: id, architecture: { input_modalities: ["text"], output_modalities: ["text"] }, pricing: { prompt: "-1", completion: "-1" }, supported_parameters });
+    const more = parseModels({ data: [...MODELS.data, router("openrouter/panel", []), router("someone/router", ["max_tokens"])] }, NOW);
+    expect(more.catalog.dropped).toEqual({ batch: 1, alias: 1, router: 2, unusable: 1 });
+    expect(more.catalog.models.map((m) => m.id)).not.toContain("openrouter/panel");
+    expect(more.catalog.models.map((m) => m.id)).not.toContain("someone/router");
+    // The alias, the batch variant, the router and the music model (below).
+    expect(parsed.leftOut).toBe(4);
+    expect(blockedReason({ id: "openrouter/auto", architecture: { input_modalities: ["text"], output_modalities: ["text", "image"] }, pricing: { prompt: "-1" } })).toBeUndefined();
     // A model that gives no text cannot do a task.
     expect(blockedReason({ id: "x/image", architecture: { input_modalities: ["text"], output_modalities: ["image"] }, pricing: { prompt: "0.000001", completion: "0.00001" } })).toMatch(/no text/);
   });
@@ -46,9 +62,10 @@ describe("OpenRouter's model list as the price table", () => {
     expect(lyria.architecture.output_modalities).toEqual(["text", "audio"]);
     expect([lyria.pricing.prompt, lyria.pricing.completion]).toEqual(["0", "0"]);
     expect(isTrulyFreeTextModel(lyria)).toBe(false);
-    const entry = parsed.catalog.models.find((m) => m.id === lyria.id)!;
-    expect(entry.blocked).toBe("it also gives audio, images or video, priced beyond its token rates");
-    expect(entry.free).toBeUndefined();
+    // Never testable, so never listed: dropped like the aliases, and counted.
+    expect(parsed.catalog.models.find((m) => m.id === lyria.id)).toBeUndefined();
+    expect(parsed.catalog.dropped!.unusable).toBe(1);
+    expect(blockedReason(lyria)).toBe("it also gives audio, images or video, priced beyond its token rates");
     expect(rowsOf(lyria.id)).toEqual([]);
     expect(blockedReason({ id: "x/pic", architecture: { input_modalities: ["text"], output_modalities: ["image", "text"] }, pricing: { prompt: "0", completion: "0" } })).toMatch(/also gives/);
   });
@@ -117,7 +134,7 @@ describe("the daily refresh", () => {
     expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/models"]);
     // No key is sent to read the public list.
     expect(fetcher.sent[0]!.headers.authorization).toBeUndefined();
-    expect(results).toEqual([expect.objectContaining({ source: "openrouter-models", ok: true, unmapped: 3 })]);
+    expect(results).toEqual([expect.objectContaining({ source: "openrouter-models", ok: true, unmapped: 4 })]);
     expect((await currentSnapshot(env.DB))!.id).toBe(snapshotId);
     expect((await readSnapshotRows(env.DB, snapshotId)).every((r) => r.provider === "openrouter" && r.region === "global")).toBe(true);
     expect((await readCurrentCatalog(env.DB))!.readAt).toBe(NOW.toISOString());

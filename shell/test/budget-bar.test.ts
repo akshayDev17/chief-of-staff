@@ -186,7 +186,7 @@ describe("the bar on the Models pages", () => {
       userId, viewer: "friend", appOrigin: ORIGIN, now: NOW, fetcher,
     });
     const html = await response.text();
-    expect(html).toMatch(/<p class="small">Monthly budget here: \$31 · <a href="[^"]+">Budgets<\/a><\/p>/);
+    expect(html).toMatch(/<p><strong>Monthly budget here:<\/strong> \$31 · <a href="[^"]+">Budgets<\/a><\/p>/);
     expect(html).not.toContain("data-budget-bar");
     expect(fetcher.sent.map((s) => s.url)).not.toContain("https://openrouter.ai/api/v1/key");
   });

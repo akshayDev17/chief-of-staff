@@ -1,48 +1,58 @@
-// Models › Setup › Providers, rendered on the server (design T02 / T16): one
-// "Connect <Provider>" button for every registered plug-in (OpenRouter, the
-// one provider since 2026-11-27), each with its action lines, its
-// connection, its account line and, once connected, the model test.
+// Models › Setup › Providers, rendered on the server (design T02 / T16): the
+// provider card (OpenRouter, the one provider since 2026-11-27) with its
+// connection and account line, and once connected the model table
+// (models-table.ts).
 //
-//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&disconnect=1|&disconnected=1][&test-all=confirm][&tests=all|works|fails]
-//   POST /chief-of-staff/models/setup/providers/<id>/connect      to the provider's own consent page
-//   GET  /chief-of-staff/models/setup/providers/<id>/consented    back from it: the key into the vault, then to #test
+//   GET  /chief-of-staff/models/setup/providers[?provider=<id>][&<view>]       the page, or with Accept: application/json its <main>
+//   POST /chief-of-staff/models/setup/providers/<id>/connect        to the provider's own consent page
+//   GET  /chief-of-staff/models/setup/providers/<id>/consented      back from it: the key into the vault, then the page, search focused once
 //   POST /chief-of-staff/models/setup/providers/<id>/disconnect
-//   POST /chief-of-staff/models/setup/providers/<id>/choose       model: its test call runs once
-//   POST /chief-of-staff/models/setup/providers/<id>/model-help   friends only: a chosen model's refusal
-//   POST /chief-of-staff/models/setup/providers/<id>/refresh      Refresh model list
-//   POST /chief-of-staff/models/setup/providers/<id>/test-all     Test all models, after its confirm step
-//   POST /chief-of-staff/models/setup/providers/<id>/add-tested   model: Add, on a model that passed in the latest Test all models
+//   POST /chief-of-staff/models/setup/providers/<id>/test           model: its test call runs once; the result opens under its row
+//   POST /chief-of-staff/models/setup/providers/<id>/check-account  model: reads the account's model list again
+//   POST /chief-of-staff/models/setup/providers/<id>/cap            model, input, output: a router's price cap
+//   POST /chief-of-staff/models/setup/providers/<id>/refresh        Refresh model list
+//   POST /chief-of-staff/models/setup/providers/<id>/test-all       Test all models, after its confirm step
+//   POST /chief-of-staff/models/setup/providers/<id>/retest         Retest failed, after its confirm step
+//   POST /chief-of-staff/models/setup/providers/<id>/help           friends only
+//   POST /chief-of-staff/models/setup/providers/<id>/model-help     friends only: a model's failed test
+//
+// Nothing reloads the page or changes its address (the owner, 2026-11-28):
+// the page's script (page-script.ts) sends every form and view link in
+// place with Accept: application/json, and the answer is the page's <main>
+// for the resulting view, of which it swaps in the parts that changed. A
+// form posted without the script gets a redirect to the same view as an
+// address (post-redirect-get), with any problem in a flash cookie that the
+// next page shows once, so a refresh re-runs nothing. A view (models-table.ts
+// View) is only what to show: an open confirm, the cap editor, a result
+// under a row; it changes nothing.
 //
 // There is no field to fill: Connect sends the user to the provider's own
 // page, where they sign in and authorize the app, and the provider issues the
 // app a key for their account, which goes straight into their vault. The key
-// is never shown on any page. Back from that page the user lands at the
-// model test (#test), highlighted, with focus on its dropdown; no test call
-// runs by itself (the owner, 2026-11-27). Connected shows once the provider
-// has authorized the app; the provider is usable once one of the user's
-// models has passed its test call.
+// is never shown on any page. Back from that page the user lands on this
+// page with the search field focused, once; no test call runs by itself (the
+// owner, 2026-11-27).
 //
 // The account line reads the provider's own figures for the key, live,
 // server side, with the key from the vault (OpenRouter's GET /api/v1/key):
 // whether the account has ever bought credit, who owns the key, its limit,
-// what it has spent. It is how a user sees why paid calls are refused.
-//
-// Visible copy is the action lines only; every explanation is collapsed
-// (the owner, 2026-11-27, of the old three-paragraph guide: "why not make it
-// even more verbose ... so that the users learn to read a book in
-// 30seconds?").
+// what it has spent. A request that cannot change the card (a test, a poll)
+// does not read it again: the card is sent as "keep yours".
 //
 // The app cannot delete the key on OpenRouter (openrouter.ts, "Revoking"), so
 // Disconnect's confirmation opens that exact key's page there, named by the
 // SHA-256 hash the record holds; the key itself never reaches the browser.
-// The page Disconnect returns to links the list of keys.
 
 import { readAccountList, refreshAccountList } from "../models/account-list";
-import { addModel, listOffer, readUserModels, refusalFix, refusalText, type AddOutcome, type AddRefusal, type OfferRow } from "../models/add";
-import { addTestedModel, planTestAll, readTestAll, startTestAll, type TestAllPlan, type TestAllRun } from "../models/test-all";
+import { parsePriceCap, savePriceCap } from "../models/price-caps";
+import { modelsSubtabs, nextAction, SETUP_TABS } from "../models/setup-tabs";
+import { taskById } from "../models/tasks";
+import { planRetest, planTestAll, readTestAll, shownTests, startRetest, startTestAll } from "../models/test-all";
+import { listOffer, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
+import { readLatestTests, readUsableModels } from "../models/usable";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
-import { modelsSubtabs, nextAction, setupTabsLine } from "../models/setup-tabs";
-import { CONTROLS_CSS, esc, nbDate, PAGE_CSS } from "../prices/page";
+import { isCurrentCatalog } from "../prices/openrouter";
+import { esc, nbDate } from "../prices/page";
 import { refreshPrices } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
@@ -51,266 +61,172 @@ import { readConnection } from "../proxy/connections";
 import type { AccountInfo, ConnectionFields, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 
 import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, type Check } from "./check";
-import { MODELS_CSS, MODELS_JS, modelsSection, TEST_ANCHOR, TIER_VARS, type TestsFilter } from "./models-panel";
+import { formatCost, ICON, isRunning, MAX_RESULTS, modelParts, nextStep, parseView, rowAnchor, viewQuery, type ModelsTableInput, type Step, type View, type Viewer } from "./models-table";
+import { NOSCRIPT_STYLE, PAGE_STYLE } from "./page-style";
+import { PAGE_SCRIPT } from "./page-script";
 import type { SecretStore } from "./secrets";
 
-// Who is looking: the owner, or a friend the owner invited (who says
-// "Admin" for the owner and gets "Ask Admin for help").
-export type Viewer = "owner" | "friend";
+export { formatCost };
+export type { Viewer };
 
-export interface ProviderPanel {
+// What a page shows once, after a redirect: a problem, a note sent to Admin,
+// or the landing back from the consent page.
+export interface Flash {
+  problem?: string;
+  details?: string;
+  said?: string;
+  landed?: boolean;
+}
+
+export interface PageState {
+  viewer: Viewer;
   plugin: ProviderPlugin;
   connection?: ConnectionFields;
   check?: Check;
+  connected: boolean;
   monthlyBudget?: number;
-  // The selected panel's account, read live; `unread` when it could not be.
+  // The account, read live; `unread` when it could not be; undefined when
+  // the card is not rendered again.
   account?: AccountInfo | "unread";
-  // How many of the user's models at this provider have passed their test call.
-  passedModels?: number;
-  // The selected panel's model list, once connected.
-  models?: {
-    rows: OfferRow[];
-    // When the provider's own list was read, and the account's.
-    catalogReadAt?: string;
-    accountReadAt?: string;
-    plan: TestAllPlan;
-    run?: TestAllRun;
-  };
+  usable: number;
+  table?: ModelsTableInput;
+  view: View;
+  flash: Flash;
+  step?: Step;
+  // Send the provider card as "keep yours": the request cannot change it.
+  keepCard: boolean;
 }
 
-export interface ProvidersPageInput {
-  viewer: Viewer;
-  userId: string;
-  panels: ProviderPanel[];
-  selected: Provider;
-  confirmDisconnect: boolean;
-  // Back from Disconnect: the key is gone from the vault.
-  disconnected: boolean;
-  confirmTestAll: boolean;
-  testsFilter: TestsFilter;
-  problem?: string;
-  // The provider's own words behind the problem, collapsed.
-  problemDetails?: string;
-  said?: string;
-  // The result of choosing a model, shown under the model list.
-  outcome?: AddOutcome;
-  // The GET address that shows a Test all models run's progress: the page's
-  // own, or for a page a form's POST returned, the run's results.
-  progressHref: string;
-  now: Date;
-}
-
-const providerHref = (provider: string, extra = ""): string => `${PROVIDERS_PATH}?provider=${provider}${extra}`;
 const action = (provider: string, verb: string): string => `${PROVIDERS_PATH}/${provider}/${verb}`;
-
+const viewHref = (provider: string, view: View, anchor = ""): string => `${PROVIDERS_PATH}?${viewQuery(provider, view)}${anchor}`;
 const hhmm = (iso: string): string => `${iso.slice(11, 16)} UTC`;
+const money = (n: number): string => `$${n.toFixed(2)}`;
+const newTab = (href: string, label: string, cls: string) => `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
 
-export const formatCost = (usd: number): string => {
-  if (usd === 0) return "$0";
-  if (usd >= 0.01) return `$${usd.toFixed(2)}`;
-  return usd < 0.0001 ? "under $0.0001" : `$${usd.toFixed(4)}`;
-};
-
-const postButton = (href: string, label: string, cls = "btn small") =>
-  `<form method="post" action="${href}"><button type="submit" class="${cls}">${esc(label)}</button></form>`;
-
-const money = (n: number): string =>`$${n.toFixed(2)}`;
-
-// The account line: one row of short facts, with Add credits when the
-// account has never bought any.
-function accountLine(panel: ProviderPanel): string {
-  const a = panel.account;
-  const name = panel.plugin.connect.guide.name;
-  if (!a) return "";
-  if (a === "unread") return `<p class="small acct"><strong>${esc(name)} account:</strong> <span class="muted">could not be read just now.</span></p>`;
-  const facts = [
+function accountFacts(a: AccountInfo): string {
+  return [
     a.freeTier ? "never bought credits" : "has bought credits",
     a.organizationId ? "organization key" : "personal key",
     a.limitUsd !== undefined ? `key limit ${money(a.limitUsd)}${a.limitRemainingUsd !== undefined ? `, ${money(a.limitRemainingUsd)} left` : ""}` : "no key limit",
     `key spent ${formatCost(a.usageUsd)}`,
-  ];
-  const credits = a.freeTier ? ` <a class="btn small" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer">Add credits</a>` : "";
-  return `<p class="small acct"><strong>${esc(name)} account:</strong> ${facts.map(esc).join(" · ")}${credits}</p>`;
+  ].join(" · ");
 }
 
-function connectForm(panel: ProviderPanel): string {
-  const { plugin, check } = panel;
-  const name = plugin.connect.guide.name;
-  const waiting = check?.consentState ? `<p class="small muted">Waiting for ${esc(name)}. Authorize there, or connect again.</p>` : "";
-  return `${waiting}<form method="post" action="${action(plugin.provider, "connect")}">
-<div class="row" style="margin-top:8px"><button type="submit" class="btn">Connect ${esc(name)}</button></div>
-</form>`;
-}
-
-function aboutConnect(plugin: ProviderPlugin): string {
-  const g = plugin.connect.guide;
-  const pages = g.pages.map((p) => `<a href="${esc(p.href)}" rel="noopener noreferrer">${esc(p.label)}</a>`).join(" · ");
-  const newGrant = g.newGrantEachTime ? `<details class="more"><summary>Why a new key each time</summary><p class="small">${esc(g.newGrantEachTime)}</p></details>` : "";
-  return `${newGrant}<details class="more"><summary>What this does</summary><ul class="small about">${g.about.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
-<p class="small muted">Checked on ${nbDate(g.checkedOn)} · ${pages}</p></details>`;
-}
-
-const newTab = (href: string, label: string, cls: string) => `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
-
-// "Also delete this key on OpenRouter. [Open its page]": the key's own page
+// "Also delete this key on OpenRouter: Open its page", the key's own page
 // when the connection names it (revokeLinks puts it last, after the general
 // page), else the provider's list of keys.
-function alsoDeleteLine(plugin: ProviderPlugin, connection: ConnectionFields | undefined): string {
+function alsoDelete(plugin: ProviderPlugin, connection: ConnectionFields | undefined): string {
   const short = esc(plugin.connect.guide.short);
   const general = plugin.connect.guide.revokeLinks(undefined);
   const links = plugin.connect.guide.revokeLinks(connection);
   const own = links.length > general.length ? links.at(-1) : undefined;
-  if (own) return `<p class="small also">Also delete this key on ${short}. ${newTab(own.href, "Open its page", "btn small")}</p>`;
+  if (own) return `<p class="why">Also delete this key on ${short}: ${newTab(own.href, "Open its page", "ext")}</p>`;
   const list = general.at(-1);
-  return `<p class="small also">Also delete the key on ${short}.${list ? ` ${newTab(list.href, list.label, "btn small")}` : ""}</p>`;
+  return list ? `<p class="why">Also delete the key on ${short}: ${newTab(list.href, list.label, "ext")}</p>` : "";
 }
 
-function panelHtml(panel: ProviderPanel, input: ProvidersPageInput): string {
-  const { plugin, connection, check } = panel;
+function providerCard(state: PageState): string {
+  const { plugin, connection, check, view } = state;
   const g = plugin.connect.guide;
-  const steps = `<ol class="steps">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>`;
-  const help = input.viewer === "friend" ? postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small") : "";
-  const gone = input.disconnected
-    ? `<div class="tc tc-sw" role="status"><p class="tc-verdict"><strong>Disconnected.</strong></p>
-${alsoDeleteLine(plugin, undefined)}
-<details class="more"><summary>Details</summary><p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p></details></div>`
-    : "";
-  if (!connection) return `${gone}${steps}${connectForm(panel)}${help}${aboutConnect(plugin)}`;
-  const revoked = check?.state === "revoked";
-  const status = revoked ? `Removed on ${esc(g.short)}'s side` : "Connected";
-  const head = `<p class="status"><strong>${status}</strong> <span class="pill ok">key in your vault</span> <a class="btn small danger" href="${providerHref(plugin.provider, "&disconnect=1")}">Disconnect</a></p>`;
-  const dialog = input.confirmDisconnect
-    ? `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="disc-title"><h2 id="disc-title">Disconnect ${esc(g.name)}?</h2>
-<p class="small">The app deletes the key from your vault.</p>
-${alsoDeleteLine(plugin, connection)}
-<details class="more"><summary>Details</summary><ul class="small about"><li>Its models stop answering for you at once.</li><li>The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</li></ul></details>
-<div class="row" style="justify-content:flex-end"><a class="btn small ghost" href="${providerHref(plugin.provider)}">Cancel</a>${postButton(action(plugin.provider, "disconnect"), "Disconnect", "btn small danger")}</div></div></div>`
-    : "";
-  const passed = panel.passedModels ?? 0;
-  const usable = revoked || passed ? "" : `<p class="small"><strong>Not usable yet:</strong> test a model below.</p>`;
-  const budget = panel.monthlyBudget ? `$${panel.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
-  const keyDetails = `<p class="small">Monthly budget here: ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></p>`;
-  const note = input.viewer === "friend" ? `<p class="small muted">Only you see ${esc(g.short)}'s replies.</p>${passed ? "" : postButton(action(plugin.provider, "help"), "Ask Admin for help", "btn help-btn small")}` : "";
-  const reconnect = revoked ? `<p class="small">Connect again to get a new key.</p>${connectForm(panel)}` : "";
-  const models =
-    isConnected(connection, check) && panel.models
-      ? modelsSection({
-          plugin,
-          viewer: input.viewer,
-          rows: panel.models.rows,
-          outcome: input.outcome,
-          catalogReadAt: panel.models.catalogReadAt,
-          accountReadAt: panel.models.accountReadAt,
-          plan: panel.models.plan,
-          run: panel.models.run,
-          confirmTestAll: input.confirmTestAll,
-          testsFilter: input.testsFilter,
-          formatCost,
-          now: input.now,
-        })
-      : "";
-  return `${head}${dialog}${accountLine(panel)}${usable}${keyDetails}${reconnect}${note}${models}`;
+  const p = plugin.provider;
+  const connect = `<form method="post" action="${action(p, "connect")}"><button type="submit" class="btn ${state.step === "connect" ? "primary" : "outline"}" data-k="connect">Connect ${esc(g.name)}</button></form>`;
+  const help = state.viewer === "friend" && !state.usable ? `<form method="post" action="${action(p, "help")}" data-fetch><button type="submit" class="btn small outline" data-k="help">Ask Admin for help</button></form>` : "";
+  if (!connection) {
+    const keys = g.revokeLinks(undefined).at(-1);
+    const lines = view.disconnected
+      ? `<p><strong>Disconnected.</strong> The key stays valid on ${esc(g.short)} until you delete it there.${keys ? ` ${newTab(keys.href, keys.label, "ext")}` : ""}</p>`
+      : `<ol>${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>${check?.consentState ? `<p>Waiting for ${esc(g.name)}. Authorize there, or connect again.</p>` : ""}`;
+    const about = `<details><summary>What this does</summary><ul class="small">${g.about.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>${g.newGrantEachTime ? `<p class="small">${esc(g.newGrantEachTime)}</p>` : ""}<p class="small">Checked on ${nbDate(g.checkedOn)}</p></details>`;
+    return `<h3>${esc(g.name)} <span class="pill">Not connected</span></h3><div class="lines">${lines}</div><div class="acts">${connect}${help}</div>${view.disconnected ? "" : about}`;
+  }
+  if (!state.connected) {
+    return `<h3>${esc(g.name)} <span class="pill warn">Removed on ${esc(g.short)}'s side</span></h3><div class="lines"><p>Connect again to get a new key.</p></div><div class="acts">${connect}${help}</div>`;
+  }
+  const a = state.account;
+  const account = a === "unread" || !a ? `<p><strong>Account:</strong> could not be read just now.</p>` : `<p><strong>Account:</strong> ${esc(accountFacts(a))}</p>`;
+  const budget = state.monthlyBudget ? `$${state.monthlyBudget.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "not set yet";
+  const friend = state.viewer === "friend" ? `<p>Only you see ${esc(g.short)}'s replies.</p>` : "";
+  const lines = `<div class="lines">${account}<p><strong>Monthly budget here:</strong> ${budget} · <a href="${BUDGETS_PATH}">Budgets</a></p>${friend}</div>`;
+  const head = `<h3>${esc(g.name)} <span class="pill ok">Connected · key in your vault</span></h3>`;
+  if (view.confirm === "disconnect") {
+    return `${head}${lines}<div class="acts"><form method="post" action="${action(p, "disconnect")}" data-fetch><button type="submit" class="btn small danger-o" data-k="disc-yes">Disconnect</button></form><a class="link" href="${esc(viewHref(p, {}))}" data-view data-k="disc-no" data-autofocus>Cancel</a></div>
+<div class="confirm" role="alertdialog" aria-labelledby="disc-q"><p id="disc-q"><strong>Disconnect ${esc(g.name)}?</strong> The app deletes the key from your vault, and its models stop answering for you at once.</p>${alsoDelete(plugin, connection)}<details><summary>Details</summary><p class="small">The key stays valid on ${esc(g.short)} until you delete it there: ${esc(g.revoke)}</p></details></div>`;
+  }
+  const credits = a && a !== "unread" && a.freeTier && g.credits ? newTab(g.credits.href, g.credits.label, "btn small outline ext") : "";
+  return `${head}${lines}<div class="acts">${credits}${help}<a class="link danger" href="${esc(viewHref(p, { confirm: "disconnect" }))}" data-view data-k="disc">Disconnect</a></div>`;
 }
 
-export function renderProvidersPage(input: ProvidersPageInput): string {
-  const selected = input.panels.find((p) => p.plugin.provider === input.selected) ?? input.panels[0]!;
-  const tabs =
-    input.panels.length > 1
-      ? `<nav class="row" aria-label="Providers" style="margin-top:10px"><span class="seg">${input.panels
-          .map((p) => {
-            const on = p === selected;
-            const tick = isConnected(p.connection, p.check) ? ' <span aria-label="connected">✓</span>' : "";
-            return `<a href="${providerHref(p.plugin.provider)}"${on ? ' class="on" aria-current="page"' : ""}>Connect ${esc(p.plugin.connect.guide.name)}${tick}</a>`;
-          })
-          .join("")}</span></nav>`
-      : `<h3 style="margin:10px 0 0">Connect ${esc(selected.plugin.connect.guide.name)}${isConnected(selected.connection, selected.check) ? ' <span aria-label="connected">✓</span>' : ""}</h3>`;
-  // While a Test all models run goes on, the page shows its progress: a
-  // script loads input.progressHref again, never a form sent again, and
-  // never while a model is being chosen (models-panel.ts MODELS_JS); without
-  // scripts, a refresh to that address every 20 seconds.
-  const running = Boolean(selected.models?.run && !selected.models.run.finishedAt);
-  const progress = esc(input.progressHref);
-  const refresh = running ? `<noscript><meta http-equiv="refresh" content="20; url=${progress}"></noscript>` : "";
+function bannerPart(state: PageState): string {
+  const f = state.flash;
+  const problem = !state.table && f.problem
+    ? `<div class="banner warn" role="alert">${esc(f.problem)}${f.details ? `<details><summary>Details</summary><p class="small">${esc(f.details)}</p></details>` : ""}</div>`
+    : "";
+  const said = f.said ? `<div class="banner ok" role="status">${esc(f.said)}</div>` : "";
+  return problem + said;
+}
+
+const tabsLine = (): string =>
+  `<nav class="tabs" aria-label="Models setup">${SETUP_TABS.map((t) => (t.href === PROVIDERS_PATH ? `<span aria-current="page">${esc(t.label)}</span>` : `<a href="${t.href}">${esc(t.label)}</a>`)).join("")}</nav>`;
+
+export function renderMain(state: PageState): string {
+  const { plugin, table } = state;
+  const g = plugin.connect.guide;
+  const card = state.keepCard ? `<div class="panel provider" data-part="provider" data-keep></div>` : `<div class="panel provider" data-part="provider">${providerCard(state)}</div>`;
+  let tests = "";
+  if (table) {
+    const parts = modelParts(table);
+    const sub = state.flash.landed ? "Connected just now. Test any model, or all of them. Tasks use the models that pass." : "Test any model, or all of them. Tasks use the models that pass.";
+    tests = `<section class="block" id="test" aria-labelledby="h-test">
+<div class="block-head"><h2 id="h-test">Test models</h2><p class="sub" id="test-sub">${sub}</p></div>
+<div class="panel split">
+<div class="pane">
+<div class="toolbar">
+<div class="search" role="search">${ICON.search}<input type="search" id="pick-q" name="q" aria-label="Search models by name, maker or ID" aria-controls="pick-list" placeholder="Search name, maker or ID" autocomplete="off" spellcheck="false"><button type="button" class="clear-x" data-clear-q aria-label="Clear search">${ICON.x}</button></div>
+<div class="maker" data-maker></div>
+<p class="count" id="pick-count" aria-live="polite"><span class="num">${table.rows.length}</span> models</p>
+</div>
+<div class="chips" id="pick-chips"></div>
+<div data-part="err">${parts.err}</div>
+<div class="strip-wrap" data-part="strip">${parts.strip}</div>
+<div class="list-head" data-part="head">${parts.head}</div>
+<div class="tbl-box" id="tbl-box" tabindex="0" role="region" aria-label="Models, scrolls"><ul class="rows" id="pick-list" aria-label="Models" data-part="rows">${parts.rows}</ul></div>
+<div class="list-foot" data-part="foot">${parts.foot}</div>
+</div>
+<aside class="pane side" aria-label="Test all"><div class="rail" data-part="rail"${isRunning(table.run) ? " data-running" : ""}>${parts.rail}</div></aside>
+</div>
+</section>`;
+  }
+  return `<div class="title-row"><h1>Models</h1>${modelsSubtabs("setup")}</div>
+${tabsLine()}
+<div data-part="banner">${bannerPart(state)}</div>
+<section class="block" aria-labelledby="h-provider">
+<div class="block-head"><h2 id="h-provider">Model provider</h2><p class="sub">${esc(g.name)} reaches every maker's models. You pay it for your own calls.</p></div>
+${card}
+</section>
+${tests}
+<div class="next-row" data-part="next">${nextAction(PROVIDERS_PATH, state.step === "next" ? "btn primary" : "btn outline")}</div>`;
+}
+
+export function renderProvidersPage(state: PageState): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-${refresh}
 <title>Models · Providers · Chief of staff</title>
-<style>${PAGE_CSS}${CONTROLS_CSS}${CSS}${TIER_VARS}${MODELS_CSS}</style>
+<link rel="icon" href="data:,">
+<style>${PAGE_STYLE}</style>
+<noscript><style>${NOSCRIPT_STYLE}</style></noscript>
 </head>
-<body${running ? ` data-reload-every="20" data-reload-to="${progress}"` : ""}>
-<main class="screen">
-<h1>Models</h1>
-${modelsSubtabs("setup")}
-${setupTabsLine(PROVIDERS_PATH)}
-<h2>Model provider</h2>
-<p>OpenRouter reaches every maker's models. You pay it for your own calls.</p>
-${input.problem ? `<div class="banner warn" role="alert">${esc(input.problem)}${input.problemDetails ? `<details class="more"><summary>Details</summary><p class="small">${esc(input.problemDetails)}</p></details>` : ""}</div>` : ""}
-${input.said ? `<div class="banner ok" role="status">${esc(input.said)}</div>` : ""}
-<section class="card">
-${tabs}
-<div style="margin-top:10px">${panelHtml(selected, input)}</div>
-</section>
-<div class="row" style="margin-top:12px">${nextAction(PROVIDERS_PATH, selected.passedModels ? "btn" : "btn secondary")}</div>
+<body>
+<main class="screen" id="screen" data-view="${esc(viewQuery(state.plugin.provider, state.view))}"${state.flash.landed ? " data-land" : ""}>
+${renderMain(state)}
 </main>
-<script>${MODELS_JS}
-</script>
+<script>${PAGE_SCRIPT}</script>
 </body>
 </html>`;
 }
 
-const CSS = `
-:root { --danger: #9b2c2c; --danger-soft: #fbe4e4; --accent-soft: #e2ecf6; --danger-btn: #b91c1c; --danger-btn-hover: #991b1b; }
-@media (prefers-color-scheme: dark) { :root { --danger: #f3a6a6; --danger-soft: #3a1f1f; --accent-soft: #1d2a38; } }
-.mono, .cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.cmd { font-size: .8rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
-label.f { display: block; font-size: .85rem; margin: 8px 0 4px; }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; max-width: 100%; }
-.seg > a { padding: 4px 11px; color: var(--text); text-decoration: none; white-space: nowrap; }
-.seg > a + a { border-left: 1px solid var(--line); }
-.seg > a:hover { background: var(--accent-soft); }
-.seg > a.on, .seg > a.on + a { border-left-color: var(--accent); }
-.seg > a.on { background: var(--accent); color: var(--card); }
-.seg > a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-@media (max-width: 759px) {
-  .seg { display: flex; flex-direction: column; border-radius: 12px; width: 100%; }
-  .seg > a { padding: 8px 12px; white-space: normal; }
-  .seg > a + a, .seg > a.on, .seg > a.on + a { border-left: 0; border-top: 1px solid var(--line); }
-  .seg > a.on, .seg > a.on + a { border-top-color: var(--accent); }
-  .seg > a:first-child { border-top: 0; }
-}
-.pill.ok { background: var(--ok-soft); color: var(--ok); }
-.pill.accent { background: var(--accent-soft); color: var(--accent); }
-.btn.small { font-size: .85rem; min-height: 28px; padding: 3px 9px; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--line); }
-.btn[aria-disabled] { opacity: .55; cursor: default; }
-.btn:disabled { opacity: .55; cursor: not-allowed; }
-.btn.refresh:not(:disabled):hover { filter: brightness(.85); }
-.btn.refresh:disabled { opacity: .55; cursor: not-allowed; }
-.btn.danger { background: var(--danger-btn); border-color: var(--danger-btn); color: #fff; }
-.btn.danger:hover { background: var(--danger-btn-hover); border-color: var(--danger-btn-hover); }
-.btn.danger:focus-visible { outline-color: var(--danger-btn); }
-.help-btn { border-color: var(--line); background: var(--card); color: var(--text); }
-.tc { border: 1px solid var(--ok); border-radius: 10px; padding: 10px 12px; margin-top: 8px; background: var(--ok-soft); }
-.tc-bad { border-color: var(--danger); background: var(--danger-soft); }
-.tc-sw { border-color: var(--warn); background: var(--warn-soft); }
-.tc p { margin: 0 0 4px; }
-.tc-reply { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
-.tc .row { margin-top: 6px; }
-.dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
-.dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; max-width: 420px; width: 100%; }
-.dialog h2 { margin-top: 0; }
-.dialog > .row { margin-top: 12px; }
-ol.steps { padding-left: 22px; margin: 6px 0; overflow-wrap: anywhere; }
-ol.steps li + li { margin-top: 2px; }
-.status { margin: 8px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.acct { margin: 4px 0; overflow-wrap: anywhere; }
-.acct .btn { margin-left: 4px; }
-.also { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
-.tc-fix { overflow-wrap: anywhere; }
-`;
 // The account behind the user's key, read live with the key from the vault.
 async function readAccount(plugin: ProviderPlugin, connection: ConnectionFields, userId: string): Promise<AccountInfo | undefined> {
   if (!plugin.connect.readAccount) return undefined;
@@ -321,74 +237,106 @@ async function readAccount(plugin: ProviderPlugin, connection: ConnectionFields,
   }
 }
 
-async function pageInput(
-  db: D1Database,
-  plugins: PluginRegistry,
-  userId: string,
-  viewer: Viewer,
-  url: URL,
-  now: Date,
-  extra: { problem?: string; problemDetails?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {},
-): Promise<ProvidersPageInput> {
-  const registered = PROVIDERS.filter((p) => plugins[p]);
-  const panels = await Promise.all(
-    registered.map(async (provider) => ({
-      plugin: plugins[provider]!,
-      connection: await readConnection(db, userId, provider),
-      check: await readCheck(db, userId, provider),
-      monthlyBudget: (await readBudget(db, userId, provider))?.monthlyUsd,
-    })),
-  );
-  const asked = url.searchParams.get("provider");
-  const selected = extra.selected ?? registered.find((p) => p === asked) ?? registered[0]!;
-  // Only the selected panel's model list is read: it prices every model.
-  const shown: ProviderPanel | undefined = panels.find((p) => p.plugin.provider === selected);
-  if (shown?.connection && isConnected(shown.connection, shown.check)) {
-    const rows = await listOffer(db, plugins, userId, selected);
-    shown.passedModels = rows.filter((r) => r.added?.test).length;
-    shown.account = (await readAccount(shown.plugin, shown.connection, userId)) ?? "unread";
-    shown.models = {
-      rows,
-      catalogReadAt: (await readCurrentCatalog(db))?.readAt,
-      accountReadAt: (await readAccountList(db, userId, selected))?.readAt,
-      plan: await planTestAll(db, plugins, userId, selected, now, rows),
-      run: await readTestAll(db, userId, selected),
-    };
-  }
-  const filter = url.searchParams.get("tests");
-  const testsFilter: TestsFilter = filter === "works" || filter === "fails" ? filter : "all";
-  return {
-    viewer,
-    userId,
-    panels,
-    selected,
-    confirmDisconnect: url.searchParams.get("disconnect") === "1",
-    disconnected: url.searchParams.get("disconnected") === "1",
-    confirmTestAll: url.searchParams.get("test-all") === "confirm",
-    testsFilter,
-    problem: extra.problem,
-    problemDetails: extra.problemDetails,
-    said: extra.said,
-    outcome: extra.outcome,
-    progressHref: url.pathname === PROVIDERS_PATH ? `${url.pathname}${url.search}` : `${providerHref(selected, `&tests=${testsFilter}`)}#${selected}-test-all`,
-    now,
-  };
+// The tasks whose saved choice names `model` as their main model.
+async function tasksWithMain(db: D1Database, userId: string, provider: Provider, model: string): Promise<string[]> {
+  const { results } = await db
+    .prepare("SELECT task FROM task_routes WHERE user_id = ? AND main_provider = ? AND main_model = ?")
+    .bind(userId, provider, model)
+    .all<{ task: string }>();
+  return results.flatMap((r) => {
+    const t = taskById(r.task);
+    return t ? [t.label] : [];
+  });
 }
 
-const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
+export async function readPageState(
+  db: D1Database,
+  plugins: PluginRegistry,
+  input: { userId: string; viewer: Viewer; provider: Provider; view: View; flash: Flash; keepCard: boolean; now: Date },
+): Promise<PageState> {
+  const { userId, provider, view, flash, now } = input;
+  const plugin = plugins[provider]!;
+  const connection = await readConnection(db, userId, provider);
+  const check = await readCheck(db, userId, provider);
+  const connected = isConnected(connection, check);
+  const monthlyBudget = (await readBudget(db, userId, provider))?.monthlyUsd;
+  const usable = (await readUsableModels(db, userId)).filter((m) => m.provider === provider).length;
+  const state: PageState = { viewer: input.viewer, plugin, connection, check, connected, monthlyBudget, usable, view, flash, keepCard: input.keepCard && connected };
+  if (connection && connected) {
+    const rows = await listOffer(db, plugins, userId, provider);
+    const [catalog, run, latest] = await Promise.all([readCurrentCatalog(db), readTestAll(db, userId, provider), readLatestTests(db, userId, provider)]);
+    const plan = await planTestAll(db, plugins, userId, provider, now, rows);
+    const retest = await planRetest(db, plugins, userId, provider, rows);
+    const shown = shownTests(run, latest);
+    const failed = (view.results ?? []).filter((r) => shown.get(r.model)?.state === "failed");
+    const usedBy = new Map(await Promise.all(failed.map(async (r) => [r.model, await tasksWithMain(db, userId, provider, r.model)] as const)));
+    const catalogCurrent = isCurrentCatalog(catalog);
+    state.table = {
+      plugin,
+      viewer: input.viewer,
+      rows,
+      ...(catalog ? { catalog: { readAt: catalog.readAt, current: catalogCurrent, dropped: catalog.dropped } } : {}),
+      plan,
+      retest,
+      run,
+      shown,
+      usedBy,
+      view,
+      problem: flash.problem ? { text: flash.problem, details: flash.details } : undefined,
+      now,
+    };
+    state.step = nextStep({ connected: true, view, run, catalogCurrent, plan });
+    state.table.step = state.step;
+    if (!state.keepCard) state.account = (await readAccount(plugin, connection, userId)) ?? "unread";
+  } else {
+    state.step = "connect";
+  }
+  return state;
+}
 
-const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|disconnect|help|choose|model-help|refresh|test-all|add-tested))?$`);
+const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|disconnect|help|model-help|test|check-account|cap|refresh|test-all|retest))?$`);
 
-// The refusals of a chosen model a friend can ask Admin about, by the sentence they saw.
-const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<AddRefusal | PlainReason>([
+// The refusals a friend can ask Admin about, by the sentence they saw.
+const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<TestRefusal | PlainReason>([
   "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
-  "wrong_model", "budget_spent", "cannot_call", "no_price", "not_passed",
+  "wrong_model", "budget_spent", "cannot_call", "no_price", "no_cap", "cap_refused",
 ]);
 
 // Refresh model list may read again a minute after the last read.
 export const REFRESH_GAP_MS = 60_000;
 
 export const isProvidersPath = (pathname: string): boolean => ROUTE.test(pathname);
+
+const FLASH_COOKIE = "cos_providers_flash";
+
+function encodeFlash(flash: Flash): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(flash));
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function readFlash(request: Request): Flash | undefined {
+  const raw = (request.headers.get("cookie") ?? "").split(/;\s*/).find((c) => c.startsWith(`${FLASH_COOKIE}=`))?.slice(FLASH_COOKIE.length + 1);
+  if (!raw) return undefined;
+  try {
+    const bin = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+    const f = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))) as Flash;
+    return {
+      ...(typeof f.problem === "string" ? { problem: f.problem.slice(0, 500) } : {}),
+      ...(typeof f.details === "string" ? { details: f.details.slice(0, 1000) } : {}),
+      ...(typeof f.said === "string" ? { said: f.said.slice(0, 500) } : {}),
+      ...(f.landed === true ? { landed: true } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+const flashCookie = (flash: Flash | undefined): string =>
+  flash && Object.keys(flash).length
+    ? `${FLASH_COOKIE}=${encodeFlash(flash)}; Path=${PROVIDERS_PATH}; Max-Age=300; HttpOnly; Secure; SameSite=Lax`
+    : `${FLASH_COOKIE}=; Path=${PROVIDERS_PATH}; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 
 // Every route is scoped to the signed-in user.
 export async function handleProviders(
@@ -410,9 +358,31 @@ export async function handleProviders(
   let { plugins } = input;
   const url = new URL(request.url);
   const [, providerPart, verb] = ROUTE.exec(url.pathname) ?? [];
-  const page = async (extra: { problem?: string; problemDetails?: string; said?: string; selected?: Provider; outcome?: AddOutcome } = {}, status = 200) =>
-    html(renderProvidersPage(await pageInput(db, plugins, userId, viewer, url, now, extra)), status);
-  const back = (provider: string, extra = "", anchor = "") => Response.redirect(`${url.origin}${providerHref(provider, extra)}${anchor}`, 303);
+  const wantsJson = (request.headers.get("accept") ?? "").includes("application/json");
+  const registered = PROVIDERS.filter((p) => plugins[p]);
+  if (!registered.length) return new Response(null, { status: 404 });
+
+  // The page, or its <main> as JSON, for `view`.
+  const show = async (provider: Provider, view: View, flash: Flash, extra: { focus?: string; keepCard?: boolean; status?: number; clearFlash?: boolean } = {}): Promise<Response> => {
+    const state = await readPageState(db, plugins, { userId, viewer, provider, view, flash, keepCard: wantsJson && (extra.keepCard ?? false), now });
+    if (wantsJson) {
+      return new Response(JSON.stringify({ main: renderMain(state), view: viewQuery(provider, view), ...(extra.focus ? { focus: extra.focus } : {}) }), {
+        status: extra.status ?? 200,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    const headers = new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    if (extra.clearFlash) headers.append("set-cookie", flashCookie(undefined));
+    return new Response(renderProvidersPage(state), { status: extra.status ?? 200, headers });
+  };
+  // After an action: in place, the resulting view; without the script, a
+  // redirect to it, with any problem in the flash cookie.
+  const done = (provider: Provider, view: View, extra: { flash?: Flash; focus?: string; anchor?: string; keepCard?: boolean } = {}): Promise<Response> | Response => {
+    if (wantsJson) return show(provider, view, extra.flash ?? {}, { focus: extra.focus, keepCard: extra.keepCard });
+    const headers = new Headers({ location: `${url.origin}${viewHref(provider, view, extra.anchor ?? "")}` });
+    if (extra.flash) headers.append("set-cookie", flashCookie(extra.flash));
+    return new Response(null, { status: 303, headers });
+  };
   // The price table and the provider's model list, read now when there is
   // none yet or it is over a minute old.
   const refreshCatalog = async (force: boolean): Promise<void> => {
@@ -424,18 +394,31 @@ export async function handleProviders(
     plugins = await input.readPlugins();
   };
 
-  if (!verb) return request.method === "GET" ? page() : new Response(null, { status: 405 });
+  if (!verb) {
+    if (request.method !== "GET") return new Response(null, { status: 405 });
+    const asked = url.searchParams.get("provider") ?? "";
+    const provider = registered.find((p) => p === asked) ?? registered[0]!;
+    const flash = wantsJson ? undefined : readFlash(request);
+    // A poll for a run's progress, or any in-place view that leaves the card
+    // as it is, keeps the card the page has.
+    const view = parseView(url.searchParams);
+    const keepCard = request.headers.get("x-cos-poll") === "1";
+    return show(provider, view, flash ?? {}, { clearFlash: flash !== undefined, keepCard });
+  }
   if (!isProvider(providerPart ?? "") || !plugins[providerPart as Provider]) return new Response(null, { status: 404 });
   const provider = providerPart as Provider;
+  const plugin = plugins[provider]!;
 
   if (verb === "consented") {
     if (request.method !== "GET") return new Response(null, { status: 405 });
-    // The model test below needs the provider's model list and prices.
+    // The model table needs the provider's model list and prices.
     await refreshCatalog(false);
     const outcome = await finishConsent(db, plugins, secrets, { userId, provider, returned: url.searchParams, now });
-    if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
-    // Straight to the model test, highlighted, with no call made.
-    return back(provider, "", `#${TEST_ANCHOR}`);
+    if ("problem" in outcome) return show(provider, {}, { problem: outcome.problem }, { status: 400 });
+    // To the page, with the search field focused once; no call made.
+    const headers = new Headers({ location: `${url.origin}${viewHref(provider, {})}` });
+    headers.append("set-cookie", flashCookie({ landed: true }));
+    return new Response(null, { status: 303, headers });
   }
 
   if (request.method !== "POST") return new Response(null, { status: 405 });
@@ -447,21 +430,40 @@ export async function handleProviders(
     const v = form.get(name);
     return typeof v === "string" ? v : "";
   };
+  const model = field("model").slice(0, 200);
 
   switch (verb) {
     case "connect": {
       const callback = input.appOrigin ? callbackUrl(input.appOrigin, PROVIDERS_PATH, provider) : undefined;
       const outcome = await connectProvider(db, plugins, secrets, { userId, provider, callbackUrl: callback, now });
-      if ("problem" in outcome) return page({ problem: outcome.problem, selected: provider }, 400);
-      return "open" in outcome ? Response.redirect(outcome.open, 303) : back(provider);
+      if ("problem" in outcome) return done(provider, {}, { flash: { problem: outcome.problem } });
+      return "open" in outcome ? Response.redirect(outcome.open, 303) : done(provider, {});
     }
     case "disconnect":
       await disconnectProvider(db, secrets, userId, provider);
-      return back(provider, "&disconnected=1");
-    case "choose": {
-      if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
-      const outcome = await addModel(db, plugins, { userId, provider, model: field("model"), now });
-      return page({ outcome, selected: provider }, outcome.kind === "added" ? 200 : 400);
+      return done(provider, { disconnected: true }, { focus: "connect" });
+    case "test": {
+      if (!model) return done(provider, {}, { flash: { problem: "Choose a model to test." }, keepCard: true });
+      const outcome = await testOne(db, plugins, { userId, provider, model, now });
+      const reason = outcome.kind === "refused" && PRECHECK_REFUSALS.has(outcome.reason) ? outcome.reason : undefined;
+      // In place, the results already shown stay under their rows.
+      const shownBefore = wantsJson ? (parseView(new URLSearchParams(request.headers.get("x-cos-view") ?? "")).results ?? []) : [];
+      const results = [{ model, ...(reason ? { reason } : {}) }, ...shownBefore.filter((r) => r.model !== model)].slice(0, MAX_RESULTS);
+      return done(provider, { results }, { focus: `t-${model}`, anchor: `#${rowAnchor(model)}`, keepCard: true });
+    }
+    case "check-account": {
+      if (!model) return done(provider, {}, { keepCard: true });
+      const read = await refreshAccountList(db, plugins, userId, provider, now);
+      if ("problem" in read) return done(provider, {}, { flash: { problem: read.problem, details: read.details }, keepCard: true });
+      const allowed = (await readAccountList(db, userId, provider))?.models.has(model) ?? false;
+      return done(provider, { notice: { model, kind: allowed ? "allowed" : "left-out" } }, { focus: allowed ? `t-${model}` : `ac-${model}`, anchor: `#${rowAnchor(model)}`, keepCard: true });
+    }
+    case "cap": {
+      if (!model || !plugin.connect.isRouter?.(model)) return done(provider, {}, { flash: { problem: "Only a router takes a price cap." }, keepCard: true });
+      const cap = parsePriceCap(field("input"), field("output"));
+      if (!cap) return done(provider, { cap: model, capProblem: true }, { focus: `ci-${model}`, anchor: `#${rowAnchor(model)}`, keepCard: true });
+      await savePriceCap(db, userId, provider, model, cap, now);
+      return done(provider, { notice: { model, kind: "capped" } }, { focus: `t-${model}`, anchor: `#${rowAnchor(model)}`, keepCard: true });
     }
     case "refresh": {
       const account = await readAccountList(db, userId, provider);
@@ -469,48 +471,42 @@ export async function handleProviders(
       const recent = (iso: string | undefined) => iso !== undefined && now.getTime() - Date.parse(iso) < REFRESH_GAP_MS;
       if (recent(account?.readAt) && recent(snapshot?.takenAt)) {
         const from = new Date(Math.max(Date.parse(account!.readAt), Date.parse(snapshot!.takenAt)) + REFRESH_GAP_MS).toISOString();
-        return page({ problem: `The model list was read less than a minute ago. Refresh it again from ${hhmm(from)}.`, selected: provider }, 429);
+        return done(provider, {}, { flash: { problem: `The model list was read less than a minute ago. Refresh it again from ${hhmm(from)}.` }, keepCard: true });
       }
       await refreshCatalog(true);
       const read = await refreshAccountList(db, plugins, userId, provider, now);
-      return "problem" in read ? page({ problem: read.problem, problemDetails: read.details, selected: provider }, 502) : back(provider);
-    }
-    case "add-tested": {
-      if (!field("model")) return page({ problem: "Choose a model first.", selected: provider }, 400);
-      const outcome = await addTestedModel(db, plugins, userId, provider, field("model"), now);
-      return page({ outcome, selected: provider }, outcome.kind === "added" ? 200 : 400);
+      return done(provider, {}, { ...("problem" in read ? { flash: { problem: read.problem, details: read.details } } : {}), keepCard: true });
     }
     case "test-all": {
       const started = await startTestAll(db, plugins, userId, provider, now);
-      return "problem" in started ? page({ problem: started.problem, selected: provider }, 400) : back(provider, "&tests=all", `#${provider}-test-all`);
+      return done(provider, {}, { ...("problem" in started ? { flash: { problem: started.problem } } : {}), focus: "ta", anchor: "#ta", keepCard: true });
+    }
+    case "retest": {
+      const started = await startRetest(db, plugins, userId, provider, now);
+      return done(provider, {}, { ...("problem" in started ? { flash: { problem: started.problem } } : {}), focus: "rt", anchor: "#ta", keepCard: true });
     }
     case "model-help": {
-      // "Ask Admin for help" on a chosen model: its name and the plain
-      // reason only, never the provider's reply.
+      // "Ask Admin for help" on a model's failed test: its name and the
+      // plain reason only, never the provider's reply.
       if (viewer !== "friend") return new Response(null, { status: 403 });
       const reason = field("reason");
-      const model = field("model").slice(0, 120);
-      if (!MODEL_HELP_REASONS.has(reason) || !model) return page({ problem: "There is nothing to ask about here.", selected: provider }, 400);
-      const refused = { kind: "refused" as const, model, reason: reason as AddRefusal };
-      const text = [refusalText(refused, plugins[provider]), refusalFix(refused, plugins[provider])].filter(Boolean).join(" ");
-      await db
-        .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
-        .bind(userId, `Choose a model: ${model}`, text, now.toISOString())
-        .run();
-      return page({ said: "Sent to Admin: this item's name and its plain reason only.", selected: provider });
+      if (!MODEL_HELP_REASONS.has(reason) || !model) return done(provider, {}, { flash: { problem: "There is nothing to ask about here." }, keepCard: true });
+      const refused = { kind: "refused" as const, model, reason: reason as TestRefusal };
+      const text = [refusalText(refused, plugin), refusalFix(refused, plugin)].filter(Boolean).join(" ");
+      await db.prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)").bind(userId, `Test a model: ${model}`, text, now.toISOString()).run();
+      return done(provider, {}, { flash: { said: "Sent to Admin: this item's name and its plain reason only." }, keepCard: true });
     }
     case "help": {
       // A friend asks Admin; the owner has no one above to ask.
       if (viewer !== "friend") return new Response(null, { status: 403 });
-      const plugin = plugins[provider]!;
       const connected = isConnected(await readConnection(db, userId, provider), await readCheck(db, userId, provider));
-      const passed = (await readUserModels(db, userId)).some((m) => m.provider === provider);
-      if (passed) return page({ problem: "There is nothing to ask about here.", selected: provider }, 400);
+      const usable = (await readUsableModels(db, userId)).some((m) => m.provider === provider);
+      if (usable) return done(provider, {}, { flash: { problem: "There is nothing to ask about here." } });
       await db
         .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
         .bind(userId, `Connect ${plugin.connect.guide.name}`, connected ? "connected, no model has passed yet" : "not connected yet", now.toISOString())
         .run();
-      return page({ said: "Sent to Admin: this item's name and its plain reason only.", selected: provider });
+      return done(provider, {}, { flash: { said: "Sent to Admin: this item's name and its plain reason only." } });
     }
   }
   return new Response(null, { status: 404 });

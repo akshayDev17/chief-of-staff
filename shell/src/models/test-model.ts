@@ -1,21 +1,25 @@
-// Choosing a model (design-v3 1.5, T17): on the provider's Connect screen
-// (providers/models-panel.ts), the user picks a model from the app's list of
-// every model the connected provider lists, and the model's test call runs
-// once. The model is added only when that call passes.
+// Testing a model (design-v3 1.5, T17): on the provider's Connect screen
+// (providers/models-table.ts), one table lists every model the connected
+// provider lists, each with Test. Test runs the model's test call once and
+// records it as the model's latest test (models/usable.ts): a model whose
+// latest test passed is one the user's tasks can use, and a later failed
+// test takes it out (the owner, 2026-11-27: "quite franky remove the add
+// feature altogether").
 //
 //   listOffer(db, plugins, userId, provider) -> OfferRow[]
-//   addModel(db, plugins, { userId, provider, model, now }) -> AddOutcome
-//   readUserModels(db, userId) -> UserModel[]     what T18's picker offers
-//   saveUserModel(db, userId, model)               also written by Add on Test all models' results
+//   testOne(db, plugins, { userId, provider, model, now }) -> TestOutcome     Test on a row
+//   testModel(db, plugin, plugins, input) -> TestOutcome                      one test call, also for Test all models
+//   testRecord(outcome, plugin) -> TestRecord                                  what a test showed, as stored
 //
 // The list is every model OpenRouter's own model list names (the owner,
 // 2026-11-27: "i would like to list all models and then choose"), read with
-// the price table (src/prices/openrouter.ts), and every model the user added
-// that it no longer names. Each row carries the model's list price, the
-// source and date read, and its tier from that price (tiers.ts). A model the
-// plug-in cannot call shows why and cannot be chosen; one with no input and
-// output price shows "no price yet" and cannot be added, because the budget
-// stop needs a real price; the proxy refuses a call to either. A free model
+// the price table (src/prices/openrouter.ts). Each row carries the model's
+// list price, the source and date read, and its tier from that price
+// (tiers.ts). A model the plug-in cannot call shows why and cannot be tested;
+// one with no input and output price shows "no price yet" and cannot be
+// tested, because the budget stop needs a real price; the proxy refuses a
+// call to either. A router is priced at the user's price cap
+// (models/price-caps.ts) and cannot be tested without one. A free model
 // (prices/openrouter.ts isTrulyFreeTextModel: it gives only text and every
 // price OpenRouter lists for it is 0) carries FREE_NOTE; it is never proposed
 // for a task (models/tasks.ts). A model at $0 a token that is not free that
@@ -23,17 +27,19 @@
 //
 // The test call goes through the proxy's one pipeline (`sendTestCall`), which
 // prices it and writes its ledger row. Where the reply names its model, a
-// reply naming another model than the one picked is refused with a plain
-// reason, and nothing is added.
+// reply naming another model than the one picked fails the test with a
+// plain reason.
 
 import { readCurrentCatalog, currentSnapshot, readSnapshotRows } from "../prices/store";
-import { modelTier, type Tier } from "../prices/tiers";
-import { isProvider, type PriceRow, type Provider, type SourceId } from "../prices/types";
+import { modelTier, tierFromInputPrice, type Tier } from "../prices/tiers";
+import type { PriceRow, Provider, SourceId } from "../prices/types";
 import { reasonText } from "../providers/check";
 import { readConnection } from "../proxy/connections";
 import type { Link, PlainReason, PluginRegistry, ProviderPlugin, Usage } from "../proxy/plugin";
 import { sendTestCall } from "../proxy/proxy";
 import { readAccountList } from "./account-list";
+import { readPriceCaps, type PriceCap } from "./price-caps";
+import { latestTestWrite, type TestRecord } from "./usable";
 
 export interface OfferRow {
   model: string;
@@ -48,6 +54,10 @@ export interface OfferRow {
   free: boolean;
   // The plug-in can call it; otherwise `notCallableReason` says why.
   callable: boolean;
+  // A router: priced per call by the model it picks, so its price is the
+  // user's cap (`cap`), and it cannot be tested without one.
+  router: boolean;
+  cap?: PriceCap;
   // The user's own account leaves it out (models/account-list.ts).
   accountLeftOut: boolean;
   // Where the provider lists no tool support for it, the plug-in's words.
@@ -55,7 +65,6 @@ export interface OfferRow {
   // The plug-in's plain notes for the entry (a retirement date, a price
   // that rises with the prompt's length).
   notes: string[];
-  added?: UserModel;
 }
 
 // The passed test call, as shown to the user who made it.
@@ -70,16 +79,17 @@ export interface TestResult {
   costUsd: number;
 }
 
-export interface UserModel {
-  provider: Provider;
-  model: string;
-  location: string;
-  addedAt: string;
-  test?: TestResult;
-}
-
-// Why a model was not added, each a plain sentence on the page.
-export type AddRefusal = PlainReason | "not_connected" | "not_offered" | "no_price" | "cannot_call" | "wrong_model" | "budget_spent" | "not_passed";
+// Why a test did not pass, each a plain sentence on the page.
+export type TestRefusal =
+  | PlainReason
+  | "not_connected"
+  | "not_offered"
+  | "no_price"
+  | "no_cap"
+  | "cap_refused"
+  | "cannot_call"
+  | "wrong_model"
+  | "budget_spent";
 
 export const FREE_NOTE = "free: rate-limited, and the provider may log prompts";
 export const NOT_FREE_NOTE = "not free: OpenRouter lists other fees for it";
@@ -89,55 +99,22 @@ export async function readFreeModels(db: D1Database): Promise<Set<string>> {
   return new Set(((await readCurrentCatalog(db))?.models ?? []).filter((m) => m.free).map((m) => m.id));
 }
 
-export type AddOutcome =
-  | { kind: "added"; model: UserModel }
-  | {
-      kind: "refused";
-      model: string;
-      reason: AddRefusal;
-      // The provider's own reply, verbatim: status, error name and message,
-      // or the model a reply named. Absent when nothing reached the provider.
-      reply?: { status: number; errorName?: string; message?: string; repliedModel?: string };
-      note?: string;
-      fix?: string;
-      links?: Link[];
-      location?: string;
-      // The model is free, so a 402 on it is not a paid model's.
-      free?: boolean;
-    };
-
-interface UserModelRecord {
-  provider: string;
+export interface Refused {
+  kind: "refused";
   model: string;
-  location: string;
-  added_at: string;
-  test_result: string | null;
+  reason: TestRefusal;
+  // The provider's own reply, verbatim: status, error name and message, or
+  // the model a reply named. Absent when nothing reached the provider.
+  reply?: { status: number; errorName?: string; message?: string; repliedModel?: string };
+  note?: string;
+  fix?: string;
+  links?: Link[];
+  location?: string;
+  // The model is free, so a 402 on it is not a paid model's.
+  free?: boolean;
 }
 
-// The signed-in user's added models at every provider a plug-in can serve:
-// what the per-task picker (T18) offers. Models added at a removed provider
-// (Bedrock, Vertex AI, Foundry) stay in D1 and are left out. Scoped to the user.
-export async function readUserModels(db: D1Database, userId: string): Promise<UserModel[]> {
-  const { results } = await db
-    .prepare("SELECT provider, model, location, added_at, test_result FROM user_models WHERE user_id = ? ORDER BY provider, model")
-    .bind(userId)
-    .all<UserModelRecord>();
-  return results.flatMap((r) =>
-    isProvider(r.provider)
-      ? [{ provider: r.provider, model: r.model, location: r.location, addedAt: r.added_at, test: r.test_result ? (JSON.parse(r.test_result) as TestResult) : undefined }]
-      : [],
-  );
-}
-
-export async function saveUserModel(db: D1Database, userId: string, m: UserModel): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO user_models (user_id, provider, model, location, added_at, test_result) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-       ON CONFLICT (user_id, provider, model) DO UPDATE SET location = excluded.location, test_result = excluded.test_result`,
-    )
-    .bind(userId, m.provider, m.model, m.location, m.addedAt, m.test ? JSON.stringify(m.test) : null)
-    .run();
-}
+export type TestOutcome = { kind: "passed"; model: string; test: TestResult } | Refused;
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -165,8 +142,8 @@ function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price" | "
   };
 }
 
-// Every model the provider's own list names, every model the price table
-// prices there, and every model the user added there, by ID.
+// Every model the provider's own list names and every model the price table
+// prices there, by ID.
 export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<OfferRow[]> {
   const plugin = plugins[provider];
   if (!plugin) return [];
@@ -177,13 +154,21 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
   const catalog = await readCurrentCatalog(db);
   const names = new Map((catalog?.models ?? []).map((m) => [m.id, m.name]));
   const free = new Set((catalog?.models ?? []).filter((m) => m.free).map((m) => m.id));
-  const added = new Map((await readUserModels(db, userId)).filter((m) => m.provider === provider).map((m) => [m.model, m]));
   const account = await readAccountList(db, userId, provider);
-  const ids = [...new Set([...names.keys(), ...rowsByModel.keys(), ...added.keys()])].sort(byText);
+  const caps = await readPriceCaps(db, userId, provider);
+  const ids = [...new Set([...names.keys(), ...rowsByModel.keys()])].sort(byText);
   return ids.map((model) => {
-    const location = added.get(model)?.location ?? plugin.connect.locations(model)[0] ?? "global";
+    const location = plugin.connect.locations(model)[0] ?? "global";
     const name = names.get(model);
-    const priced = priceOf(rowsByModel.get(model) ?? [], location);
+    const router = plugin.connect.isRouter?.(model) === true;
+    const cap = router ? caps.get(model) : undefined;
+    // A router's price is its cap: what the budget stop prices its calls at.
+    const priced: Pick<OfferRow, "price" | "tier"> = cap
+      ? {
+          price: { input: cap.input, output: cap.output, source: plugin.priceSource[0]!, dateRead: (cap.setAt ?? "").slice(0, 10), stale: false },
+          tier: tierFromInputPrice(cap.input),
+        }
+      : priceOf(rowsByModel.get(model) ?? [], location);
     const isFree = free.has(model);
     const zeroTokens = priced.price?.input === 0 && priced.price.output === 0;
     return {
@@ -193,10 +178,11 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
       ...priced,
       free: isFree,
       callable: plugin.connect.canCall(model),
+      router,
+      ...(cap ? { cap } : {}),
       accountLeftOut: account !== undefined && !account.models.has(model),
       noToolUse: plugin.connect.noToolUse?.(model),
       notes: [...(isFree ? [FREE_NOTE] : zeroTokens ? [NOT_FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
-      added: added.get(model),
     };
   });
 }
@@ -229,25 +215,46 @@ export function namesPickedModel(replied: string, modelId: string, otherIds: rea
   return isModel(id) && !others.some((o) => o.length > id.length && isModel(o));
 }
 
-// Why an entry cannot be chosen, or undefined when it can.
-export function blockedReason(row: OfferRow, plugin: ProviderPlugin): string | undefined {
-  if (!row.callable) return `not offered: ${plugin.connect.notCallableReason(row.model)}`;
-  if (row.accountLeftOut) return `not offered for your account: your ${plugin.connect.guide.short} settings (provider preferences, privacy or guardrails) leave it out`;
-  if (!row.price) return `no price yet: not in ${plugin.connect.guide.short}'s price list yet`;
+// What keeps an entry from being tested, and so which action unblocks it on
+// its row: `router` a price cap, `account` the account's provider settings
+// (a link to them, then Check again); `not_callable` and `no_price` none.
+export type BlockKind = "not_callable" | "router" | "account" | "no_price";
+
+export function blockKind(row: OfferRow): BlockKind | undefined {
+  if (!row.callable) return "not_callable";
+  if (row.router && !row.cap) return "router";
+  if (row.accountLeftOut) return "account";
+  if (!row.price) return "no_price";
   return undefined;
 }
 
-// One test call on `model` through the proxy, and what it proved: the model
-// to add, or the plain refusal. Used by Choose and by Test all models.
+// Why an entry cannot be tested, or undefined when it can.
+export function blockedReason(row: OfferRow, plugin: ProviderPlugin): string | undefined {
+  switch (blockKind(row)) {
+    case "not_callable":
+      return `not offered: ${plugin.connect.notCallableReason(row.model)}`;
+    case "router":
+      return `priced per call by the model it picks: set it a price cap`;
+    case "account":
+      return `not offered for your account: your ${plugin.connect.guide.short} settings (provider preferences, privacy or guardrails) leave it out`;
+    case "no_price":
+      return `no price yet: not in ${plugin.connect.guide.short}'s price list yet`;
+    default:
+      return undefined;
+  }
+}
+
+// One test call on `model` through the proxy, and what it proved: the passed
+// call, or the plain refusal. Used by Test and by Test all models.
 export async function testModel(
   db: D1Database,
   plugin: ProviderPlugin,
   plugins: PluginRegistry,
   input: { userId: string; model: string; location: string; otherIds: readonly string[]; now: Date; task?: string; free?: boolean },
-): Promise<AddOutcome> {
+): Promise<TestOutcome> {
   const { userId, model, location, now } = input;
   const provider = plugin.provider;
-  const refuse = (reason: AddRefusal, extra: Omit<Extract<AddOutcome, { kind: "refused" }>, "kind" | "model" | "reason"> = {}): AddOutcome => ({
+  const refuse = (reason: TestRefusal, extra: Omit<Refused, "kind" | "model" | "reason"> = {}): Refused => ({
     kind: "refused",
     model,
     reason,
@@ -258,31 +265,37 @@ export async function testModel(
   const outcome = await sendTestCall(db, plugins, userId, { provider, model, location, request: plugin.connect.testRequest(model) }, () => now, input.task);
   if (outcome.kind === "answered") {
     const repliedModel = plugin.connect.replyModel(outcome.body);
-    if (repliedModel && !namesPickedModel(repliedModel, model, input.otherIds)) {
+    // A router's reply names the model it picked, which is the point.
+    if (repliedModel && !plugin.connect.isRouter?.(model) && !namesPickedModel(repliedModel, model, input.otherIds)) {
       return refuse("wrong_model", { reply: { status: outcome.status, repliedModel } });
     }
     return {
-      kind: "added",
-      model: {
-        provider,
-        model,
+      kind: "passed",
+      model,
+      test: {
+        at: now.toISOString(),
         location,
-        addedAt: now.toISOString(),
-        test: {
-          at: now.toISOString(),
-          location,
-          status: outcome.status,
-          repliedModel,
-          // A reasoning model can spend its few tokens thinking and give no
-          // text: its 200 still proves it answers.
-          text: plugin.connect.replyText(outcome.body),
-          usage: outcome.usage,
-          costUsd: outcome.costUsd,
-        },
+        status: outcome.status,
+        repliedModel,
+        // A reasoning model can spend its few tokens thinking and give no
+        // text: its 200 still proves it answers.
+        text: plugin.connect.replyText(outcome.body),
+        usage: outcome.usage,
+        costUsd: outcome.costUsd,
       },
     };
   }
   const connection = await readConnection(db, userId, provider);
+  // A router called under the user's cap that OpenRouter refuses for the
+  // request itself (no model under the cap, a router's own limit): its own
+  // words, not a missing model.
+  if (outcome.failure?.step === "call" && plugin.connect.isRouter?.(model) && [400, 404, 422].includes(outcome.failure.status)) {
+    const { failure } = outcome;
+    return refuse("cap_refused", {
+      reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
+      fix: `${plugin.connect.guide.short}'s own words are above. Raise the price cap if no model fits under it, then test again.`,
+    });
+  }
   if (outcome.failure) {
     const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
@@ -298,6 +311,8 @@ export async function testModel(
       return refuse("cannot_call");
     case "no_price":
       return refuse("no_price");
+    case "no_cap":
+      return refuse("no_cap");
     case "budget_spent":
       return refuse("budget_spent", { note: `Resumes ${outcome.resumesOn}.` });
     case "credential_failed":
@@ -309,26 +324,66 @@ export async function testModel(
   }
 }
 
-export async function addModel(
+// The refusals made before any call, because the row cannot be tested: no
+// test is recorded for them.
+export const PRECHECK_REFUSALS: ReadonlySet<TestRefusal> = new Set<TestRefusal>(["not_connected", "not_offered", "cannot_call", "no_cap", "no_price"]);
+
+// Whether the user may test `model` now, and the offer row if so.
+async function offerFor(
   db: D1Database,
   plugins: PluginRegistry,
-  input: { userId: string; provider: Provider; model: string; now: Date },
-): Promise<AddOutcome> {
-  const { userId, provider, model, now } = input;
+  input: { userId: string; provider: Provider; model: string },
+): Promise<{ offer: OfferRow; offers: OfferRow[]; plugin: ProviderPlugin } | Refused> {
+  const { userId, provider, model } = input;
   const plugin = plugins[provider];
   if (!plugin || !(await readConnection(db, userId, provider))) return { kind: "refused", model, reason: "not_connected" };
   const offers = await listOffer(db, plugins, userId, provider);
   const offer = offers.find((r) => r.model === model);
   if (!offer) return { kind: "refused", model, reason: "not_offered" };
-  if (!offer.callable || offer.accountLeftOut) return { kind: "refused", model, reason: "cannot_call", location: offer.location };
-  if (!offer.price) return { kind: "refused", model, reason: "no_price", location: offer.location };
+  switch (blockKind(offer)) {
+    case "not_callable":
+    case "account":
+      return { kind: "refused", model, reason: "cannot_call", location: offer.location };
+    case "router":
+      return { kind: "refused", model, reason: "no_cap", location: offer.location };
+    case "no_price":
+      return { kind: "refused", model, reason: "no_price", location: offer.location };
+  }
+  return { offer, offers, plugin };
+}
+
+// What a test showed, as stored: the passed call, or the plain reason with
+// the provider's own words.
+export function testRecord(o: TestOutcome, plugin: ProviderPlugin): TestRecord {
+  if (o.kind === "passed") return { text: "Works now.", test: o.test };
+  const fix = refusalFix(o, plugin);
+  return {
+    reason: o.reason,
+    text: refusalText(o, plugin),
+    ...(o.reply ? { reply: o.reply } : {}),
+    ...(fix ? { fix } : {}),
+    ...(o.links?.length ? { links: o.links } : {}),
+  };
+}
+
+// Test on a row: one test call, recorded as the model's latest test. A row
+// that cannot be tested is refused with no call and nothing recorded.
+export async function testOne(
+  db: D1Database,
+  plugins: PluginRegistry,
+  input: { userId: string; provider: Provider; model: string; now: Date },
+): Promise<TestOutcome> {
+  const { userId, provider, model, now } = input;
+  const found = await offerFor(db, plugins, input);
+  if ("kind" in found) return found;
+  const { offer, offers, plugin } = found;
   const outcome = await testModel(db, plugin, plugins, { userId, model, location: offer.location, otherIds: offers.map((r) => r.model), now, free: offer.free });
-  if (outcome.kind === "added") await saveUserModel(db, userId, outcome.model);
+  await latestTestWrite(db, userId, provider, model, outcome.kind === "passed" ? "passed" : "failed", testRecord(outcome, plugin), now).run();
   return outcome;
 }
 
 // The plain sentence for a refusal: the first of the result's lines.
-export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin: ProviderPlugin | undefined): string {
+export function refusalText(o: Refused, plugin: ProviderPlugin | undefined): string {
   const name = plugin?.connect.guide.name ?? "That provider";
   const short = plugin?.connect.guide.short ?? "The provider";
   switch (o.reason) {
@@ -337,15 +392,17 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
     case "not_offered":
       return `Not on ${name}'s list.`;
     case "no_price":
-      return "No price yet, so it can't be added.";
+      return "No price yet, so it can't be tested.";
+    case "no_cap":
+      return "It needs a price cap first.";
+    case "cap_refused":
+      return `${short} refused the call under your price cap.`;
     case "cannot_call":
       return plugin?.connect.canCall(o.model) ? "Not offered for your account." : "The app can't call this model.";
     case "wrong_model":
-      return `${short}'s reply named another model, so it wasn't added.`;
+      return `${short}'s reply named another model.`;
     case "budget_spent":
       return "This month's budget is spent.";
-    case "not_passed":
-      return "It didn't pass in your latest Test all models run.";
     case "no_credits":
       if (o.free) return `${short} asked for credit even for this free model.`;
       return plugin ? reasonText(o.reason, plugin) : `${short} refused the test call.`;
@@ -356,12 +413,14 @@ export function refusalText(o: Extract<AddOutcome, { kind: "refused" }>, plugin:
 
 // The reason and the fix, collapsed under the plain line; the plug-in's own
 // fix where it gave one.
-export function refusalFix(o: Extract<AddOutcome, { kind: "refused" }>, plugin: ProviderPlugin | undefined): string {
+export function refusalFix(o: Refused, plugin: ProviderPlugin | undefined): string {
   if (o.fix) return o.fix;
   const name = plugin?.connect.guide.name ?? "the provider";
   switch (o.reason) {
     case "no_price":
       return "The budget stop needs a real price.";
+    case "no_cap":
+      return `${name} prices it by the model it picks for each call. Set it a price cap on its row, then test it.`;
     case "cannot_call":
       return plugin?.connect.canCall(o.model)
         ? `Your ${plugin.connect.guide.short} settings leave ${o.model} out.`
@@ -372,8 +431,6 @@ export function refusalFix(o: Extract<AddOutcome, { kind: "refused" }>, plugin: 
       return `The test call waits until the 1st. Raise the budget on Budgets, then test ${o.model} again.`;
     case "not_connected":
       return "Open Providers and connect it.";
-    case "not_passed":
-      return `Choose ${o.model} in the list above to run its own test call.`;
     default:
       return "";
   }

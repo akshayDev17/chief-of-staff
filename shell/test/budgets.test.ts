@@ -4,7 +4,7 @@ import worker from "../src/index";
 import { parseBudget, readBudget, suggestBudget, TOKENS_PER_APPLICATION } from "../src/proxy/budgets";
 import { writeConnection } from "../src/proxy/connections";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
-import { seedPrices, testPlugin, userFor } from "./test-plugin";
+import { recordTest, seedPrices, testPlugin, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-25T10:00:00Z");
 const BASE = "https://shell.test/chief-of-staff/models/setup/budgets";
@@ -31,9 +31,7 @@ beforeEach(async () => {
   await seedPrices();
   ownerId = (await userFor("test-sub")).id;
   await writeConnection(env.DB, ownerId, testPlugin(), { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
-  await env.DB.prepare("INSERT INTO user_models (user_id, provider, model, location, added_at) VALUES (?, 'openrouter', 'test-sonnet', 'global', ?)")
-    .bind(ownerId, NOW.toISOString())
-    .run();
+  await recordTest(ownerId, "test-sonnet");
 });
 
 describe("the suggested budget", () => {

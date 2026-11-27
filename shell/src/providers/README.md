@@ -117,27 +117,35 @@ https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
 Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
 (read 2026-11-27).
 
-## After Connect (`check.ts`, `page.ts`, `models-panel.ts`)
-
-The owner's flow (2026-11-27): "the post connect step, where authorization
-from openrouter succeeds, should be to scroll/highlight the testing section.
-the testing section should have a model dropdown list, non-hardcoded, and then
-when a user picks up a model, we should have a "test with <model name>?"
-button suddenly getting enabled".
+## After Connect (`check.ts`, `page.ts`, `models-table.ts`, `page-script.ts`)
 
 - Back from OpenRouter, the connection is **Connected** (the check row's state
   `passed`, which since 2026-11-27 means only that OpenRouter authorized the
-  app). No model call is made. The page opens at `#test`, the model test,
-  highlighted, with focus on its dropdown.
-- The model test has one dropdown, OpenRouter's live list (every model it
-  lists; the app holds no model ID of its own), reading "Choose a model", and
-  a real `<button>`, disabled until a model is chosen, then reading
-  "Test with <model>?". Choosing sends no request and loads no page; only the
-  button does, and it runs that one model's test call (`models/add.ts`
-  `addModel`). Test all models stays a separate action with its estimate and
-  confirm.
-- The provider is **usable** once one of the user's models has passed its
-  test call; until one passes, the page prompts "Not usable yet".
+  app). No model call is made. The page opens with the model table in view
+  and its search field focused, once: a flash cookie carries the landing, so
+  a refresh focuses nothing.
+- The model table lists OpenRouter's live list (the app holds no model ID of
+  its own) with Test on every row, Test all models and Retest failed beside
+  it, and the routers' price caps (`src/models/README.md`). There is no Add:
+  a model whose latest test passed is usable for tasks.
+- **Nothing reloads the page or changes its address** (the owner,
+  2026-11-28). The page's script sends every form (Test, Check again, the
+  price cap, Refresh, Test all, Retest failed, Disconnect) and every view link
+  (a confirm, the cap editor, Cancel) in place, with `Accept:
+  application/json`. The answer is the page's `<main>` for the resulting view
+  (`models-table.ts` `View`: a result under a row, a notice, an open confirm
+  or cap editor, all of them addresses), and the script swaps in only the
+  parts that changed (`data-part`). A request that cannot change the provider
+  card (a test, a poll) sends it as "keep yours" and does not read the account
+  again. Search, the Maker filter and the strip only show and hide rows. While
+  a Test all models run goes on, the script asks for the same view every 8
+  seconds. Without the script, every form posts and redirects to its view
+  (post-redirect-get), with any problem in a flash cookie shown once.
+- **Exactly one solid blue button per state**, the next step: Connect
+  OpenRouter when not connected; Refresh model list while the list predates
+  the current rules; Test all N models; Next: budgets after a run on the
+  current list; Run the test or Use this cap while their confirm is open;
+  none while a run goes on. Everything else is outlined.
 - A test call that gets a 401 records the connection as `revoked` (removed on
   OpenRouter's side), for T49's urgent alert, and the page offers Connect
   OpenRouter again.
@@ -163,7 +171,7 @@ exactly `["text"]`) and every price OpenRouter lists for it is 0, not only
 `prompt` and `completion` but `request`, `image`, `audio`, `web_search`,
 `internal_reasoning`, the cache prices, `overrides` and any field the app
 does not know. A model that also gives audio, images or video is never
-offered or tested: Google's Lyria music models are listed at "0" a token,
+listed or tested: Google's Lyria music models are listed at "0" a token,
 `output_modalities` ["text", "audio"], and are charged per clip or song.
 
 Visible copy is the action lines; every explanation sits in a collapsed

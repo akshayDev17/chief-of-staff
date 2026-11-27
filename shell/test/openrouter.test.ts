@@ -69,6 +69,25 @@ describe("the caller", () => {
     expect(reply).toMatchObject({ status: 200, callId: "gen-test-0001", usage: { input: 12, output: 2, reportedCostUsd: 0.0000022 } });
   });
 
+  it("sends a router's cap as max_price, with fees per request, image and audio at 0, and keeps out every model that charges per search or per request", async () => {
+    const fetcher = fakeFetch();
+    const plugin = openrouterPlugin(ENV, memorySecrets(ISSUED_KEY), CATALOG, fetcher);
+    expect(plugin.connect.isRouter?.("openrouter/auto")).toBe(true);
+    expect(plugin.connect.canCall("openrouter/auto")).toBe(true);
+    expect(plugin.connect.isRouter?.("openai/gpt-6-luna")).toBe(false);
+    await plugin.call({ credential: "k", connection: {}, model: "openrouter/auto", location: "global", request: { messages: [] }, maxPrice: { inputUsdPerMTok: 3, outputUsdPerMTok: 15 } });
+    expect(fetcher.sent[0]!.body).toEqual({
+      messages: [],
+      model: "openrouter/auto",
+      provider: { max_price: { prompt: "3", completion: "15", request: "0", image: "0", audio: "0" } },
+      plugins: [{ id: "auto-router", excluded_models: CATALOG.feeModels }],
+    });
+    expect(CATALOG.feeModels!.length).toBeGreaterThan(0);
+    // A call with no cap carries neither.
+    await plugin.call({ credential: "k", connection: {}, model: "openai/gpt-6-luna", location: "global", request: { messages: [] } });
+    expect(fetcher.sent[1]!.body).toEqual({ messages: [], model: "openai/gpt-6-luna" });
+  });
+
   it("refuses to mint without a key in the vault", async () => {
     const plugin = openrouterPlugin(ENV, memorySecrets(), CATALOG, fakeFetch());
     await expect(plugin.mintCredential({}, { userId: "u1" })).rejects.toThrow(ProviderRefusal);
@@ -141,7 +160,8 @@ describe("the model list and plain reasons", () => {
 
   it("never calls a model that also gives audio, even one listed at $0 a token", () => {
     expect(plugin.connect.canCall("google/lyria-3-clip-preview")).toBe(false);
-    expect(plugin.connect.notCallableReason("google/lyria-3-clip-preview")).toBe("it also gives audio, images or video, priced beyond its token rates");
+    // It is not in the model list at all.
+    expect(plugin.connect.notCallableReason("google/lyria-3-clip-preview")).toBe("OpenRouter no longer lists it");
   });
 
   it("names OpenRouter's free-model refusals plainly: the data policy, with its privacy settings, and the daily free limit", () => {
@@ -157,7 +177,8 @@ describe("the model list and plain reasons", () => {
 
   it("calls only what OpenRouter lists and the app can price, with notes", () => {
     expect(plugin.connect.canCall("openai/gpt-6-luna")).toBe(true);
-    expect(plugin.connect.canCall("openrouter/auto")).toBe(false);
+    expect(plugin.connect.canCall("openrouter/auto")).toBe(true);
+    expect(plugin.connect.canCall("~openai/gpt-luna-latest")).toBe(false);
     expect(plugin.connect.notCallableReason("gone/model")).toBe("OpenRouter no longer lists it");
     expect(plugin.connect.noToolUse!("mistralai/pixtral-large-2502")).toBe("OpenRouter lists no tool support for it");
     expect(plugin.connect.modelNotes!("anthropic/claude-haiku-5.5")).toEqual(["priced higher from 100,000 prompt tokens"]);

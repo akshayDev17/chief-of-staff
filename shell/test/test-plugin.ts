@@ -9,10 +9,11 @@ import { writeSnapshot } from "../src/prices/store";
 import { CATALOG_VERSION, type OpenRouterCatalog } from "../src/prices/openrouter";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
+import { latestTestWrite } from "../src/models/usable";
 
 export interface TestPlugin extends ProviderPlugin {
   replies: Array<ProviderReply | Error>;
-  calls: Array<{ credential: unknown; model: string; location: string; request: unknown }>;
+  calls: Array<{ credential: unknown; model: string; location: string; request: unknown; maxPrice?: { inputUsdPerMTok: number; outputUsdPerMTok: number } }>;
   minted: string[];
 }
 
@@ -20,7 +21,7 @@ export interface TestPlugin extends ProviderPlugin {
 export const VAULT_KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 export const testSecrets = (): SecretStore => vaultSecrets(env.DB, { VAULT_KEY });
 
-export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?: boolean; refuseMint?: boolean; cannotCall?: string[] } = {}): TestPlugin => {
+export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?: boolean; refuseMint?: boolean; cannotCall?: string[]; routers?: string[] } = {}): TestPlugin => {
   const plugin: TestPlugin = {
     provider,
     version: `test-${provider}-1`,
@@ -42,6 +43,7 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
       // The account's live list: the seeded models.
       readAccountModels: async () => ["test-luna", "test-mini", "test-sonnet"],
       canCall: (m) => !opts.cannotCall?.includes(m),
+      isRouter: (m) => opts.routers?.includes(m) ?? false,
       notCallableReason: () => "the test plug-in cannot call it",
       replyModel: (body) => {
         const model = (body as { model?: unknown } | null)?.model;
@@ -63,7 +65,7 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
       return credential;
     },
     async call(input) {
-      plugin.calls.push({ credential: input.credential, model: input.model, location: input.location, request: input.request });
+      plugin.calls.push({ credential: input.credential, model: input.model, location: input.location, request: input.request, ...(input.maxPrice ? { maxPrice: input.maxPrice } : {}) });
       const next = plugin.replies.shift() ?? ok({ input: 1000, output: 100 });
       if (next instanceof Error) throw next;
       return next;
@@ -97,7 +99,7 @@ export const TEST_CATALOG: OpenRouterCatalog = {
   version: CATALOG_VERSION,
   readAt: "2026-11-27T06:00:00.000Z",
   models: [
-    { id: "openrouter/auto", name: "Auto router", blocked: "OpenRouter prices it by the model it picks for each call, so the budget stop has no price", tools: false },
+    { id: "openrouter/auto", name: "Auto router", router: true, tools: false },
     { id: "test-luna", name: "Test Luna", tools: true },
     { id: "test-mini", name: "Test Mini", tools: false },
     { id: "test-sonnet", name: "Test Sonnet", tools: true, longPromptFrom: 200_000 },
@@ -136,3 +138,18 @@ export async function dumpEveryTable(): Promise<Record<string, unknown[]>> {
   for (const { name } of tables) dump[name] = (await env.DB.prepare(`SELECT * FROM "${name}"`).all()).results;
   return dump;
 }
+
+// Records a model's latest test as passed (or failed) at `at`, as Test,
+// Test all models or Retest failed would.
+export const recordTest = (userId: string, model: string, state: "passed" | "failed" = "passed", at = "2026-11-27T09:00:00.000Z") =>
+  latestTestWrite(
+    env.DB,
+    userId,
+    "openrouter",
+    model,
+    state,
+    state === "passed"
+      ? { text: "Works now.", test: { at, location: "global", status: 200, costUsd: 0.000001 } }
+      : { reason: "busy", text: "Busy right now.", reply: { status: 429 } },
+    new Date(at),
+  ).run();

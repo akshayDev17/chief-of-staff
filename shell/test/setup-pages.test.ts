@@ -3,10 +3,10 @@
 // request or loads a page when it changes (the owner, 2026-11-27: "upon
 // changing a model in the dropdwon, i believe some request is sent"): each
 // page's own script runs against a stand-in DOM (script-dom.ts) that records
-// every submit, navigation and request. Budgets has no dropdown.
+// every submit, navigation and request. Budgets has no dropdown; Providers
+// has none either, and its filters are buttons outside any form.
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { saveUserModel } from "../src/models/add";
 import { handleTaskModels } from "../src/models/picker-page";
 import { AFTER_SETUP_TABS, SETUP_TABS } from "../src/models/setup-tabs";
 import { handleProviders } from "../src/providers/page";
@@ -14,10 +14,10 @@ import { handleBudgets } from "../src/proxy/budgets-page";
 import { writeConnection } from "../src/proxy/connections";
 import { BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../src/paths";
 import { fakeFetch } from "./fake-sources";
-import { element, fireInline, listboxPage, pageScripts, runScript, type Sent } from "./script-dom";
+import { element, fireInline, pageScripts, runScript, type Sent } from "./script-dom";
 import { renderPriceTablePage } from "../src/prices/page";
 import { currentSnapshot, readSnapshotRows, recentAlerts } from "../src/prices/store";
-import { seedPrices, testPlugin, testSecrets, userFor } from "./test-plugin";
+import { recordTest, seedPrices, testPlugin, testSecrets, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
 const ORIGIN = "https://cos.example.com";
@@ -27,10 +27,10 @@ beforeEach(async () => {
   await seedPrices();
   userId = (await userFor("owner-sub")).id;
   await writeConnection(env.DB, userId, testPlugin(), { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
-  for (const model of ["test-luna", "test-mini"]) await saveUserModel(env.DB, userId, { provider: "openrouter", model, location: "global", addedAt: NOW.toISOString() });
+  for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
 });
 
-// Every screen, rendered for a connected user with two passed models, so each
+// Every screen, rendered for a connected user with two usable models, so each
 // shows its dropdowns.
 async function screens(): Promise<Record<string, string>> {
   const plugins = { openrouter: testPlugin() };
@@ -81,25 +81,23 @@ describe("Models › Setup", () => {
     ]);
     expect(chain[0]).toBe(`${BUDGETS_PATH}|Next: budgets`);
     expect(chain[1]).toBe(`${TASK_MODELS_PATH}|Next: the model for each task`);
-    // Each screen shows the same tab line, itself in bold.
+    // Each screen shows the same tabs, in order, itself marked current.
     for (const t of SETUP_TABS) {
-      const line = html[t.href]!.match(/<nav class="small setup-tabs"[^>]*>(.*?)<\/nav>/)![1]!;
-      expect(line.replace(/<[^>]+>/g, "")).toBe(SETUP_TABS.map((x) => x.label).join(" · "));
-      expect(line).toContain(`<strong aria-current="page">${t.label}</strong>`);
+      const line = html[t.href]!.match(/<nav class="(?:small setup-tabs|tabs)"[^>]*>(.*?)<\/nav>/)![1]!;
+      expect([...line.matchAll(/<(?:a|span|strong)\b[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(SETUP_TABS.map((x) => x.label));
+      expect(line).toMatch(new RegExp(`aria-current="page">${t.label}<`));
     }
   });
 
-  it("sends nothing and loads nothing when the Providers page's model list changes", async () => {
-    const html = await screens();
-    const p = listboxPage(pageScripts(html[PROVIDERS_PATH]!), ["test-luna", "test-mini"]);
-    p.button.fire("click");
-    p.options[1]!.fire("click");
-    p.button.fire("click");
-    p.list.fire("keydown", "ArrowUp");
-    p.list.fire("keydown", "Enter");
-    expect(p.input.value).toBe("test-luna");
-    expect(p.test.textContent).toBe("Test with test-luna?");
-    expect(p.sent).toEqual([]);
+  it("has no dropdown on Providers: search, Maker and the strip are buttons and a search box outside any form", async () => {
+    const html = (await screens())[PROVIDERS_PATH]!;
+    expect(html).not.toContain("<select");
+    const toolbar = html.match(/<div class="toolbar">[\s\S]*?<div class="chips"/)![0];
+    expect(toolbar).not.toContain("<form");
+    expect(toolbar).toContain('<input type="search" id="pick-q"');
+    const strip = html.match(/<div class="strip-wrap" data-part="strip">[\s\S]*?<\/div>\n<div class="list-head"/)![0];
+    expect(strip).not.toContain("<form");
+    expect([...strip.matchAll(/<button type="button" class="cell" data-filter="(\w+)"/g)].map((m) => m[1])).toEqual(["works", "fails", "pending"]);
   });
 
   it("sends nothing and loads nothing when a task's provider or model select changes, and shows only that provider's models", async () => {
