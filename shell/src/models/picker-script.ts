@@ -14,9 +14,11 @@
 //   in the bar for a few seconds, or a problem shown in the bar with the
 //   choices kept.
 // - Accept all, Use my free models and Ask Admin for help (forms marked
-//   data-fetch, with no fields of their own) are sent in place the same way,
-//   with the changed rows, which are saved as chosen in the same request, so
-//   the answer never drops a choice (a tap leaves those rows as chosen).
+//   data-fetch, with no fields of their own) are sent in place the same way.
+//   The two taps (data-rows) carry the changed rows, which are saved as
+//   chosen in the same request, so the answer never drops a choice (a tap
+//   leaves those rows as chosen). Help carries none and saves nothing: its
+//   answer shows in the banner only, and the rows stay as they are.
 // Without the script, the plain selects show, each row has its own Save, and
 // every form posts and redirects back.
 
@@ -180,13 +182,20 @@ export const PICKER_SCRIPT = String.raw`
       setTimeout(function () { if (bar.hasAttribute("data-done")) bar.hidden = true; }, 4000);
     }
   }
+  function say(text, cls, role) {
+    var banner = main.querySelector('[data-part="banner"]');
+    if (!banner) return;
+    banner.innerHTML = '<div class="banner ' + cls + '" role="' + role + '" tabindex="-1"></div>';
+    banner.firstChild.textContent = text;
+    banner.firstChild.focus({ preventScroll: true });
+  }
   function send(action, body, onProblem) {
     if (busy) return;
     busy = true;
     main.setAttribute("aria-busy", "true");
     fetch(action, { method: "POST", body: body, headers: { accept: "application/json" }, credentials: "same-origin" })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (j.main) swap(j.main); else onProblem(j.problem || "Couldn't save. Try again."); })
+      .then(function (j) { if (j.main) swap(j.main); else if (j.said) say(j.said, "ok", "status"); else onProblem(j.problem || "Couldn't save. Try again."); })
       .catch(function () { onProblem("Couldn't reach the app. Try again."); })
       .then(function () { busy = false; main.removeAttribute("aria-busy"); });
   }
@@ -249,12 +258,12 @@ export const PICKER_SCRIPT = String.raw`
     e.preventDefault();
     var b = f.querySelector('button[type="submit"]');
     if (b) b.disabled = true;
-    send(f.getAttribute("action"), changedRows(), function (problem) {
+    var rows = f.hasAttribute("data-rows");
+    send(f.getAttribute("action"), rows ? changedRows() : new FormData(), function (problem) {
       if (b) b.disabled = false;
       // A refused change shows in the bar, beside the rows it is about.
-      if (dirtyRows().length) { bar(problem); return; }
-      var banner = main.querySelector('[data-part="banner"]');
-      if (banner) banner.innerHTML = '<div class="banner warn" role="alert"></div>', banner.firstChild.textContent = problem;
+      if (rows && dirtyRows().length) bar(problem);
+      else say(problem, "warn", "alert");
     });
   });
   window.addEventListener("beforeunload", function (e) { if (dirtyRows().length) { e.preventDefault(); e.returnValue = ""; } });

@@ -698,5 +698,12 @@ describe("the model for each task", () => {
     // Without the script a tap posts no rows, and says what it did in the address.
     const plain = await post("accept", [], false);
     expect([plain.status, plain.headers.get("location")]).toEqual([303, `${ORIGIN}${TASK_MODELS_PATH}?accepted=0`]);
+    // Ask Admin for help saves no row sent with it, and answers in place with what it says only.
+    const help = await handleTaskModels(
+      new Request(`${ORIGIN}${TASK_MODELS_PATH}/help`, { method: "POST", headers: { origin: ORIGIN, accept: "application/json" }, body: new URLSearchParams([["task", "score"], ["main.score", or("test-mini")], ["fallback.score", ""]]) }),
+      { db: env.DB, plugins: plugins(), userId, viewer: "friend", now: NOW },
+    );
+    expect([help.status, await help.json()]).toEqual([200, { said: "Sent to Admin: this item's name and its reason only." }]);
+    expect((await saved()).map((r) => r.task)).toEqual(["extract", "linkedin_message", "match"]);
   });
 });

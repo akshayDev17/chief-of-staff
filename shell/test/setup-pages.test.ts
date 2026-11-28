@@ -159,6 +159,36 @@ describe("Models › Setup", () => {
     expect(doc.getElementById("savebar")!.querySelector(".sb-n")!.textContent).toBe("Saved: Matching questions. Accepted: 2 tasks use their proposed models.");
   });
 
+  it("saves nothing when a friend asks Admin for help with a row changed, and keeps the row changed on the page", async () => {
+    const plugins = { openrouter: testPlugin() };
+    const handle = (req: Request) => handleTaskModels(req, { db: env.DB, plugins, userId, viewer: "friend", now: NOW });
+    const html = await (await handle(new Request(`${ORIGIN}${TASK_MODELS_PATH}`))).text();
+    const doc = documentOf(html);
+    const sent: Sent = [];
+    let posted: FormData | undefined;
+    runScript(pageScripts(html), doc, `${ORIGIN}${TASK_MODELS_PATH}`, sent, {
+      window: { addEventListener: () => {}, FormData },
+      fetch: (url, init) => {
+        posted = init?.body as FormData;
+        return handle(new Request(new URL(url, ORIGIN), { method: init?.method, body: init?.body, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }));
+      },
+    });
+    doc.fire("click", doc.getElementById("pb-main-match")!);
+    doc.fire("click", doc.querySelector('#pl-main-match li[data-value="openrouter|test-mini"]')!);
+    expect(doc.fire("submit", doc.querySelector(`form[action="${TASK_MODELS_PATH}/help"]`)!)).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/help`]);
+    expect([...posted!.entries()]).toEqual([]);
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM task_routes WHERE user_id = ?").bind(userId).first<{ n: number }>())!.n).toBe(0);
+    expect((await env.DB.prepare("SELECT item FROM help_requests WHERE user_id = ?").bind(userId).all()).results).toEqual([{ item: "Model for each task" }]);
+    // The banner says it was sent; the row and its bar are as the user left them.
+    expect(doc.querySelector('[data-part="banner"]')!.textContent).toBe("Sent to Admin: this item's name and its reason only.");
+    expect(doc.getElementById("main-match")!.value).toBe("openrouter|test-mini");
+    expect(doc.getElementById("task-match")!.hasAttribute("data-dirty")).toBe(true);
+    const bar = doc.getElementById("savebar")!;
+    expect([bar.hidden, bar.querySelector(".sb-n")!.textContent]).toEqual([false, "1 task changed"]);
+  });
+
   it("opens Providers showing one strength's models not tested yet when the address asks, as an empty strength's link does, with Show all", async () => {
     const html = (await screens())[PROVIDERS_PATH]!;
     // Every row carries its strength chip.

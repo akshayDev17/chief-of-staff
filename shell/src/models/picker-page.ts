@@ -7,9 +7,10 @@
 //   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
-// Each of the last three also takes the fields of /change for the rows the
-// user changed and has not saved, saved as chosen (all or none) with it in
-// one request, the tap leaving those rows as the user chose them.
+// Each tap also takes the fields of /change for the rows the user changed
+// and has not saved, saved as chosen (all or none) with it in one request,
+// the tap leaving those rows as the user chose them. Help saves nothing: in
+// place, its answer is only what it says, and the page keeps its rows.
 //
 // One row per task: its suggested strength, and a dropdown for its main model
 // and one for its fallback. Each dropdown lists only the user's usable models
@@ -296,7 +297,7 @@ function freeTap(input: PickerPageInput, primary: boolean): string {
     ? "Your models that passed are all free, so none is proposed."
     : `${set.length === 1 ? "One task has" : `${set.length} tasks have`} no proposed model. Your free models can take ${set.length === 1 ? "it" : "them"}.`;
   return `<div class="banner free-tap" role="note"><p>${esc(why)}</p>
-<form method="post" action="${TASK_MODELS_PATH}/use-free" data-fetch><button type="submit" class="btn${primary ? " primary" : ""}">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "1 task" : `${set.length} tasks`}</button></form>
+<form method="post" action="${TASK_MODELS_PATH}/use-free" data-fetch data-rows><button type="submit" class="btn${primary ? " primary" : ""}">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "1 task" : `${set.length} tasks`}</button></form>
 <details><summary>Why free models are not proposed</summary><ul class="small">
 <li>A free model is rate-limited, and its providers may log prompts.</li>
 <li>The tap picks the cheapest free model of each task's strength, and another as its fallback.</li>
@@ -327,7 +328,7 @@ export function renderMain(input: PickerPageInput): string {
   });
   const rows = input.routes.map((r, i) => taskRow(r, input, i === fixAt)).join("\n");
   const accept = pending
-    ? `<form method="post" action="${TASK_MODELS_PATH}/accept" data-fetch><button type="submit" class="btn primary">Accept all with one tap</button></form>`
+    ? `<form method="post" action="${TASK_MODELS_PATH}/accept" data-fetch data-rows><button type="submit" class="btn primary">Accept all with one tap</button></form>`
     : "";
   const terms = input.freeTerms && input.offered.some((m) => m.free)
     ? `<li>${esc(input.freeTerms.text)} ${input.freeTerms.links.map((l) => newTab(l, "ext")).join(" · ")}</li>`
@@ -566,11 +567,10 @@ export async function handleTaskModels(
   }
   // "Ask Admin for help": the item's name only.
   if (viewer !== "friend") return new Response(null, { status: 403 });
-  const refused = changes.length ? await changeTasks(db, userId, changes, now) : undefined;
-  if (refused) return refuse(refused);
   await db
     .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
     .bind(userId, "Model for each task", "asked for help choosing a model for each task", now.toISOString())
     .run();
-  return said({ ...saved, asked: "1" });
+  const asked = { asked: "1" };
+  return wantsJson ? json({ said: flashFrom(new URLSearchParams(asked)).said }) : said(asked);
 }

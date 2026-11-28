@@ -146,9 +146,11 @@ every form posts and redirects back with what it said in the address. One
 solid blue button at a time: Save while a row is changed, else **Accept all
 with one tap**, else the free tap, else the first row's fix for a task with
 no model; this last screen has no Next while the checklist's next item is
-not built. Accept all, the free tap and Ask Admin for help, sent in place,
-carry the rows changed and not saved: those are saved as chosen in the same
-request, all or none, and the tap leaves them as chosen.
+not built. Accept all and the free tap, sent in place, carry the rows
+changed and not saved: those are saved as chosen in the same request, all
+or none, and the tap leaves them as chosen. Ask Admin for help saves
+nothing: in place, its answer shows in the banner only, and the changed
+rows stay as they are, still to save.
 
 - a task uses only its saved choice. A task with no saved choice has no
   model; migration 0013 saved, as an accepted choice with no fallback, the one
