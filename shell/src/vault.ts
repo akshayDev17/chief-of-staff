@@ -101,6 +101,30 @@ export async function openItem(db: D1Database, vaultKey: CryptoKey, userId: stri
   return new TextDecoder().decode(plain);
 }
 
+// A user's file (src/files.ts) is sealed with the same user key, bound to
+// the user and the file's R2 key, so a file copied to another user's prefix
+// or another name does not open. The whole file is in memory while sealed.
+const fileAad = (userId: string, key: string) => `file\0${userId}\0${key}`;
+
+export async function sealUserFile(db: D1Database, vaultKey: CryptoKey, userId: string, key: string, bytes: Uint8Array<ArrayBuffer>, now: Date): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+  const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encode(fileAad(userId, key)) }, await userKey(db, vaultKey, userId, now), bytes);
+  const out = new Uint8Array(IV_BYTES + sealed.byteLength);
+  out.set(iv);
+  out.set(new Uint8Array(sealed), IV_BYTES);
+  return out;
+}
+
+// The file's bytes. A file sealed for another user or key fails, and so
+// does any file of a user who has no key, since nothing of theirs was sealed.
+export async function openUserFile(db: D1Database, vaultKey: CryptoKey, userId: string, key: string, sealed: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const row = await db.prepare("SELECT wrapped_key FROM vault_keys WHERE user_id = ?").bind(userId).first<{ wrapped_key: string }>();
+  if (!row) throw new Error(`user ${userId} has no key, so no file of theirs was sealed`);
+  const userKey = await unwrapUserKey(vaultKey, row.wrapped_key, userId);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.slice(0, IV_BYTES), additionalData: encode(fileAad(userId, key)) }, userKey, sealed.slice(IV_BYTES));
+  return new Uint8Array(plain);
+}
+
 // Removes one item; nothing to do when there is none.
 export async function deleteItem(db: D1Database, userId: string, name: string): Promise<void> {
   await db.prepare("DELETE FROM vault_items WHERE user_id = ? AND name = ?").bind(userId, name).run();

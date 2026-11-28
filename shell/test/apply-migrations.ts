@@ -6,6 +6,11 @@ declare global {
     interface Env {
       DB: D1Database;
       TEST_MIGRATIONS: import("cloudflare:test").D1Migration[];
+      CHIEF: DurableObjectNamespace<import("../src/objects/chief").Chief>;
+      RUN: DurableObjectNamespace<import("../src/objects/run").Run>;
+      OWNER: DurableObjectNamespace<import("../src/objects/owner").Owner>;
+      // Tests only (vitest.config.ts).
+      FILES: R2Bucket;
     }
   }
 }

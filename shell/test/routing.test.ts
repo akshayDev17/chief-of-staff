@@ -17,7 +17,7 @@ beforeAll(async () => {
 beforeEach(() => clearAccessKeyCache());
 afterEach(() => vi.restoreAllMocks());
 
-const send = (request: Request) => worker.fetch(request, { ...ENV, DB: env.DB, APP_ORIGIN });
+const send = (request: Request) => worker.fetch(request, { ...env, ...ENV, APP_ORIGIN });
 
 const signedIn = async (path: string, init: RequestInit = {}) => {
   serveCerts(() => [accessKey]);
