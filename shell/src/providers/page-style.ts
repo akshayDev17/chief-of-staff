@@ -125,7 +125,7 @@ ${MAKER_FILTER_CSS}
 
 .strip-wrap { padding: 2px 16px 14px; }
 /* One container split by 1px seams (the border colour showing through the gap). */
-.strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
+.strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
 .cell { display: grid; gap: 2px; text-align: left; padding: 10px 12px 9px; background: var(--surface); border: 0; border-bottom: 2px solid transparent; width: 100%; height: 100%; }
 .cell:hover { background: var(--raised); }
 /* Needs credit: the cell, with Add credits on its own line under the value
@@ -170,6 +170,8 @@ ${MAKER_FILTER_CSS}
 .meta.capped .clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .meta.capped .cg { flex: none; white-space: pre; }
 .meta.why { color: var(--text); white-space: normal; } /* the reason and its Details link always show whole */
+.meta.left { white-space: normal; } /* the settings link and Check again always show whole */
+.meta.left .link { white-space: nowrap; }
 .meta.why .fw { color: var(--negative); } /* Failed when used: the one red word on the row */
 .price { grid-column: 2; grid-row: 1; text-align: right; font-size: 14px; white-space: nowrap; }
 .tier { grid-column: 2; grid-row: 2; text-align: right; font-size: var(--fs-small); line-height: 18px; color: var(--muted); white-space: nowrap; }
@@ -179,13 +181,6 @@ ${MAKER_FILTER_CSS}
 .dash { color: var(--muted); }
 mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .acts-row { grid-column: 3; grid-row: 1 / span 2; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
-.ib { width: 32px; height: 32px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--control); background: var(--surface); border-radius: var(--radius-control); color: var(--text); padding: 0; text-decoration: none; transition: border-color var(--t), transform 120ms; }
-.ib svg { width: 14px; height: 14px; display: block; }
-.ib:hover { border-color: var(--control-hover); }
-.ib:active { transform: translateY(1px); }
-.ib.act { color: var(--accent); border-color: var(--accent-line); }
-.ib.act:hover { border-color: var(--accent); }
-.ib[disabled] { color: var(--disabled-ink); border-color: var(--border); background: var(--raised); cursor: not-allowed; transform: none; }
 .tbtn { min-height: 32px; padding: 0 12px; font-size: 13px; }
 .tbtn .ico { display: none; }
 .tbtn .ico svg { width: 13px; height: 13px; display: block; }
@@ -243,7 +238,6 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
   .chips { padding: 0 12px 10px; }
   .list-head { padding: 8px 12px; }
   .strip-wrap { padding: 2px 12px 12px; }
-  .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tbl-box { max-height: calc(64px * 6.5); padding: 4px 4px 6px; }
   .row { grid-template-columns: minmax(0, 1fr) auto; }
   .row .tier { display: none; }
@@ -256,9 +250,9 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
   .next-row .btn { width: 100%; }
   .err, .stale { margin: 10px 12px 0; }
 }
-@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } .bar i, .btn, .ib { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } .bar i, .btn { transition: none; } }
 `;
 
 // Without scripts: no search or filters (they need the script), every
 // failure's details open, and Check again beside every settings link.
-export const NOSCRIPT_STYLE = `.toolbar, .chips { display: none !important; } [data-det-panel][hidden] { display: grid !important; } form[data-check-for][hidden] { display: contents !important; } [data-det] { display: none; }`;
+export const NOSCRIPT_STYLE = `.toolbar, .chips { display: none !important; } [data-det-panel][hidden] { display: grid !important; } form[data-check-for][hidden] { display: contents !important; } a[data-allow] + form[data-check-for]::before { content: " · "; } [data-det] { display: none; }`;

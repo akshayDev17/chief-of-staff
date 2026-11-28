@@ -7,6 +7,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
+import { saveAccountList } from "../src/models/account-list";
 import { savePriceCap } from "../src/models/price-caps";
 import { CATALOG_VERSION } from "../src/prices/openrouter";
 import { writeSnapshot } from "../src/prices/store";
@@ -22,6 +23,9 @@ const NOW = new Date("2026-11-25T10:00:00Z");
 const plugins = { openrouter: testPlugin("openrouter", { routers: ["openrouter/auto"] }) };
 const basisNow = () => readSuggestionBasis(env.DB, plugins, ownerId);
 const dropRoutes = () => env.DB.prepare("DELETE FROM task_routes").run();
+// The owner's account's own list, leaving out `models`: they are not Ready.
+const leaveOut = (...models: string[]) =>
+  saveAccountList(env.DB, ownerId, "openrouter", TEST_CATALOG.models.map((m) => m.id).concat("openrouter/auto").filter((id) => !models.includes(id)), NOW);
 const BASE = "https://shell.test/chief-of-staff/models/setup/budgets";
 let key: TestKey;
 
@@ -95,8 +99,10 @@ describe("the suggested budget", () => {
     await routeTask(ownerId, "match", "test-gone");
     // The Smallest tasks are proposed Test Luna with Test Mini; no Middle model is Ready.
     expect(await basisNow()).toMatchObject({ from: "proposed", model: { model: "test-mini" }, perApplicationUsd: 0.016 });
+    // A failed call leaves a model Ready; the account's settings leaving them out does not.
     await recordTest(ownerId, "test-luna", "failed", "2026-11-27T09:30:00.000Z");
-    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+    expect(await basisNow()).toMatchObject({ from: "proposed", model: { model: "test-mini" } });
+    await leaveOut("test-luna", "test-mini");
     expect(await basisNow()).toBeUndefined();
   });
 
@@ -217,8 +223,7 @@ describe("Models › Setup › Budgets, before the budget is set", () => {
 
   it("gives a direct action when there is no suggestion: See models, with Set budget the one primary", async () => {
     await dropRoutes();
-    await recordTest(ownerId, "test-luna", "failed", "2026-11-27T09:30:00.000Z");
-    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+    await leaveOut("test-luna", "test-mini");
     const html = await page();
     expect(html).toContain("No suggestion yet: no model is ready.");
     expect(html).toContain('<a class="btn outline" href="/chief-of-staff/models/setup/providers#test" data-k="test">See models</a>');

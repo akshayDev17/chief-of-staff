@@ -175,7 +175,6 @@ export const ICON = {
   chev: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>',
   x: '<svg viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>',
   play: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v9l7.5-4.5z"/></svg>',
-  ext: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h4v4M13 3 7.5 8.5M11.5 9.5V13h-8.5V4.5H6.5"/></svg>',
   redo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 3v3h-3"/></svg>',
   cap: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 2.5h10M8 5v9.5M10.4 7.3c-.4-.8-1.2-1.2-2.4-1.2-1.3 0-2.2.7-2.2 1.6 0 2.3 4.8 1.2 4.8 3.6 0 1-1 1.7-2.5 1.7-1.2 0-2.2-.5-2.6-1.3"/></svg>',
   search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>',
@@ -376,14 +375,23 @@ function rowActions(r: TableRow, input: ModelsTableInput): string {
   const again = !kind && r.latest?.state === "failed";
   const title = kind ? BLOCK_TITLE[kind]! : again ? "Try it again now: one test call" : "Optional: one test call now";
   const test = `<form method="post" action="${action(p, "test")}" data-fetch class="inline"><input type="hidden" name="model" value="${id}"><button type="submit" class="btn tbtn${again ? " again" : ""}" data-k="t-${id}" data-busy="${again ? "Trying…" : "Testing…"}" title="${esc(title)}" aria-label="${again ? "Try again" : "Test"} ${name}"${kind ? " disabled" : ""}><span class="ico">${again ? ICON.redo : ICON.play}</span><span class="lbl">${again ? "Try again" : "Test"}</span></button></form>`;
-  if (kind !== "account") return `<span class="acts-row">${test}</span>`;
+  return `<span class="acts-row">${test}</span>`;
+}
+
+// A row the account's settings leave out: its reason, a labelled link to
+// those settings, then Check again, which reads the account's list in place.
+function leftOutMeta(r: TableRow, input: ModelsTableInput): string {
+  const { plugin } = input;
+  const id = esc(r.model);
+  const name = esc(shortName(r));
+  const short = esc(plugin.connect.guide.short);
   const settings = plugin.connect.guide.accountSettings;
   const checked = input.view.notice?.model === r.model && input.view.notice.kind === "left-out";
   const allow = settings
-    ? `<a class="ib act" href="${esc(settings.href)}" target="_blank" rel="noopener noreferrer" data-allow="${id}" data-k="al-${id}" title="Allow it in ${esc(settings.label)} (opens ${esc(new URL(settings.href).hostname)})" aria-label="Allow ${name} in ${esc(settings.label)}"${checked ? " hidden" : ""}>${ICON.ext}</a>`
+    ? `<a class="link ext" href="${esc(settings.href)}" target="_blank" rel="noopener noreferrer" data-allow="${id}" data-k="al-${id}" aria-label="Allow in settings: ${name}, in ${esc(settings.label)}"${checked ? " hidden" : ""}>Allow in settings</a>`
     : "";
-  const check = `<form method="post" action="${action(p, "check-account")}" data-fetch class="inline" data-check-for="${id}"${checked || !settings ? "" : " hidden"}><input type="hidden" name="model" value="${id}"><button type="submit" class="ib act" data-k="ac-${id}" data-busy="" title="Check again: reads your account's model list" aria-label="Check again whether ${name} is allowed">${ICON.redo}</button></form>`;
-  return `<span class="acts-row">${test}${allow}${check}</span>`;
+  const check = `<form method="post" action="${action(plugin.provider, "check-account")}" data-fetch class="inline" data-check-for="${id}"${checked || !settings ? "" : " hidden"}><input type="hidden" name="model" value="${id}"><button type="submit" class="link" data-k="ac-${id}" data-busy="Checking…" aria-label="Check again whether ${name} is allowed">Check again</button></form>`;
+  return `<span class="meta left" title="${esc(blockedReason(r, plugin) ?? "")}">Your ${short} settings leave it out · ${allow}${check}</span>`;
 }
 
 // "OpenRouter replied: 404 · Not Found · “No endpoints found …”", escaped.
@@ -474,7 +482,7 @@ function rowHtml(r: TableRow, input: ModelsTableInput, makerNames: Map<string, s
   const resultHere = view.results?.some((x) => x.model === r.model) ?? false;
   const plainMeta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span></span>`;
   let meta: string;
-  if (kind === "account") meta = `<span class="meta" title="${esc(blockedReason(r, plugin) ?? "")}">Your ${esc(plugin.connect.guide.short)} settings leave it out</span>`;
+  if (kind === "account") meta = leftOutMeta(r, input);
   else if (kind === "router") meta = `<span class="meta">Priced per call by the model it picks</span>`;
   else if (kind === "not_callable") meta = `<span class="meta" title="${esc(plugin.connect.notCallableReason(r.model))}">Can't be called · ${esc(plugin.connect.notCallableReason(r.model))}</span>`;
   else if (kind === "no_price") meta = `<span class="meta">No price yet · <span data-hl>${id}</span></span>`;

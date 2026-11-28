@@ -16,8 +16,12 @@ import { PAGE_SCRIPT } from "../src/providers/page-script";
 import { sha256Hex } from "../src/providers/openrouter";
 import { vaultSecrets } from "../src/providers/secrets";
 import { setBudget } from "../src/proxy/budgets";
-import { readConnection } from "../src/proxy/connections";
+import { readConnection, readHasCredit } from "../src/proxy/connections";
+import { handleTaskModels } from "../src/models/picker-page";
+import { TASK_MODELS_PATH } from "../src/paths";
 import { providersTable } from "./maker-dom";
+import { documentOf, type El } from "./mini-dom";
+import { pageScripts, runScript, type Sent } from "./script-dom";
 import { fakeFetch, ISSUED_KEY, keyReply, MODELS, type Overrides } from "./fake-sources";
 import { dumpEveryTable, userFor, VAULT_KEY } from "./test-plugin";
 
@@ -72,6 +76,37 @@ const visibleLines = (html: string): string[] =>
 // Every solid app-blue button: the one next step.
 const primaries = (html: string): string[] => [...html.matchAll(/class="btn(?: wide)? primary[^"]*"[^>]*>([^<]*)/g)].map((m) => m[1]!.trim());
 const rowOf = (html: string, model: string) => html.match(new RegExp(`<li class="row"[^>]*data-id="${model.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}"[\\s\\S]*?</li>`))![0];
+
+const PATH = new URL(BASE).pathname;
+// The page as the browser has it, its own script running: every request it
+// sends is recorded and answered by the app at `now`; `settle` waits for the
+// answer to be swapped in.
+async function inPlace(now: Date) {
+  const html = await (await get()).text();
+  const doc = documentOf(html);
+  const sent: Sent = [];
+  let answered: Promise<unknown> = Promise.resolve();
+  runScript(pageScripts(html), doc, `${BASE}?provider=openrouter`, sent, {
+    window: { addEventListener: () => {}, fetch: () => {}, history: {} },
+    // The browser's FormData of a stand-in form: its named inputs.
+    FormData: class extends FormData {
+      constructor(form?: El) {
+        super();
+        for (const input of form?.querySelectorAll("input[name]") ?? []) this.append(input.name, input.value);
+      }
+    },
+    fetch: (url, init) => {
+      const answer = handle(new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }), { now });
+      answered = answer;
+      return answer;
+    },
+  });
+  const settle = async () => {
+    await answered;
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+  return { doc, sent, settle };
+}
 
 // Connect, then come back from OpenRouter's page as it would send the user.
 async function connect(overrides: Overrides = {}): Promise<Response> {
@@ -278,8 +313,9 @@ describe("Connect OpenRouter", () => {
     const html = await (await get()).text();
     const row = rowOf(html, "anthropic/claude-sonnet-5.5");
     expect(row).toContain("Your OpenRouter settings leave it out");
-    expect(row).toContain('href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer" data-allow="anthropic/claude-sonnet-5.5"');
-    expect(row).toMatch(/<form method="post" action="[^"]+\/check-account" data-fetch class="inline" data-check-for="anthropic\/claude-sonnet-5.5" hidden>/);
+    // A labelled link straight to the settings, in the row's own line, so it shows whole at every width.
+    expect(row).toMatch(/<span class="meta left"[^>]*>Your OpenRouter settings leave it out · <a class="link ext" href="https:\/\/openrouter.ai\/settings\/privacy" target="_blank" rel="noopener noreferrer" data-allow="anthropic\/claude-sonnet-5.5"[^>]*>Allow in settings<\/a>/);
+    expect(row).toMatch(/<form method="post" action="[^"]+\/check-account" data-fetch class="inline" data-check-for="anthropic\/claude-sonnet-5.5" hidden>[\s\S]*?>Check again<\/button><\/form><\/span>/);
     expect(row).toMatch(/aria-label="Test Claude Sonnet 5.5" disabled/);
     // Still left out.
     let checked = await json(await post("/openrouter/check-account", { model: "anthropic/claude-sonnet-5.5" }, { json: true }));
@@ -292,6 +328,69 @@ describe("Connect OpenRouter", () => {
     expect(now).toContain("Now allowed for your account. It&#39;s ready for tasks.");
     expect(now).not.toContain("data-blocked");
     expect(checked.focus).toBe("t-anthropic/claude-sonnet-5.5");
+  });
+
+  it("redraws Refresh in place: the read stamp, the rows and the strip change with no reload", async () => {
+    await connect();
+    const later = new Date("2026-11-27T10:05:00Z");
+    const { doc, sent, settle } = await inPlace(later);
+    const stamp = () => doc.querySelector('[data-part="head"] .src')!.textContent;
+    const stateOf = (model: string) => doc.querySelector(`li.row[data-id="${model}"]`)!.getAttribute("data-state");
+    const cells = () => ["ready", "credit", "step"].map((k) => Number(doc.querySelector(`.cell[data-filter="${k}"] .v`)!.textContent));
+    expect(stamp()).toContain("06:00 UTC");
+    expect(stateOf("openai/gpt-6-luna")).toBe("ready");
+    const before = cells();
+    // The owner's settings on OpenRouter now leave out GPT-6 Luna too.
+    fetcher = fakeFetch({ userModels: () => Response.json({ data: MODELS.data.filter((m) => m.id !== "anthropic/claude-sonnet-5.5" && m.id !== "openai/gpt-6-luna") }) });
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`]);
+    expect(stamp()).toContain("10:05 UTC");
+    expect(stateOf("openai/gpt-6-luna")).toBe("step");
+    expect(doc.querySelector('li.row[data-id="openai/gpt-6-luna"] .meta')!.textContent).toContain("Your OpenRouter settings leave it out");
+    expect(cells()).toEqual([before[0]! - 1, before[1]!, before[2]! + 1]);
+    expect(doc.querySelector("[data-ends]")!.textContent).toBe(`${before.reduce((a, b) => a + b, 0)} models`);
+  });
+
+  it("gives Refresh back once its answer is in, even when the list it shows has not changed", async () => {
+    await connect();
+    const { doc, sent, settle } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const refresh = () => doc.querySelector('[data-part="head"] button[data-k="refresh"]')!;
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    await settle();
+    // Again within the minute: the list is the same, and the page says when it can be read again.
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    await settle();
+    expect(sent).toHaveLength(2);
+    expect(doc.querySelector('[data-part="err"]')!.textContent).toContain("The model list was read less than a minute ago.");
+    expect([refresh().disabled, refresh().getAttribute("aria-busy"), refresh().textContent]).toEqual([false, null, "Refresh"]);
+  });
+
+  it("links a left-out model's settings, then Check again reads the account's list in place, with no reload", async () => {
+    await connect();
+    const { doc, sent, settle } = await inPlace(NOW);
+    const model = "anthropic/claude-sonnet-5.5";
+    const link = doc.querySelector(`a[data-allow="${model}"]`)!;
+    const form = () => doc.querySelector(`form[data-check-for="${model}"]`)!;
+    expect([link.textContent, link.hidden, form().hidden]).toEqual(["Allow in settings", false, true]);
+    // Back from the settings tab: Check again in its place.
+    doc.fire("click", link);
+    await settle();
+    expect([doc.querySelector(`a[data-allow="${model}"]`)!.hidden, form().hidden]).toEqual([true, false]);
+    expect(form().querySelector("button")!.textContent).toBe("Check again");
+    doc.fire("submit", form());
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/check-account`]);
+    expect(doc.querySelector(`li.row[data-id="${model}"]`)!.textContent).toContain("Your OpenRouter settings still leave it out.");
+    expect(form().hidden).toBe(false);
+    // Allowed on OpenRouter since: Check again makes it Ready, in place.
+    fetcher = fakeFetch({ userModels: () => Response.json({ data: MODELS.data }) });
+    doc.fire("submit", form());
+    await settle();
+    const row = doc.querySelector(`li.row[data-id="${model}"]`)!;
+    expect(row.getAttribute("data-state")).toBe("ready");
+    expect(row.textContent).toContain("Now allowed for your account.");
+    expect(sent).toHaveLength(2);
   });
 
   it("gives a router a labelled Set price cap, takes the cap in place, and tests it under the cap", async () => {
@@ -346,10 +445,19 @@ describe("Connect OpenRouter", () => {
     expect(states(before)[free]).toBe("ready");
     expect(rowOf(before, "openai/gpt-6-luna")).toContain('<span class="pill warn">Needs credit</span>');
     expect(before).toMatch(/data-credit-act>Add credits<\/a>/);
-    // Credit is added on OpenRouter; the next visit reads the account line again.
-    fetcher = fakeFetch();
+    const tasks = async () => (await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW })).text();
+    const offered = (html: string) => [...html.matchAll(/<li [^>]*data-value="openrouter\|([^"]+)"/g)].map((m) => m[1]);
+    expect(offered(await tasks())).not.toContain("openai/gpt-6-luna");
+    // The earlier visits kept "no credit" on the connection.
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(false);
+    // Credit is bought on OpenRouter, the key limited to the $4 budget; the next
+    // visit, to either page, reads the account line again.
+    fetcher = fakeFetch({ currentKey: () => keyReply({ is_free_tier: false, limit: 4, limit_remaining: 4 }) });
+    expect(offered(await tasks())).toContain("openai/gpt-6-luna");
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(true);
     const after = await (await get()).text();
     expect(states(after)["openai/gpt-6-luna"]).toBe("ready");
+    expect(Object.values(states(after))).not.toContain("credit");
     expect(after).toMatch(/data-credit-act hidden>Add credits<\/a>/);
     expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
   });

@@ -231,7 +231,7 @@ export const PAGE_SCRIPT = String.raw`
         each(fresh, function (p, i) {
           if (p.hasAttribute("data-keep")) return;
           var name = p.getAttribute("data-part"), outer = p.outerHTML;
-          if (S.last[name] !== outer) live[i].replaceWith(p);
+          if (S.last[name] !== outer || live[i].querySelector('[aria-busy="true"]')) live[i].replaceWith(p);
           S.last[name] = outer;
         });
       }
