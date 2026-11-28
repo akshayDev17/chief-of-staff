@@ -12,9 +12,24 @@
 //
 // The one source is OpenRouter's models API (src/prices/openrouter.ts), which
 // also gives the model list each user chooses from.
+//
+// Strength (src/prices/tiers.ts) needs each tiered model's hosts, from its
+// endpoints list: about 290 more reads, one per model, six at a time. The
+// daily refresh reads every model's (a Cron Trigger has 15 minutes and, on
+// Workers Paid, 10,000 subrequests,
+// https://developers.cloudflare.com/workers/platform/limits/, read
+// 2026-11-28). Refresh model list, which the user waits on, reads only the
+// models that are new, whose headline price changed or whose hosts were last
+// not read; every other model keeps its last figure. A list that cannot be
+// read keeps the model's last figure from hosts while its headline holds,
+// and is otherwise its headline price. The daily refresh also works out the
+// month's lines, once, at the month's first good read; a refresh before any
+// month has lines works them out then, and none ever replaces a month's.
 
-import { readOpenRouter } from "./openrouter";
-import { addAlert, currentSnapshot, readSnapshotRows, readStoredCatalog, writeSnapshot } from "./store";
+import { readAllHosts, readOpenRouter } from "./openrouter";
+import { headlineFigure, headlineFigures, headlinePrices, linesOver, strengthKey, tieredModels } from "./strength";
+import { addAlert, currentSnapshot, readFigures, readLatestLines, readSnapshotRows, readStoredCatalog, writeSnapshot, type StoredFigure } from "./store";
+import { figureOf, type Lines } from "./tiers";
 import { rowKey, type PriceRow, type SourceId, type SourceResult } from "./types";
 
 export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: string[] } {
@@ -47,6 +62,42 @@ export interface RefreshInput {
   db: D1Database;
   fetcher: typeof fetch;
   now: Date;
+  // The daily refresh (the Cron Trigger), not Refresh model list.
+  daily?: boolean;
+  // The pause before a busy endpoints list is read again.
+  hostRetryPauseMs?: number;
+}
+
+// The figures for a snapshot of `rows` (src/prices/strength.ts). `previous`:
+// the last snapshot's figures; `before`: its headline prices.
+async function figuresFor(
+  input: RefreshInput,
+  rows: PriceRow[],
+  catalog: Parameters<typeof tieredModels>[1],
+  previous: Map<string, StoredFigure>,
+  before: Map<string, { input: number; output: number }>,
+): Promise<StoredFigure[]> {
+  const readAt = input.now.toISOString();
+  const targets = tieredModels(rows, catalog);
+  const headlineHolds = (t: (typeof targets)[number]) => {
+    const b = before.get(strengthKey(t));
+    return b !== undefined && b.input === t.headline.input && b.output === t.headline.output;
+  };
+  const toRead = targets.filter((t) => {
+    if (t.free) return false;
+    if (input.daily) return true;
+    const p = previous.get(strengthKey(t));
+    return !p || p.basis === "unread" || !headlineHolds(t);
+  });
+  const hosts = await readAllHosts(input.fetcher, toRead.map((t) => t.model), input.hostRetryPauseMs);
+  return targets.map((t) => {
+    if (t.free) return headlineFigure(t, readAt);
+    const read = hosts.get(t.model);
+    if (read) return { provider: t.provider, model: t.model, free: false, ...figureOf(read, t.headline, readAt) };
+    const p = previous.get(strengthKey(t));
+    if (p && p.basis !== "unread" && headlineHolds(t)) return p;
+    return headlineFigure(t, readAt);
+  });
 }
 
 export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: number; results: SourceResult[] }> {
@@ -84,6 +135,14 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
   });
   const failed = results.filter((r) => !r.ok);
   const catalog = catalogRead ?? (last ? await readStoredCatalog(db, last.id) : undefined);
+  // A failed read keeps the last snapshot's figures with its rows.
+  const previous = last ? await readFigures(db, last.id) : [];
+  const figures = read.ok
+    ? await figuresFor(input, merged.rows, catalog, new Map(previous.map((f) => [strengthKey(f), f])), headlinePrices(lastRows))
+    : previous.length ? previous : headlineFigures(merged.rows, catalog, now.toISOString());
+  const latestLines = await readLatestLines(db);
+  const lines: Lines | undefined =
+    read.ok && (!latestLines || (input.daily && latestLines.month < now.toISOString().slice(0, 7))) ? linesOver(figures, now) : undefined;
   let snapshotId: number;
   try {
     snapshotId = await writeSnapshot(db, {
@@ -92,6 +151,8 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
       results,
       rows: merged.rows,
       catalog,
+      figures,
+      ...(lines ? { lines } : {}),
     });
   } catch (error) {
     const detail = `could not store the snapshot, the previous one stays current: ${error instanceof Error ? error.message : String(error)}`;

@@ -22,3 +22,6 @@ export const SOURCES: Record<SourceId, SourceInfo> = {
 };
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+
+// One model's hosts on OpenRouter, each with its own price (src/prices/openrouter.ts parseHosts).
+export const openRouterEndpointsUrl = (model: string): string => `https://openrouter.ai/api/v1/models/${encodeURI(model)}/endpoints`;

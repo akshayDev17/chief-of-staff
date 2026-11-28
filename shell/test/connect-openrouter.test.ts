@@ -723,7 +723,11 @@ describe("Connect OpenRouter", () => {
     fetcher = fakeFetch();
     const refreshed = await post("/openrouter/refresh", {}, { now: later, json: true });
     expect(refreshed.status).toBe(200);
-    expect(fetcher.sent.map((s) => new URL(s.url).pathname)).toEqual(["/api/v1/models", "/api/v1/models/user"]);
+    const paths = fetcher.sent.map((s) => new URL(s.url).pathname);
+    expect([paths[0], paths.at(-1)]).toEqual(["/api/v1/models", "/api/v1/models/user"]);
+    // Every model's hosts were last not read (the fake answers 404), so this
+    // read tries them again; nothing else is read.
+    expect(paths.slice(1, -1).every((p) => /^\/api\/v1\/models\/.+\/endpoints$/.test(p))).toBe(true);
     const again = await json(await post("/openrouter/refresh", {}, { now: new Date("2026-11-27T10:05:30Z"), json: true }));
     expect(again.main).toContain("Refresh it again from 10:06 UTC");
     // Without the script, the same problem shows once after the redirect.

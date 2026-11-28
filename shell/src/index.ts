@@ -1,6 +1,7 @@
 import { parseSort, renderPriceTablePage } from "./prices/page";
 import { refreshPrices } from "./prices/refresh";
-import { currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
+import { readStrength } from "./prices/strength";
+import { currentSnapshot, readSnapshotRows, readStoredCatalog, recentAlerts } from "./prices/store";
 import { accessDenied, readAccessIdentity } from "./access";
 import { readAppOrigin } from "./app-config";
 import { readProviderPlugins, type ProvidersEnv } from "./providers/index";
@@ -99,11 +100,14 @@ export default {
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === PRICE_TABLE_PATH && request.method === "GET") {
       const snapshot = await currentSnapshot(env.DB);
+      const rows = snapshot ? await readSnapshotRows(env.DB, snapshot.id) : [];
+      const catalog = snapshot ? await readStoredCatalog(env.DB, snapshot.id) : undefined;
       const html = renderPriceTablePage({
         snapshot,
-        rows: snapshot ? await readSnapshotRows(env.DB, snapshot.id) : [],
+        rows,
         alerts: await recentAlerts(env.DB),
         sort: parseSort(url.searchParams),
+        strength: await readStrength(env.DB, snapshot, { rows, ...(catalog ? { catalog } : {}) }),
       });
       return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
@@ -112,7 +116,7 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
-    const { results } = await refreshPrices({ db: env.DB, fetcher: fetch, now });
+    const { results } = await refreshPrices({ db: env.DB, fetcher: fetch, now, daily: true });
     console.log(`price refresh: ${JSON.stringify(results)}`);
   },
 } satisfies ExportedHandler<Env>;

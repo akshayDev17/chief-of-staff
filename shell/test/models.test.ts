@@ -57,7 +57,7 @@ const withFree = () =>
 describe("the model list", () => {
   it("lists every model OpenRouter lists with tool use, priced and tiered, and the router without a price until it has a cap", async () => {
     plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], noToolUse: ["test-mini"] });
-    const rows = await listOffer(env.DB, plugins(), userId, "openrouter");
+    const rows = (await listOffer(env.DB, plugins(), userId, "openrouter")).rows;
     // test-mini lists no tool use: it never reaches the list.
     expect(rows.map((r) => r.model)).toEqual(["openrouter/auto", "test-luna", "test-sonnet"]);
     expect(rows.find((r) => r.model === "test-luna")).toMatchObject({ price: { input: 0.1, output: 0.5, source: "openrouter-models" }, tier: "Smallest", callable: true, accountLeftOut: false });
@@ -72,7 +72,7 @@ describe("the model list", () => {
 
   it("marks a model the user's own account leaves out, and tests it with no call", async () => {
     await accountList(["test-luna", "test-sonnet"]);
-    const rows = await listOffer(env.DB, plugins(), userId, "openrouter");
+    const rows = (await listOffer(env.DB, plugins(), userId, "openrouter")).rows;
     expect(rows.find((r) => r.model === "test-mini")?.accountLeftOut).toBe(true);
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-mini", now: NOW })).toMatchObject({ kind: "refused", reason: "cannot_call" });
     expect(plugin.calls).toEqual([]);
@@ -140,7 +140,7 @@ describe("Ready, with no test call", () => {
     // A capped router is Ready.
     await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 1, output: 2 }, NOW);
     expect(await ready()).toEqual(["openrouter/auto", "test-luna", "test-sonnet"]);
-    const offer = (await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "test-luna")!;
+    const offer = ((await listOffer(env.DB, plugins(), userId, "openrouter")).rows).find((r) => r.model === "test-luna")!;
     expect(rowState({ ...offer, price: undefined }, true)).toBe("step");
   });
 
@@ -185,7 +185,7 @@ describe("a router's price cap", () => {
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "openrouter/auto", now: NOW })).toMatchObject({ kind: "refused", reason: "no_cap" });
     expect(plugin.calls).toEqual([]);
     await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 3, output: 15 }, NOW);
-    const auto = (await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "openrouter/auto")!;
+    const auto = ((await listOffer(env.DB, plugins(), userId, "openrouter")).rows).find((r) => r.model === "openrouter/auto")!;
     expect(auto).toMatchObject({ cap: { input: 3, output: 15 }, price: { input: 3, output: 15 }, tier: "Strongest" });
     expect(blockKind(auto)).toBeUndefined();
     plugin.replies.push(ok({ input: 9, output: 2 }, { model: "openrouter/auto" }));

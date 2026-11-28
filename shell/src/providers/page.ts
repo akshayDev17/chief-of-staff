@@ -258,7 +258,7 @@ export async function readPageState(
   if (connection && connected) {
     // The live read first: its credit figure is the one the rows' Ready rule takes.
     if (!state.keepCard) state.account = (await readAccountLive(db, plugin, userId)) ?? "unread";
-    const [{ rows }, catalog] = await Promise.all([readTable(db, plugins, userId, provider), readCurrentCatalog(db)]);
+    const [{ rows, lines }, catalog] = await Promise.all([readTable(db, plugins, userId, provider), readCurrentCatalog(db)]);
     state.ready = rows.filter((r) => r.state === "ready").length;
     // A failed result under a row names the tasks that fall to their fallback.
     const failed = (view.results ?? []).filter((res) => rows.find((r) => r.model === res.model)?.latest?.state === "failed");
@@ -273,6 +273,7 @@ export async function readPageState(
       usedBy,
       view,
       problem: flash.problem ? { text: flash.problem, details: flash.details } : undefined,
+      ...(lines ? { lines } : {}),
       now,
     };
     state.step = nextStep({ connected: true, view, catalogCurrent });

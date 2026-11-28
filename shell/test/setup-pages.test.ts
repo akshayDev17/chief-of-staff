@@ -8,6 +8,7 @@
 // its filters are buttons outside any form.
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { readStrength } from "../src/prices/strength";
 import { handleTaskModels } from "../src/models/picker-page";
 import { readTaskRoutes } from "../src/models/tasks";
 import { SETUP_TABS } from "../src/models/setup-tabs";
@@ -245,7 +246,7 @@ describe("Models › Setup", () => {
 
   it("sends nothing and loads nothing when Admin · Price table's sort select changes; its Sort button sends the form", async () => {
     const snapshot = (await currentSnapshot(env.DB))!;
-    const html = renderPriceTablePage({ snapshot, rows: await readSnapshotRows(env.DB, snapshot.id), alerts: await recentAlerts(env.DB), sort: { column: "provider", dir: "asc" } });
+    const html = renderPriceTablePage({ snapshot, rows: await readSnapshotRows(env.DB, snapshot.id), alerts: await recentAlerts(env.DB), sort: { column: "provider", dir: "asc" }, strength: await readStrength(env.DB, snapshot) });
     const sent: Sent = [];
     const form = { submit: () => sent.push("submit"), requestSubmit: () => sent.push("submit") };
     const select = Object.assign(element({ id: "price-sort" }), { form, value: "input-desc" });

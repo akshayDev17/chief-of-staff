@@ -170,9 +170,12 @@ describe("a $0 OpenRouter account", () => {
     const picker = await (await tasks()).text();
     expect(picker).toContain("Your Ready models are all free, so none is proposed.");
     expect(picker).toContain(`Use my free models for ${smallest.length} tasks`);
-    // The fixture's one Middle model with tool use is left out by the account's settings.
-    expect(picker).toContain("No Middle model is ready yet.</span>");
-    expect(picker).toContain('href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle#test">See Middle models</a>');
+    // Under the lines the fixture's own prices draw, its one Middle model
+    // (DeepSeek V4.1 Flash, $0.38 typical) is paid, so it waits for credit.
+    expect(picker).toContain("No Middle model is ready yet. Paid ones need credit.</span>");
+    // Its rows lead to Add credits, not to the Middle models on Providers.
+    expect(picker).toMatch(/href="https:\/\/openrouter\.ai\/settings\/credits"[^>]*>Add credits<\/a>/);
+    expect(picker).not.toContain("See Middle models");
     const used = await tasks("/use-free", {});
     expect(used.status).toBe(303);
     expect(used.headers.get("location")).toBe(`${TASKS_URL}?free=${smallest.length}`);
