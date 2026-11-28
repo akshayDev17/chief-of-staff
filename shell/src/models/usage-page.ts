@@ -15,8 +15,8 @@
 //
 // Each model is named as OpenRouter's live list names it, its ID beside it;
 // a model no longer in the list is shown by its ID. Its maker is named as on
-// Providers: OpenRouter's own models carry the plug-in's own name. The app holds no list of
-// its own. A model that list marks free (prices/openrouter.ts
+// Providers: OpenRouter's own models carry the plug-in's own name. The app
+// holds no list of its own. A model that list marks free (prices/openrouter.ts
 // isTrulyFreeTextModel) carries "free"; every other one is paid.
 //
 // Both tables list the dearest first, ties by name: where the money went.
