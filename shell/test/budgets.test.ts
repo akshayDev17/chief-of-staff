@@ -107,19 +107,53 @@ describe("the suggested budget", () => {
     });
   });
 
-  it("labels a free model free, at the $1 floor", async () => {
+  describe("when every model it could be worked from is free", () => {
     const free = { id: "maker/free-one:free", name: "Maker: Free One (free)", tools: true, free: true as const };
-    await writeSnapshot(env.DB, {
-      takenAt: "2026-11-28T06:00:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, free] },
-      rows: [row(free.id, "input", 0), row(free.id, "output", 0)],
+    beforeEach(async () => {
+      await writeSnapshot(env.DB, {
+        takenAt: "2026-11-28T06:00:00Z", status: "good", results: [],
+        catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, free] },
+        // Test Sonnet stays priced and usable: only the tasks' choices make the basis free.
+        rows: [row(free.id, "input", 0), row(free.id, "output", 0), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
+      });
+      await recordTest(ownerId, free.id);
     });
-    await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
-    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
-    await recordTest(ownerId, free.id);
-    const html = await page("?per_day=5");
-    expect(html).toContain('From <strong>Maker: Free One (free)</strong> <span class="pill free">free</span>, the dearest model that passed its test.');
-    expect(html).toContain('<span class="num big" data-sugg>$1</span>');
+
+    it("names $1 the floor, the smallest budget that switches calls on, not a dearest model's estimate", async () => {
+      await routeTask(ownerId, "match", free.id);
+      const html = await page("?per_day=50");
+      expect(html).toContain('<p class="label">Suggested <span class="pill">floor</span></p>');
+      expect(html).toContain('<span class="num big" data-sugg>$1</span> <span class="unit">a month</span>');
+      expect(html).toContain('<p class="from">The smallest budget that switches model calls on.</p>\n<p class="from">Your tasks use only free models.</p>');
+      expect(html).toContain("<li>Every model your tasks use is free on OpenRouter's list, so a call costs nothing.</li>");
+      expect(html).toContain("Set $1 a month");
+      for (const gone of ["dearest", "estimate", "checked on", "data-per-day ", "Applications a day you plan"]) expect(html).not.toContain(gone);
+      expect(html).not.toContain('<div class="bb" data-budget-bar>');
+    });
+
+    it("says every tested model is free before any task has one", async () => {
+      await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
+      await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+      const html = await page();
+      expect(html).toContain('<p class="from">Every model that passed its test is free.</p>');
+      expect(html).not.toContain("dearest");
+    });
+
+    it("names the floor once the budget is set, with no about", async () => {
+      await routeTask(ownerId, "match", free.id);
+      await setBudget(env.DB, ownerId, "openrouter", 5, "typed", NOW);
+      const html = await page();
+      expect(html).toContain('<summary>Suggested: <span data-sugg>$1</span> a month, the floor</summary>');
+      expect(html).not.toContain("dearest");
+    });
+
+    it("goes back to the paid model's estimate once a task uses one", async () => {
+      await routeTask(ownerId, "match", free.id, "test-sonnet");
+      const html = await page("?per_day=5");
+      expect(html).toContain('<span class="pill warn">estimate</span>');
+      expect(html).toContain("From <strong>Test Sonnet</strong>, the dearest model your tasks use.");
+      expect(html).not.toContain("floor");
+    });
   });
 
   it("parses any positive dollar amount, with no upper limit", () => {
