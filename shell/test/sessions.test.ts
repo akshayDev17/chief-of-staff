@@ -96,6 +96,28 @@ describe("sessions.cos", () => {
     expect((await call("GET", `${base()}/s2`)).body!.events).toEqual([]);
   });
 
+  it("refuses an event or a session state too large for its row, counting UTF-8 bytes", async () => {
+    const { call } = await newRun();
+    // 700,000 characters, 2,100,000 bytes: three bytes each in UTF-8.
+    const wide = "€".repeat(700_000);
+    const created = await call("POST", base(), { sessionId: "s0", state: { answers: wide } });
+    expect(created.status).toBe(413);
+    expect(created.body!.error).toContain("session state is");
+    expect((await call("GET", `${base()}/s0`)).status).toBe(404);
+
+    const t = (await call("POST", base(), { sessionId: "s1", state: { answers: "a".repeat(1_000_000) } })).body!.lastUpdateTime as number;
+    const big = await call("POST", `${base()}/s1/events`, { event: event("e1", t + 1, { content: { parts: [{ text: wide }] } }), lastUpdateTime: t });
+    expect(big.status).toBe(413);
+    expect(big.body!.error).toContain("event is");
+    const grown = await call("POST", `${base()}/s1/events`, { event: event("e2", t + 1, { actions: { stateDelta: { effects: "b".repeat(1_000_000) } } }), lastUpdateTime: t });
+    expect(grown.status).toBe(413);
+    expect(grown.body!.error).toContain("session state is");
+    const session = (await call("GET", `${base()}/s1`)).body as unknown as Session;
+    expect(session.events).toEqual([]);
+    expect(Object.keys(session.state)).toEqual(["answers"]);
+    expect(session.lastUpdateTime).toBe(t);
+  });
+
   it("answers only for the run's own user", async () => {
     const { call } = await newRun();
     await call("POST", base(), { sessionId: "s1" });

@@ -5,7 +5,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { RUN_STEPS, runObjectName, STORAGE_CHECK_USER_PREFIX } from "../src/objects/run";
-import { readStorageCheck } from "../src/objects/storage-check";
+import { answerStorageCheck, readStorageCheck } from "../src/objects/storage-check";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
 import { dumpEveryTable } from "./test-plugin";
 
@@ -69,7 +69,23 @@ describe("the run storage check", () => {
     await post({ action: "answer", user: userId, run: runId });
     const again = await post({ action: "answer", user: userId, run: runId });
     expect(again.status).toBe(409);
-    expect(await again.text()).toContain("is finished and cannot become running");
+    expect(await again.text()).toContain("the check run is finished; only a parked run takes an answer");
+    expect((await readStorageCheck(env, userId, runId)).session!.events).toHaveLength(2);
+  });
+
+  it("leaves the run parked and answerable when its answer is not taken", async () => {
+    const { userId, runId } = idsOf((await post({ action: "seed" })).headers.get("location")!);
+    const refused = await answerStorageCheck(env, userId, runId, "€".repeat(700_000), new Date()).then(
+      () => "taken",
+      (error: Error) => error.message,
+    );
+    expect(refused).toContain("the answer was not appended: 413");
+    const parked = await readStorageCheck(env, userId, runId);
+    expect(parked.run).toMatchObject({ state: "parked" });
+    expect(parked.moves).toEqual([]);
+    expect(parked.session!.events).toHaveLength(1);
+    expect((await post({ action: "answer", user: userId, run: runId })).status).toBe(303);
+    expect((await readStorageCheck(env, userId, runId)).run).toMatchObject({ state: "finished" });
   });
 
   it("accepts only its own test runs' ids", async () => {

@@ -194,6 +194,7 @@ export class Run extends DurableObject<unknown> {
     const named = this.ctx.id.name;
     if (named !== undefined && named !== name) throw new Error(`this Run object is named for ${named}`);
     if (!start.type || !start.imageTag) throw new Error("a run starts with a type and an image tag");
+    if (start.promptVersion === "") throw new Error("a prompt version label is not empty");
     const existing = this.row();
     if (existing) {
       if (existing.user_id !== start.userId || existing.run_id !== start.runId || existing.type !== start.type || existing.image_tag !== start.imageTag) {

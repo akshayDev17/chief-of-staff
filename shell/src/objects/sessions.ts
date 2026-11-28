@@ -16,15 +16,16 @@
 //
 // HTTP, JSON bodies, ADK's own camelCase field names (`Event.model_dump(
 // mode="json", by_alias=True, exclude_none=True)` on the Python side):
-//   POST   /apps/<app>/users/<user>/sessions                 {state?, sessionId?} -> 200 session | 409 exists
+//   POST   /apps/<app>/users/<user>/sessions                 {state?, sessionId?} -> 200 session | 409 exists | 413 too large
 //   GET    /apps/<app>/users/<user>/sessions                 -> 200 {sessions: [session without events]}
 //   GET    /apps/<app>/users/<user>/sessions/<id>[?numRecentEvents=<n>&afterTimestamp=<s>] -> 200 session | 404
 //   DELETE /apps/<app>/users/<user>/sessions/<id>            -> 204
-//   POST   /apps/<app>/users/<user>/sessions/<id>/events     {event, lastUpdateTime} -> 200 {lastUpdateTime, stored} | 404 | 409 stale
+//   POST   /apps/<app>/users/<user>/sessions/<id>/events     {event, lastUpdateTime} -> 200 {lastUpdateTime, stored} | 404 | 409 stale | 413 too large
 // A session is {appName, userId, id, state, lastUpdateTime, events}; times
 // are seconds since the epoch, as ADK keeps them. An event appended twice
 // (a retried request) is stored once and answered as stored. A partial event
-// is not stored, as in ADK. Every refusal is {error: <reason>} with a 4xx.
+// is not stored, as in ADK. An event, or the session state it would make,
+// over 1.9 MB in UTF-8 is refused as too large. Every refusal is {error: <reason>} with a 4xx.
 //
 // The tables are made by the `Run` object's first storage step (run.ts).
 
@@ -37,8 +38,10 @@ export interface Session {
   events: unknown[];
 }
 
-// SQLite's limit on one row's value in a Durable Object.
-const MAX_EVENT_BYTES = 2_000_000;
+// A Durable Object's SQLite keeps at most 2 MB in one row, counted in UTF-8
+// bytes; a stored event or state keeps room under it for the row's other
+// columns.
+const MAX_VALUE_BYTES = 1_900_000;
 
 const TEMP_PREFIX = "temp:";
 const SHARED_PREFIXES = ["app:", "user:"];
@@ -67,6 +70,14 @@ function sessionScoped(state: Record<string, unknown>): Record<string, unknown> 
 
 const readState = (text: string): Record<string, unknown> => JSON.parse(text) as Record<string, unknown>;
 
+// The value as stored, refused when it would not fit in its row.
+function storable(what: string, value: unknown): string {
+  const text = JSON.stringify(value);
+  const bytes = new TextEncoder().encode(text).byteLength;
+  if (bytes > MAX_VALUE_BYTES) throw new Refusal(413, `${what} is ${bytes} bytes; at most ${MAX_VALUE_BYTES} are kept`);
+  return text;
+}
+
 interface SessionKey {
   appName: string;
   userId: string;
@@ -82,13 +93,14 @@ function sessionRow(sql: SqlStorage, key: SessionKey) {
 export function createSession(sql: SqlStorage, input: { appName: string; userId: string; sessionId?: string; state?: Record<string, unknown> }, nowSeconds: number): Session {
   const id = input.sessionId ?? crypto.randomUUID();
   const state = sessionScoped(input.state ?? {});
+  const stateText = storable("session state", state);
   if (sessionRow(sql, { appName: input.appName, userId: input.userId, sessionId: id })) throw new Refusal(409, `session ${id} already exists`);
   sql.exec(
     "INSERT INTO sessions (app_name, user_id, id, state, create_time, update_time) VALUES (?, ?, ?, ?, ?, ?)",
     input.appName,
     input.userId,
     id,
-    JSON.stringify(state),
+    stateText,
     nowSeconds,
     nowSeconds,
   );
@@ -160,8 +172,7 @@ export function appendEvent(
   if (read.partial) return { lastUpdateTime: row.update_time, stored: false };
   const delta = read.delta ? sessionScoped(read.delta) : {};
   const kept = isObject(event) && read.delta ? { ...event, actions: { ...(event.actions as Record<string, unknown>), stateDelta: delta } } : event;
-  const text = JSON.stringify(kept);
-  if (text.length > MAX_EVENT_BYTES) throw new Refusal(413, `event is ${text.length} bytes; at most ${MAX_EVENT_BYTES} are kept`);
+  const text = storable("event", kept);
   const existing = sql
     .exec<{ event: string }>("SELECT event FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? AND id = ?", key.appName, key.userId, key.sessionId, read.id)
     .toArray()[0];
@@ -171,9 +182,10 @@ export function appendEvent(
     throw new Refusal(409, `event ${read.id} is already stored with other contents`);
   }
   if (row.update_time > lastUpdateTime) throw new Refusal(409, "stale session: it changed after it was read");
+  const state = Object.keys(delta).length > 0 ? storable("session state", { ...readState(row.state), ...delta }) : undefined;
   storage.transactionSync(() => {
-    if (Object.keys(delta).length > 0) {
-      sql.exec("UPDATE sessions SET state = ? WHERE app_name = ? AND user_id = ? AND id = ?", JSON.stringify({ ...readState(row.state), ...delta }), key.appName, key.userId, key.sessionId);
+    if (state !== undefined) {
+      sql.exec("UPDATE sessions SET state = ? WHERE app_name = ? AND user_id = ? AND id = ?", state, key.appName, key.userId, key.sessionId);
     }
     sql.exec(
       "INSERT INTO events (app_name, user_id, session_id, id, invocation_id, timestamp, event) VALUES (?, ?, ?, ?, ?, ?, ?)",

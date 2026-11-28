@@ -118,6 +118,15 @@ describe("a Run object's record", () => {
     expect(await refusal(stub.begin(start(runId, { promptVersion: "prompts-4" })))).toContain("already records prompt version prompts-3");
   });
 
+  it("refuses an empty prompt version at begin, as when it is reported later", async () => {
+    const { runId, stub } = freshRun();
+    expect(await refusal(stub.begin(start(runId, { promptVersion: "" })))).toBe("a prompt version label is not empty");
+    expect(await stub.record()).toBeNull();
+    expect((await stub.begin(start(runId))).promptVersion).toBeNull();
+    expect(await refusal(stub.begin(start(runId, { promptVersion: "" })))).toBe("a prompt version label is not empty");
+    expect((await stub.recordPromptVersion("prompts-3")).promptVersion).toBe("prompts-3");
+  });
+
   it("moves running, parked, running, finished, and refuses any other move", async () => {
     const { runId, stub } = freshRun();
     expect(await refusal(stub.park())).toBe("this Run object holds no run yet");

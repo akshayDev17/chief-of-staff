@@ -8,8 +8,8 @@
 // (Run.seedStorageCheck), then ends the instance (Run.evict). Opening the
 // check wakes a new instance, whose constructor applies the last step; the
 // page shows the object's version table, the run's record and moves, and
-// its session. Answer resumes the run, appends the answer to its session and
-// finishes it. Nothing is written to D1, and no object but the check's own
+// its session. Answer appends the answer to the parked run's session, then
+// resumes and finishes the run. Nothing is written to D1, and no object but the check's own
 // is touched: every id the page accepts must be a check id.
 //
 // Owner only: behind the Cloudflare Access check (src/access.ts) that every
@@ -66,7 +66,8 @@ export async function seedStorageCheck(env: { RUN: DurableObjectNamespace<Run> }
 
 export async function answerStorageCheck(env: { RUN: DurableObjectNamespace<Run> }, userId: string, runId: string, answer: string, now: Date): Promise<void> {
   const stub = stubFor(env, userId, runId);
-  await stub.resume(now);
+  const run = await stub.record();
+  if (run?.state !== "parked") throw new Error(`the check run is ${run?.state ?? "not there"}; only a parked run takes an answer`);
   const read = await stub.sessions(new Request(sessionUrl(userId, runId)));
   if (!read.ok) throw new Error(`the check run's session did not open: ${read.status}`);
   const session = (await read.json()) as Session;
@@ -83,6 +84,7 @@ export async function answerStorageCheck(env: { RUN: DurableObjectNamespace<Run>
     new Request(sessionUrl(userId, runId, true), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event, lastUpdateTime: session.lastUpdateTime }) }),
   );
   if (!appended.ok) throw new Error(`the answer was not appended: ${appended.status} ${await appended.text()}`);
+  await stub.resume(now);
   await stub.finish(now);
 }
 

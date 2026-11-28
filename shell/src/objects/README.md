@@ -107,8 +107,9 @@ object write a parked run with its storage one step behind the code, and
 ends the object's instance. The page it opens wakes a new instance, which
 applies the last step in its constructor, and shows what that wake applied
 (from step and to step, `Run.wakeUpgrade`), the object's
-`_sql_schema_migrations` rows, the run's record and moves, and its session. **Answer the run** resumes it, appends
-the answer to its session and finishes it. It writes nothing to D1 and
+`_sql_schema_migrations` rows, the run's record and moves, and its session. **Answer the run** appends
+the answer to the parked run's session, then resumes and finishes it, so an
+answer that is not taken leaves the run parked. It writes nothing to D1 and
 accepts no id but its own test runs'. Each seed leaves one test object of a
 few rows behind; nothing deletes it.
 
