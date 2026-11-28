@@ -37,8 +37,8 @@ says "on an earlier key". Test on the row, or Test all, tests it on the
 current key. A task whose saved main model passed only on an earlier key
 follows the rule below: it says the model needs a test on the new key, with
 a link to Test all models on Models › Setup › Providers and models, and runs
-on its usable fallback, else reads "Choose a model" and its calls are refused
-saying the same.
+on its usable fallback, else has no model and its calls are refused saying
+the same, also when no model is usable on the new key at all.
 Migration 0013 carried the tests made before it over: each model's newest
 of its latest run verdict and the passed test it was added with; a run's
 refusal that says nothing about the model is not carried. The old

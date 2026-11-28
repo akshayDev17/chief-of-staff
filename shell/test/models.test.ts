@@ -772,6 +772,21 @@ describe("tests made on an earlier key", () => {
     expect(await routeTask(env.DB, userId, "extract")).toMatchObject({ main: { model: "test-luna" } });
   });
 
+  // The owner's case: every pass came from the earlier key, so nothing is
+  // offered; the task's row still says its model needs a test on the new key.
+  it("says a task's model needs a test on the new key, with Test all, when no model is usable on it", async () => {
+    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
+    await changeTasks(env.DB, userId, [{ task: "extract", main: "openrouter|test-luna", fallback: "" }], NOW);
+    await reconnect();
+    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    expect(offered).toEqual([]);
+    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
+    const extract = html.match(/<li class="task" id="task-extract"[\s\S]*?<\/form><\/li>/)![0];
+    expect(extract).toContain(
+      '<span data-about="main">test-luna needs a test on your new OpenRouter key. No model now: its calls are refused.</span></p><span class="t-act" data-about="main"><a class="btn small primary" href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;confirm=test-all#ta">Test all models</a>',
+    );
+  });
+
   it("keeps the tests and connected_at when Connect brings back the very same key, and moves them on for a different key", async () => {
     for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
     const first = await connectedAt(env.DB, userId, "openrouter");
