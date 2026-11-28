@@ -8,10 +8,11 @@
 // Reads which migrations the deployed database has applied (its
 // `d1_migrations` table; none on a database never migrated), and prints, as
 // JSON, the pending files in order and those among them that may change or
-// remove existing data (src/release/migration-rules.ts). When any may, it
-// also records D1's current Time Travel bookmark
+// remove existing data (src/release/migration-rules.ts). When any is
+// pending, it also records D1's current Time Travel bookmark
 // (`wrangler d1 time-travel info chief-of-staff --json`) in the output, so
-// the release can name it. It changes nothing.
+// the release names the point to restore to whatever the migration does. It
+// changes nothing.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { changesData, pendingMigrations } from "../src/release/migration-rules.ts";
@@ -32,8 +33,8 @@ const appliedMigrations = () => {
 try {
   const pending = pendingMigrations(readdirSync("migrations"), appliedMigrations());
   const changing = pending.filter((f) => changesData(readFileSync(`migrations/${f}`, "utf8")));
-  const bookmark = changing.length ? JSON.parse(wrangler(["d1", "time-travel", "info", DATABASE, "--json"])).bookmark : null;
-  if (changing.length && !bookmark) throw new Error("Time Travel gave no bookmark; not migrating without one");
+  const bookmark = pending.length ? JSON.parse(wrangler(["d1", "time-travel", "info", DATABASE, "--json"])).bookmark : null;
+  if (pending.length && !bookmark) throw new Error("Time Travel gave no bookmark; not migrating without one");
   console.log(JSON.stringify({ pending, changesData: changing, bookmark }));
 } catch (error) {
   console.error(`release-migrations: ${error instanceof Error ? error.message : String(error)}`);

@@ -30,7 +30,8 @@ const statements = (sql: string): string[] =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-// True when the migration may change or remove existing data, so the
-// pipeline records D1's Time Travel bookmark before applying it.
+// True when the migration may change or remove existing data. The pipeline's
+// plan lists such migrations; it records D1's Time Travel bookmark before
+// applying any migration, these and the additive ones alike.
 export const changesData = (sql: string): boolean =>
   statements(sql).some((s) => /\bDO\s+UPDATE\b/i.test(s) || !ADDS_ONLY.some((re) => re.test(s)));
