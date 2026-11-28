@@ -12,7 +12,10 @@
 // on OpenRouter's list (a router at the user's price cap on it), and the
 // design's tokens per application at the applications a day the user plans
 // (5 until they type another). Typing the volume works the figure out again
-// in the page, with no request. One tap sets the suggestion; the user may
+// in the page, with no request. When that dearest model is free, every model
+// it was chosen among is, so the suggestion is no estimate but the floor: $1,
+// the smallest budget that switches calls on, marked "floor", with no volume
+// field and no date (floorLines). One tap sets the suggestion; the user may
 // type their own instead. Until it is set, no model can be called except a
 // test call (proxy.ts, `no_budget`). Once set, the page shows the month's
 // spend as the shared budget bar (budget-bar.ts, the same bar as Models ›
@@ -103,7 +106,26 @@ function volumeForm(view: View, basis: SuggestionBasis): string {
 </form>`;
 }
 
+// Every model the suggestion could be worked from costs nothing (the dearest
+// of them is free), so the suggestion is not a price estimate: it is the
+// floor, the smallest budget that switches model calls on, at any volume.
+const isFloor = (basis: SuggestionBasis): boolean => basis.perApplicationUsd === 0;
+
+// The floor's basis: which models are all free, and that the figure is the
+// rule's least budget, not a price.
+function floorLines(basis: SuggestionBasis): string {
+  const tasks = basis.from === "tasks";
+  return `<p class="from">The smallest budget that switches model calls on.</p>
+<p class="from">${tasks ? "Your tasks use only free models." : "Every model that passed its test is free."}</p>
+<details class="how"><summary>How this is worked out</summary><ul>
+<li>${tasks ? "Every model your tasks use" : "Every model that passed its test"} is free on OpenRouter's list, so a call costs nothing.</li>
+<li>A budget is at least $1, so $1 a month, at any number of applications a day.</li>
+<li>Once a task uses a paid model, the suggestion is worked out from its price.</li>
+</ul></details>`;
+}
+
 function basisLines(basis: SuggestionBasis): string {
+  if (isFloor(basis)) return floorLines(basis);
   const m = basis.model;
   const which = basis.from === "tasks" ? "the dearest model your tasks use" : "the dearest model that passed its test";
   const price = m.capped
@@ -119,12 +141,17 @@ function basisLines(basis: SuggestionBasis): string {
 </ul></details>`;
 }
 
-// The suggestion's head: "Suggested · estimate · checked on <date>", then the figure.
+// The suggestion's head: "Suggested · estimate · checked on <date>", then the
+// figure; for the floor, "Suggested · floor": a rule, with no price to date.
 function suggestionHead(basis: SuggestionBasis, view: View): string {
   const s = suggest(basis, view.applicationsADay);
-  return `<p class="label">Suggested <span class="pill warn">estimate</span> <span class="meta">checked on ${nbDate(basis.model.checkedOn)}</span></p>
+  const marks = isFloor(basis) ? '<span class="pill">floor</span>' : `<span class="pill warn">estimate</span> <span class="meta">checked on ${nbDate(basis.model.checkedOn)}</span>`;
+  return `<p class="label">Suggested ${marks}</p>
 <p class="fig"><span class="num big" data-sugg>${budgetText(s.monthlyUsd)}</span> <span class="unit">a month</span></p>`;
 }
+
+// The volume field, only where the volume changes the figure: not for the floor.
+const volumeFor = (view: View, basis: SuggestionBasis): string => (isFloor(basis) ? "" : volumeForm(view, basis));
 
 const perDayField = (view: View): string => `<input type="hidden" name="per_day" value="${view.applicationsADay}" data-per-day-copy>`;
 
@@ -166,7 +193,7 @@ ${stopLines(state)}</div>`;
   }
   return `<div class="sugg">
 ${suggestionHead(basis, view)}
-${volumeForm(view, basis)}
+${volumeFor(view, basis)}
 ${basisLines(basis)}
 </div>
 <div class="set">
@@ -181,8 +208,8 @@ function setPanel(state: BudgetsState, budget: Budget): string {
   const { basis, view } = state;
   const bar = renderBudgetBar({ budgetUsd: budget.monthlyUsd, ledgerUsd: state.spentThisMonth, key: state.key ?? { unread: "OpenRouter's figure was not read" }, budgetHref: "#amount", connection: state.connection });
   const again = basis
-    ? `<details class="how again"><summary>Suggested: about <span data-sugg>${budgetText(suggest(basis, view.applicationsADay).monthlyUsd)}</span> a month</summary>
-${volumeForm(view, basis)}
+    ? `<details class="how again"><summary>Suggested: ${isFloor(basis) ? "" : "about "}<span data-sugg>${budgetText(suggest(basis, view.applicationsADay).monthlyUsd)}</span> a month${isFloor(basis) ? ", the floor" : ""}</summary>
+${volumeFor(view, basis)}
 ${basisLines(basis)}
 <div class="acts">${acceptForm(basis, view, "small outline", (usd) => `Use ${usd}`)}</div>
 </details>`
