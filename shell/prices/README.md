@@ -69,8 +69,7 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
 - **Host reads.** The daily refresh reads every tiered model's endpoints list,
   six at a time; Refresh model list reads only the new ones, those whose
   headline price changed and those last not read. A list that cannot be read
-  keeps the model's last host figure while its headline holds, else the
-  headline price.
+  gives the model its headline price.
 - **Admin · Price table** is at `GET /chief-of-staff/admin/price-table`, owner
   only, behind the Cloudflare Access check (`src/access.ts`, T15). Beside the
   table, OpenRouter's rate limits as its limits page states them (no default
