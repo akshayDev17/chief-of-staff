@@ -21,9 +21,9 @@
 // has its cap); once it does not, its saved fallback alone while that is
 // offered, which the task shows it runs on, else nothing, and the task has no
 // model until the user chooses one. A saved model that is offered but not
-// Ready (it needs credit, or its last call failed) keeps its place: each call
-// tries it first and falls to the fallback when it fails, so it answers again
-// once credit is added or the provider takes it back, with no click. Its calls
+// Ready (it needs credit) keeps its place: each call tries it first and falls
+// to the fallback when it fails, so it answers again once credit is added,
+// with no click. Its calls
 // never go to a model the user did not choose for it. A task with no saved
 // choice has no model (migration 0013 saved, as accepted choices, the one
 // model each user's tasks used before).
