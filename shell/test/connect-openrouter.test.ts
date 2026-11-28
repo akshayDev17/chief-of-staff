@@ -600,6 +600,25 @@ describe("Connect OpenRouter", () => {
     expect((await get(`/openrouter/consented?code=c&state=${state}`)).status).toBe(400);
   });
 
+  it("says a cancel on OpenRouter's page is a cancel, with Connect OpenRouter, and keeps notThis for another state", async () => {
+    fetcher = fakeFetch();
+    const auth = new URL((await post("/openrouter/connect")).headers.get("location")!);
+    // OpenRouter's docs: no state on deny, and no code; an error param, if any, reads the same.
+    for (const back of ["", "?error=access_denied", `?state=${auth.searchParams.get("state")}`]) {
+      const res = await get(`/openrouter/consented${back}`);
+      expect(res.status).toBe(400);
+      const page = await res.text();
+      expect(page).toContain("You cancelled on OpenRouter. Connect OpenRouter to try again.");
+      expect(page).not.toContain("was not for this Connect");
+      expect(page).toContain(">Connect OpenRouter</button>");
+    }
+    expect(await readConnection(env.DB, userId, "openrouter")).toBeUndefined();
+    expect(await (await get(`/openrouter/consented?code=c&state=forged`)).text()).toContain("That answer from OpenRouter was not for this Connect.");
+    // The cancel spent nothing: the real answer still connects.
+    expect((await get(`/openrouter/consented?code=c&state=${auth.searchParams.get("state")}`)).status).toBe(303);
+    expect(await readConnection(env.DB, userId, "openrouter")).toBeDefined();
+  });
+
   it("says plainly when OpenRouter refuses the code, and keeps no key", async () => {
     const back = await connect({ keys: () => Response.json({ error: { code: 403, message: "Authorization code expired" } }, { status: 403 }) });
     expect(back.status).toBe(400);
@@ -614,7 +633,7 @@ describe("Connect OpenRouter", () => {
     await post("/openrouter/test", { model: "openai/gpt-6-luna" });
     expect(await readCheck(env.DB, userId, "openrouter")).toMatchObject({ state: "revoked", revokedAt: NOW.toISOString() });
     const html = await (await get()).text();
-    expect(html).toContain("Removed on OpenRouter's side");
+    expect(html).toContain("Removed on OpenRouter&#39;s side");
     expect(html).toContain('action="/chief-of-staff/models/setup/providers/openrouter/connect"');
     expect(primaries(html)).toEqual(["Connect OpenRouter"]);
     expect(html).not.toContain('id="test"');
@@ -631,7 +650,7 @@ describe("Connect OpenRouter", () => {
     fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 401, message: "User not found." } }, { status: 401 }) });
     await post("/openrouter/test", { model: "openai/gpt-6-luna" });
     expect(await readCheck(env.DB, userId, "openrouter")).toMatchObject({ state: "revoked", revokedAt: NOW.toISOString() });
-    expect(await (await get()).text()).toContain("Removed on OpenRouter's side");
+    expect(await (await get()).text()).toContain("Removed on OpenRouter&#39;s side");
   });
 
   it("Disconnect asks in place, deletes the key from the vault, the record and the check, and opens that exact key's page on OpenRouter", async () => {
