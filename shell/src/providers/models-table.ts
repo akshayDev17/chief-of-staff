@@ -13,8 +13,9 @@
 // 2026-11-27: "quite franky remove the add feature altogether"). Search
 // matches any part of a model's name, maker or ID; the Maker filter, its own
 // find box and its chips narrow the table; the Works / Doesn't work / Not
-// tested yet strip filters it too, over a bar of the true ratios. None of
-// these sends a request: the page's script shows and hides rows.
+// tested yet strip filters it too, over a bar of the true ratios, and counts
+// only the rows search, the Maker filter and a strength show. None of these sends a
+// request: the page's script shows and hides rows, and recounts the strip.
 //
 // A row that cannot be tested has one action of its own: a model the
 // account's settings leave out links those settings, then Check again reads
@@ -297,7 +298,11 @@ const running = (input: ModelsTableInput): boolean => Boolean(input.run && !inpu
 const primaryIf = (input: ModelsTableInput, step: Step): string => (input.step === step ? "primary" : "outline");
 
 // The strip's counts, by rowState; Doesn't work is failedModels, the same
-// models Retest failed tests again.
+// models Retest failed tests again. Each row carries its rowState as
+// data-state, and the page's script sums those over the rows the search, the
+// Maker filter and a strength show (page-script.ts), so the strip counts the
+// view; these whole-list counts are what it shows unfiltered, and without
+// the script.
 function counts(input: ModelsTableInput): { w: number; f: number; p: number; t: number } {
   let w = 0;
   let p = 0;
@@ -319,7 +324,7 @@ function stripPart(input: ModelsTableInput): string {
   const pct = (n: number) => (c.t ? (n / c.t) * 100 : 0).toFixed(3);
   return `<div class="strip" role="group" aria-label="Show models">${cell("works", "Works", c.w, c.w ? "good" : "")}${cell("fails", "Doesn't work", c.f, c.f ? "bad" : "")}${cell("pending", "Not tested yet", c.p, "")}</div>
 <div class="bar" role="img" aria-label="${c.w + c.f} of ${c.t} tested: ${c.w} work, ${c.f} don't"><i class="w" style="width:${pct(c.w)}%"></i><i class="f" style="width:${pct(c.f)}%"></i></div>
-<div class="ends num"><span>0</span><span>${c.t} models</span></div>`;
+<div class="ends num"><span>0</span><span data-ends>${c.t} models</span></div>`;
 }
 
 // ---------- the list head: where the list is from, and Refresh ----------
@@ -612,7 +617,10 @@ function railPart(input: ModelsTableInput): string {
       ? `<button type="button" class="btn outline" disabled data-k="rt"><span>Retest failed${rtN}</span></button>`
       : `<a class="btn outline" href="${esc(viewHref(p, { confirm: "retest" }, "#ta"))}" data-view data-k="rt"><span>Retest failed${rtN}</span></a>`;
     const rtWhy = retest.wait && !stale && !isRunning ? `<p class="why">Retest failed · ${esc(retest.wait)}</p>` : !retest.wait && retest.skipped ? `<p class="why">Retest failed skips ${retest.skipped} no longer on the model list.</p>` : "";
-    act = `<div class="two">${ta}${rt}</div>${why ? `<div class="why">${why}</div>` : ""}${rtWhy}`;
+    // Shown by the page's script while search, the Maker filter or a
+    // strength narrows the table, whose strip then counts only those rows.
+    const whole = '<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the models shown.</p>';
+    act = `<div class="two">${ta}${rt}</div>${why ? `<div class="why">${why}</div>` : ""}${rtWhy}${whole}`;
   }
   return `<h3 id="ta">Test all</h3><p class="runline">${line}</p>${staleBox}<div class="ta-act">${act}</div>`;
 }

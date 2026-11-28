@@ -273,3 +273,69 @@ describe("with the page's own controls", () => {
     expect(p.sent).toEqual([]);
   });
 });
+
+// Providers' rows with their rowState (data-state), as models-table.ts
+// renders them: 3 Anthropic, 2 OpenAI and one blocked row, which the strip
+// never counts.
+const STATED: ListRow[] = [
+  { text: "anthropic: claude opus anthropic/claude-opus anthropic", maker: "anthropic", makerName: "Anthropic", state: "works", strength: "Strongest" },
+  { text: "anthropic: claude haiku anthropic/claude-haiku anthropic", maker: "anthropic", makerName: "Anthropic", state: "fails", strength: "Smallest" },
+  { text: "anthropic: claude sonnet anthropic/claude-sonnet anthropic", maker: "anthropic", makerName: "Anthropic", state: "pending", strength: "Middle" },
+  { text: "openai: gpt-4o openai/gpt-4o openai", maker: "openai", makerName: "OpenAI", state: "works", strength: "Middle" },
+  { text: "openai: gpt-4o mini openai/gpt-4o-mini openai", maker: "openai", makerName: "OpenAI", state: "works", strength: "Smallest" },
+  { text: "openai: o1 pro openai/o1-pro openai", maker: "openai", makerName: "OpenAI", state: "blocked", strength: "Strongest" },
+];
+
+describe("on Providers, the Works / Doesn't work / Not tested yet strip", () => {
+  const whole = { works: "3", fails: "1", pending: "1", good: true, bad: true, bar: ["width:60.000%", "width:20.000%"], label: "4 of 5 tested: 3 work, 1 don't", ends: "5 models", wholeList: false };
+
+  it("counts the whole list with no filter, in today's words", () => {
+    const p = providersTable(STATED);
+    expect(p.strip()).toEqual(whole);
+    expect(p.sent).toEqual([]);
+  });
+
+  it("counts only the chosen maker's rows, says what it counts, and says Test all and Retest failed still cover the whole list", () => {
+    const p = providersTable(STATED);
+    p.dispatch("click", p.toggle);
+    p.tick("OpenAI");
+    expect(p.strip()).toEqual({ works: "2", fails: "0", pending: "0", good: true, bad: false, bar: ["width:100.000%", "width:0.000%"], label: "2 tested of 2 shown: 2 work, 0 don't", ends: "2 shown", wholeList: true });
+    p.clearMakers();
+    expect(p.strip()).toEqual(whole);
+    expect(p.sent).toEqual([]);
+  });
+
+  it("counts only the rows the search shows, and both the search and the makers together", () => {
+    const p = providersTable(STATED);
+    p.type("claude");
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown", wholeList: true });
+    p.type("gpt-4o");
+    expect(p.strip()).toMatchObject({ works: "2", fails: "0", pending: "0", ends: "2 shown" });
+    p.dispatch("click", p.toggle);
+    p.tick("Anthropic");
+    expect(p.shown()).toEqual([]);
+    expect(p.strip()).toMatchObject({ works: "0", fails: "0", pending: "0", bar: ["width:0.000%", "width:0.000%"], ends: "0 shown", wholeList: true });
+    p.type("");
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown" });
+    p.clearMakers();
+    expect(p.strip()).toEqual(whole);
+    expect(p.sent).toEqual([]);
+  });
+
+  it("keeps its counts when a cell filters within the view", () => {
+    const p = providersTable(STATED);
+    p.type("claude");
+    p.press("fails");
+    expect(p.shown()).toEqual([1]);
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown" });
+    p.type("");
+    p.press("fails");
+    expect(p.shown()).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(p.strip()).toEqual(whole);
+  });
+
+  it("counts a strength's rows when the address asks for one", () => {
+    const p = providersTable(STATED, "https://cos.example.com/chief-of-staff/models?strength=Smallest");
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "0", ends: "2 shown", wholeList: true });
+  });
+});
