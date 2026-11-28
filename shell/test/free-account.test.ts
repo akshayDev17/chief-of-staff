@@ -7,8 +7,8 @@
 // no call; the account line says the account never bought credits; the free
 // model is labelled Free and passes its test; a paid one says it needs
 // credit, with Add credits; the music model is never tested; Test all models
-// says the paid ones need credit; and the free model that passed is usable
-// for every task in one step.
+// says the paid ones need credit; and the free model that passed is usable,
+// in one step, for every task of its strength (Smallest).
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
@@ -175,7 +175,7 @@ describe("a $0 OpenRouter account", () => {
     expect(chatModels()).toEqual([FREE, paidModel]);
   });
 
-  it("never tests the music model in Test all models: the free one works, the paid ones need credit; the free one is usable for every task in one step", async () => {
+  it("never tests the music model in Test all models: the free one works, the paid ones need credit; the free one takes every Smallest task in one step", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     expect((await post("/openrouter/test-all")).status).toBe(303);
     await runQueuedTests(env.DB, await plugins(), NOW);
@@ -195,14 +195,24 @@ describe("a $0 OpenRouter account", () => {
     expect(entry(page, FREE)).toContain('data-state="works"');
     expect(entry(page, FREE)).not.toContain('class="pill ok"');
 
-    // The free model passed, so it is usable: no Add.
+    // The free model passed, so it is usable: no Add. It is a Smallest
+    // model (its price is $0), so only the Smallest tasks can take it (the
+    // owner, 2026-11-27: "when suggested strenght == Smallest --> the
+    // dropdown next to it should only contain all passing run models tagged
+    // with the smallest chip"); the Middle ones wait for a Middle model.
+    const smallest = TASKS.filter((t) => t.tier === "Smallest");
     const picker = await (await tasks()).text();
-    expect(picker).toContain("Your models that passed are all free, so the app proposes none");
-    expect(picker).toContain("Use my free models for every task");
+    expect(picker).toContain("Your models that passed are all free, so none is proposed.");
+    expect(picker).toContain(`Use my free models for ${smallest.length} tasks`);
+    expect(picker).toContain("No Middle model has passed a test yet.");
     const used = await tasks("/use-free", {});
-    expect(used.status).toBe(200);
-    expect(await used.text()).toContain(`Every task now uses ${FREE}`);
-    for (const task of TASKS) expect(await routeTask(env.DB, userId, task.id)).toMatchObject({ main: { model: FREE } });
+    expect(used.status).toBe(303);
+    expect(used.headers.get("location")).toBe(`${TASKS_URL}?free=${smallest.length}`);
+    expect(await (await handleTaskModels(new Request(used.headers.get("location")!), { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW })).text()).toContain(`${smallest.length} tasks now use your free models.`);
+    for (const task of TASKS) {
+      if (task.tier === "Smallest") expect(await routeTask(env.DB, userId, task.id)).toMatchObject({ main: { model: FREE } });
+      else expect(await routeTask(env.DB, userId, task.id)).toBeUndefined();
+    }
   });
 
   it("says a 402 on a free model plainly, never as a paid model's", async () => {

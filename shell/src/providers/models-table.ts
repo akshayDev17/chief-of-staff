@@ -35,6 +35,7 @@ import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { esc } from "../prices/page";
 import type { Dropped } from "../prices/openrouter";
 import { makerKey, makerRowAttrs, nameMakers } from "../models/maker-filter";
+import { strengthChip } from "../prices/tiers";
 import { DEFAULT_CAP } from "../models/price-caps";
 import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type OfferRow, type Refused, type TestRefusal } from "../models/test-model";
 import { isCurrentRun, type RetestPlan, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
@@ -352,10 +353,11 @@ function priceHtml(r: OfferRow, input: ModelsTableInput): string {
   return `<span class="price num">${usd(r.price.input)} / ${usd(r.price.output)}</span>`;
 }
 
-function tierText(r: OfferRow): string {
+// The row's strength chip (prices/tiers.ts strengthChip), none for a router
+// with no cap yet.
+function chipOf(r: OfferRow): string {
   if (blockKind(r) === "router") return "";
-  if (r.price && r.price.input === 0 && r.price.output === 0 && !r.free) return "Other fees";
-  return r.tier ?? "";
+  return strengthChip({ tier: r.tier, input: r.price?.input, output: r.price?.output, free: r.free }) ?? "";
 }
 
 const BLOCK_TITLE: Record<string, string> = {
@@ -495,7 +497,7 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
     extra = `<div class="det" id="det-${esc(anchor)}" data-det-panel hidden>${det}</div>`;
   }
   const hay = esc(`${r.name ?? ""} ${name} ${maker} ${makerId} ${r.model}`.toLowerCase());
-  return `<li class="row" id="${esc(anchor)}" data-id="${id}"${makerRowAttrs(r.model, maker)} data-hay="${hay}" data-state="${v.state}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(tierText(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
+  return `<li class="row" id="${esc(anchor)}" data-id="${id}"${makerRowAttrs(r.model, maker)} data-hay="${hay}" data-state="${v.state}" data-strength="${esc(chipOf(r))}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(chipOf(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
 }
 
 function rowsPart(input: ModelsTableInput): string {

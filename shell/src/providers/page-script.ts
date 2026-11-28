@@ -14,6 +14,10 @@
 //   the same view is asked for again every few seconds.
 // - Back from the provider's consent page (main is marked data-land), the
 //   search field takes focus once.
+// - An address with strength=<Smallest|Middle|Strongest> (and show=<works|
+//   fails|pending>) opens the table showing only that strength's models (in
+//   that state), as Model for each task links a strength with no usable model;
+//   the count line names it, and its Show all shows every model again.
 // Focus, the table's scroll position, typed cap values and the open details
 // survive every swap. Without the script, every form posts and redirects
 // back (page.ts), and every link is a plain address.
@@ -28,6 +32,9 @@ export const PAGE_SCRIPT = String.raw`
   var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, timer: 0, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
   var NOUN = { works: "that work", fails: "that don't work", pending: "not tested yet" };
+  var asked = new URLSearchParams(location.search);
+  S.tier = ["Smallest", "Middle", "Strongest"].indexOf(asked.get("strength")) !== -1 ? asked.get("strength") : null;
+  if (S.tier && NOUN[asked.get("show")]) S.filter = asked.get("show");
 
   function $(id) { return document.getElementById(id); }
   function cssq(s) { return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"); }
@@ -40,6 +47,7 @@ export const PAGE_SCRIPT = String.raw`
 
   // ---------- filters: search, maker, the strip ----------
   function matches(li, t) {
+    if (S.tier && li.getAttribute("data-strength") !== S.tier) return false;
     if (!makers.matches(li)) return false;
     var hay = li.getAttribute("data-hay") || "";
     for (var i = 0; i < t.length; i++) if (hay.indexOf(t[i]) === -1) return false;
@@ -55,7 +63,8 @@ export const PAGE_SCRIPT = String.raw`
     var re = new RegExp("(" + t.map(function (x) { return esc(x).replace(/[.*+?^${"$"}{}()|[\]\\]/g, "\\$&"); }).join("|") + ")", "gi");
     return s.replace(re, "<mark>$1</mark>");
   }
-  function stateCount(st) { var n = 0; each(rows(), function (li) { if (li.getAttribute("data-state") === st) n++; }); return n; }
+  function inTier(li) { return !S.tier || li.getAttribute("data-strength") === S.tier; }
+  function stateCount(st) { var n = 0; each(rows(), function (li) { if (inTier(li) && (!st || li.getAttribute("data-state") === st)) n++; }); return n; }
   function apply() {
     var list = $("pick-list");
     if (!list) return;
@@ -77,14 +86,15 @@ export const PAGE_SCRIPT = String.raw`
       li.className = "empty";
       li.setAttribute("data-client", "");
       var narrowed = S.q.trim() || makers.chosen().length;
-      li.innerHTML = "<p>" + (narrowed ? "No model matches “" + esc(S.q.trim() || "your filter") + "”" + (makers.chosen().length ? " from the makers you picked" : "") + "." : "None " + NOUN[S.filter] + ".") + "</p>" + (narrowed ? '<button type="button" class="btn small outline" data-clear-all>Clear</button>' : "");
+      li.innerHTML = "<p>" + (narrowed ? "No model matches “" + esc(S.q.trim() || "your filter") + "”" + (makers.chosen().length ? " from the makers you picked" : "") + "." : "No " + (S.tier ? S.tier + " " : "") + "models" + (S.filter ? " " + NOUN[S.filter] : "") + ".") + (S.tier ? ' <button type="button" class="link" data-show-all>Show all</button>' : "") + "</p>" + (narrowed ? '<button type="button" class="btn small outline" data-clear-all>Clear</button>' : "");
       list.appendChild(li);
     }
-    var base = S.filter ? stateCount(S.filter) : all.length, count = $("pick-count");
+    var base = S.filter || S.tier ? stateCount(S.filter) : all.length, count = $("pick-count");
+    var noun = (S.tier ? S.tier + " " : "") + "models" + (S.filter ? " " + NOUN[S.filter] : "");
     if (count) {
       count.innerHTML = S.q.trim() || makers.chosen().length
-        ? '<b class="num">' + shown + "</b> of " + base + (S.filter ? " " + NOUN[S.filter] : "") + (S.q.trim() ? " match “" + esc(S.q.trim()) + "”" : "")
-        : '<span class="num">' + base + "</span> " + (S.filter ? NOUN[S.filter] + ' · <button type="button" class="link" data-filter="' + S.filter + '" style="font-size:13px">Show all</button>' : "models");
+        ? '<b class="num">' + shown + "</b> of " + base + (S.filter || S.tier ? " " + noun : "") + (S.q.trim() ? " match “" + esc(S.q.trim()) + "”" : "")
+        : '<span class="num">' + base + "</span> " + (S.filter || S.tier ? noun + ' · <button type="button" class="link" data-show-all style="font-size:13px">Show all</button>' : "models");
     }
     var search = main.querySelector(".search");
     if (search) search.classList.toggle("has-q", !!S.q);
@@ -259,6 +269,7 @@ export const PAGE_SCRIPT = String.raw`
     }
     var det = t.closest("[data-det]");
     if (det) { var d = det.getAttribute("data-det"); S.det[d] = !S.det[d]; apply(); return; }
+    if (t.closest("[data-show-all]")) { S.filter = null; S.tier = null; var sb = $("tbl-box"); if (sb) sb.scrollTop = 0; apply(); return; }
     var cell = t.closest("[data-filter]");
     if (cell) { var f = cell.getAttribute("data-filter"); S.filter = S.filter === f ? null : f; var bx = $("tbl-box"); if (bx) bx.scrollTop = 0; apply(); return; }
     if (t.closest("[data-clear-all]")) { S.q = ""; makers.clear(); var q = $("pick-q"); if (q) { q.value = ""; q.focus(); } apply(); return; }

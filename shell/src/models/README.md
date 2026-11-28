@@ -44,7 +44,10 @@ a link to the account's settings on OpenRouter, then Check again.
 **One table**, nothing to type but the search. Search matches any part of a
 model's name, maker or ID. The Maker filter has its own find box and chips.
 The Works / Doesn't work / Not tested yet strip filters the table, over a bar
-of the true ratios. None of these sends a request. Each row shows the model's
+of the true ratios. An address with `strength=<Smallest|Middle|Strongest>`
+(and `show=pending`) opens the table showing that strength's models (not
+tested yet), as Model for each task links a strength with no usable model;
+the count line names it, with Show all. None of these sends a request. Each row shows the model's
 name and maker, its input and output list price per million tokens, its
 strength from the input price (Smallest, Middle, Strongest), a Free label on a
 free model and "Other fees" on one at $0 a token that is not free, Works or
@@ -117,45 +120,83 @@ matching, extraction and LinkedIn invitations and messages; Middle for
 scoring, filling and checking forms, cover letters and free-text answers. No
 task defaults to Strongest.
 
-For each task the user chooses the provider and the model (the owner,
-2026-11-27: "for each kind of task : choose the provider and the model"),
-for the main model and the fallback, from their usable models only. The
-provider list has one entry today, OpenRouter; another provider's usable
-models join the same lists (`task_routes` names each by provider and model).
+Each task has one dropdown for its main model and one for its fallback, and
+each lists only the usable models of the task's strength (the owner,
+2026-11-27: "when suggested strenght == Smallest --> the dropdown next to it
+should only contain all passing run models tagged with the smallest chip"):
+a usable model whose strength chip (`prices/tiers.ts` `strengthChip`, the chip
+its Providers row shows: its tier, or "Other fees" for a model at $0 a token
+that is not free) is the task's tier (`tasks.ts` `offeredFor`), the cheapest
+first. Each reads as its row does: name, ID, and price per million input and
+output tokens, or Free. The models are grouped under their provider, so
+choosing one chooses the provider and the model (the owner, 2026-11-27: "for
+each kind of task : choose the provider and the model"); the provider list
+has one entry today, OpenRouter, and another provider's usable models join
+the same lists (`task_routes` names each by provider and model). A list of
+more than six has a search box at its top (any part of the name, ID or
+provider).
+
+Choosing sends nothing (`picker-script.ts`): the changed rows are counted in
+a bar with Undo and Save. Save sends them in one request (`POST
+/chief-of-staff/models/setup/tasks/change`, fields `task`, `main.<task>`,
+`fallback.<task>`), saved all or none (`changeTasks`), and the page's
+`<main>` comes back in place, the address and the scroll kept. Without
+scripts the dropdowns are plain selects, each row has its own Save, and
+every form posts and redirects back with what it said in the address. One
+solid blue button at a time: Save while a row is changed, else **Accept all
+with one tap**, else the free tap, else the first row's fix for a task with
+no model; this last screen has no Next while the checklist's next item is
+not built. Accept all and the free tap, sent in place, carry the rows
+changed and not saved: those are saved as chosen in the same request, all
+or none, and the tap leaves them as chosen. Ask Admin for help saves
+nothing: in place, its answer shows in the banner only, and the changed
+rows stay as they are, still to save.
 
 - a task uses only its saved choice. A task with no saved choice has no
   model; migration 0013 saved, as an accepted choice with no fallback, the one
   model each user's tasks used before (the user's only added model, unless
   free);
+- a saved choice is always shown, even once its model is not in the list.
+  One of another strength saved before this rule keeps running and its row
+  says so; Save keeps a model a role already names, so a change to one role
+  never forces the other, but a model of another strength is never newly
+  chosen (`wrong_strength`);
 - a saved choice holds while its main model is usable. Once that model is not
   usable (a later test of it failed, or the provider dropped it), no proposal
-  or one tap replaces the choice by itself. The task says why its main model
-  is no longer usable, by the same checks as `readUsableModels`
-  (`readNotUsable`): it failed its last test, it is no longer on OpenRouter's
-  list, the account's settings leave it out (with a link to them), or it
-  needs a price cap (with a link to set one), else that it is no longer
-  usable. Its calls go to its saved fallback
-  while that is usable, and the task says it runs on its fallback, named,
-  with its Change form open to choose a new main model; with no usable
-  fallback the task reads "Choose a model" and its calls are refused with a
+  or one tap replaces the choice by itself. The row marks it "Not usable" and
+  says why, by the same checks as `readUsableModels` (`readNotUsable`): it
+  failed its last test (Test it again, on its Providers row), it is no longer
+  on OpenRouter's list (Choose another), the account's settings leave it out
+  (a link to them), or it needs a price cap (Set its price cap), else that it
+  is no longer usable (Choose another). Its calls go to its saved fallback
+  while that is usable, and the row says it runs on its fallback; with no
+  usable fallback the task has no model and its calls are refused with a
   plain reason, never sent to a model the user did not choose for the task
   (`readTaskRoutes` `stopped`, the one rule `routeTask` calls by and the
-  Providers page's note under a failed result follows);
-- each task is proposed the cheapest passed model at its tier and, as
-  its fallback, the next cheapest at that tier, another model (on OpenRouter
-  today, so another OpenRouter model), never the main one; where the user has
-  none at the task's tier, the other non-Strongest tier, and the page says
-  so. **Accept all with one tap** saves every proposal (`set_how`
-  `accepted`); an accepted task follows its proposal until the next tap, and
-  a task the user changed is never overwritten;
+  Providers page's note under a failed result follows). A saved fallback no
+  longer usable is shown the same way (`fallbackGone`), while the main model
+  runs alone;
+- a strength with no usable model says so in each of its rows, with a link to
+  Providers and models showing that strength's models not tested yet
+  (`?strength=<tier>&show=pending#test`, read by the Providers script), or
+  all of them once every one has been tested, or Connect OpenRouter
+  (`picker-data.ts` `readToTest`);
+- each task is proposed the cheapest usable model of its strength and, as
+  its fallback, the next cheapest of that strength, another model (on
+  OpenRouter today, so another OpenRouter model), never the main one and
+  never one of another strength. **Accept all with one tap**, beside the line
+  that counts the tasks with a model, saves every proposal (`set_how`
+  `accepted`); an accepted task whose proposal has since changed keeps its
+  models until the next tap and its row names the new proposal, and a task
+  the user changed is never overwritten;
 - a free model is never proposed, as main or fallback: a task uses it only
-  once the user chooses it, with Change or with **Use my free models for every
-  task** (`useFreeModels`), the one tap the page offers, and explains, for the
-  tasks with no model and no proposal (a $0 account's passed models are all
-  free). It picks by the proposal's own rule among the free models and saves
-  the tasks as the user's choice (`set_how` `changed`);
-- any task can be changed to any usable model, the Strongest included, with
-  a fallback that is another model, or none.
+  once the user chooses it in its list or with **Use my free models for N
+  tasks** (`useFreeModels`), the one tap the page offers, and explains, for
+  the tasks with no model and no proposal (a $0 account's passed models are
+  all free). It picks by the proposal's own rule among the free models of
+  each task's strength, so a free model, Smallest by its $0 price, takes the
+  Smallest tasks only, and saves them as the user's choice (`set_how`
+  `changed`).
 
 `callTask` sends a task's call through `callModel` with its main model and
 fallback: OpenRouter refusing or failing the main call (429, 408, 5xx, no

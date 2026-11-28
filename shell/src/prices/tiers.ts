@@ -38,3 +38,16 @@ export function modelTiers(rows: PriceRow[]): Map<string, Tier> {
   }
   return tiers;
 }
+
+// The strength chip a model's row shows on Models › Setup › Providers, which
+// is also the strength each task's lists on Model for each task go by (the
+// owner, 2026-11-27: "when suggested strenght == Smallest --> the dropdown
+// next to it should only contain all passing run models tagged with the
+// smallest chip"): its tier, or "Other fees" for a model at $0 a token that
+// is not free, whose token price says nothing of what it costs.
+export type StrengthChip = Tier | "Other fees";
+
+export function strengthChip(m: { tier?: Tier; input?: number; output?: number; free: boolean }): StrengthChip | undefined {
+  if (m.input === 0 && m.output === 0 && !m.free) return "Other fees";
+  return m.tier;
+}

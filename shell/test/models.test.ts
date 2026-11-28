@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { FREE_NOTE, listOffer, namesPickedModel, testOne, blockKind } from "../src/models/test-model";
 import { readLatestTests, readUsableModels } from "../src/models/usable";
 import { parsePriceCap, savePriceCap } from "../src/models/price-caps";
-import { renderPickerPage, handleTaskModels } from "../src/models/picker-page";
-import { acceptProposals, callTask, changeTask, proposeRoute, readTaskRoutes, routeTask, taskById, type Offered } from "../src/models/tasks";
+import { renderPickerPage, handleTaskModels, type PickerPageInput } from "../src/models/picker-page";
+import { readModelNames, readToTest } from "../src/models/picker-data";
+import { acceptProposals, callTask, changeTasks, offeredFor, proposeRoute, readTaskRoutes, routeTask, taskById, TASKS, type Offered } from "../src/models/tasks";
+import { TASK_MODELS_PATH } from "../src/paths";
 import { ESTIMATE_INPUT_TOKENS, planRetest, planTestAll, PER_TICK, readTestAll, runQueuedTests, shownTests, startRetest, startTestAll } from "../src/models/test-all";
 import { classify, TEST_MAX_TOKENS } from "../src/providers/openrouter";
 import { formatCost, modelParts, type ModelsTableInput } from "../src/providers/models-table";
@@ -14,6 +16,7 @@ import { writeSnapshot } from "../src/prices/store";
 import { ok, recordTest, refused, row, seedPrices, TEST_CATALOG, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
+const ORIGIN = "https://cos.example.com";
 let plugin: TestPlugin;
 let userId: string;
 const plugins = () => ({ openrouter: plugin });
@@ -378,106 +381,194 @@ describe("Test all models", () => {
 });
 
 describe("the model for each task", () => {
-  const m = (model: string, tier: Offered["tier"], inputUsd: number): Offered => ({
-    provider: "openrouter", model, location: "global", testedAt: "", test: { at: "", location: "global", status: 200, costUsd: 0 }, tier, inputUsd,
-  });
-
-  it("proposes a fallback that is another model on the same provider, never the main one", async () => {
-    const route = proposeRoute(taskById("score")!, [m("a", "Middle", 1), m("b", "Middle", 2), m("c", "Smallest", 0.1)]);
-    expect([route?.main.model, route?.fallback?.model]).toEqual(["a", "b"]);
-    const single = proposeRoute(taskById("match")!, [m("c", "Smallest", 0.1)]);
-    expect(single?.fallback).toBeUndefined();
-  });
-
-  it("never proposes a free model until it is chosen with Change", async () => {
-    await writeSnapshot(env.DB, {
-      takenAt: "2026-11-27T07:00:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, { id: "test-free:free", name: "Test Free", tools: true, free: true }] },
-      rows: [row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-free:free", "input", 0), row("test-free:free", "output", 0)],
+  // Two models of each strength the tasks take, one Strongest, one free and
+  // one at $0 a token that is not free ("Other fees").
+  const TIERED = {
+    ...TEST_CATALOG,
+    models: [
+      ...TEST_CATALOG.models,
+      { id: "test-mid", name: "Test Mid", tools: true },
+      { id: "test-mid2", name: "Test Mid Two", tools: true },
+      { id: "test-free:free", name: "Test Free", tools: true, free: true as const },
+      { id: "test-fee", name: "Test Fee", tools: true },
+    ],
+  };
+  const tieredPrices = () =>
+    writeSnapshot(env.DB, {
+      takenAt: "2026-11-27T07:00:00Z", status: "good", results: [], catalog: TIERED,
+      rows: [
+        row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-mini", "input", 0.25), row("test-mini", "output", 1),
+        row("test-mid", "input", 1), row("test-mid", "output", 4), row("test-mid2", "input", 2), row("test-mid2", "output", 8),
+        row("test-sonnet", "input", 3), row("test-sonnet", "output", 15), row("test-free:free", "input", 0), row("test-free:free", "output", 0),
+        row("test-fee", "input", 0), row("test-fee", "output", 0),
+      ],
     });
-    expect((await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "test-free:free")?.notes).toEqual([FREE_NOTE]);
-    await recordTest(userId, "test-free:free");
+  const passAll = async (...models: string[]) => { for (const m of models) await recordTest(userId, m); };
+  const page = async (extra: Partial<PickerPageInput> = {}) => {
+    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    return renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false, nameOf: await readModelNames(env.DB), ...extra });
+  };
+  // A task's row, and the values its plain select offers for `role`.
+  const rowOf = (html: string, task: string) => html.match(new RegExp(`<li class="task" id="task-${task}"[\\s\\S]*?</form></li>`))![0];
+  const optionsOf = (html: string, role: string, task: string) =>
+    [...html.match(new RegExp(`<select class="nsel" id="${role}-${task}"[^>]*>([\\s\\S]*?)</select>`))![1]!.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+  const listOf = (html: string, role: string, task: string) =>
+    [...html.match(new RegExp(`<ul role="listbox" id="pl-${role}-${task}"[^>]*>([\\s\\S]*?)</ul>`))![1]!.matchAll(/data-value="([^"]*)"/g)].map((m) => m[1]);
+  const or = (m: string) => `openrouter|${m}`;
+  const m = (model: string, tier: Offered["tier"], inputUsd: number, free = false): Offered => ({
+    provider: "openrouter", model, location: "global", testedAt: "", test: { at: "", location: "global", status: 200, costUsd: 0 }, tier, inputUsd, free,
+  });
+
+  it("offers each task only the usable models whose strength chip is its own, the cheapest first", async () => {
+    await tieredPrices();
+    await passAll("test-luna", "test-mini", "test-mid", "test-mid2", "test-sonnet", "test-free:free", "test-fee");
+    // test-mini fails a later test: no longer usable, so offered nowhere.
+    await recordTest(userId, "test-mini", "failed", "2026-11-27T11:00:00.000Z");
+    const { offered } = await readTaskRoutes(env.DB, userId);
+    expect(offered.find((x) => x.model === "test-fee")).toMatchObject({ otherFees: true });
+    expect(offered.find((x) => x.model === "test-fee")).not.toHaveProperty("tier");
+    expect(offered.find((x) => x.model === "test-free:free")).toMatchObject({ tier: "Smallest", free: true, inputUsd: 0, outputUsd: 0, name: "Test Free" });
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-free:free", "test-luna"]);
+    expect(offeredFor(taskById("score")!, offered).map((x) => x.model)).toEqual(["test-mid", "test-mid2"]);
+    const html = await page();
+    for (const task of TASKS) {
+      const want = task.tier === "Smallest" ? [or("test-free:free"), or("test-luna")] : [or("test-mid"), or("test-mid2")];
+      expect(listOf(html, "main", task.id)).toEqual(want);
+      expect(listOf(html, "fallback", task.id)).toEqual(["", ...want]);
+      expect(optionsOf(html, "main", task.id).filter(Boolean)).toEqual(want);
+    }
+    // Each model reads as its row does: name, ID, price per million tokens, or Free.
+    expect(rowOf(html, "score")).toContain('<span class="ov-nm">Test Mid</span><span class="ov-pr num">$1.00 / $4.00</span></span><span class="ov-l2"><span class="ov-id">test-mid</span>');
+    expect(rowOf(html, "match")).toContain(`<span class="ov-nm">Test Free</span><span class="pill free" title="${FREE_NOTE}">Free</span>`);
+    expect(rowOf(html, "match")).toContain(`Test Free · test-free:free · ${FREE_NOTE}`);
+    expect(html).not.toContain("test-sonnet");
+    expect(html).not.toContain("test-fee");
+  });
+
+  it("proposes the two cheapest models of the task's own strength, never another strength or a free model", () => {
+    const models = [m("a", "Middle", 1), m("b", "Middle", 2), m("c", "Smallest", 0.1), m("s", "Strongest", 3), m("f", "Smallest", 0, true)];
+    const route = proposeRoute(taskById("score")!, models);
+    expect([route?.main.model, route?.fallback?.model]).toEqual(["a", "b"]);
+    const single = proposeRoute(taskById("match")!, models);
+    expect([single?.main.model, single?.fallback]).toEqual(["c", undefined]);
+    // Only Smallest models: a Middle task gets no proposal, not a Smallest one.
+    expect(proposeRoute(taskById("score")!, [m("c", "Smallest", 0.1), m("d", "Smallest", 0.2)])).toBeUndefined();
+    expect(proposeRoute(taskById("match")!, [m("f", "Smallest", 0, true)])).toBeUndefined();
+    expect(proposeRoute(taskById("match")!, [m("f", "Smallest", 0, true), m("g", "Smallest", 0, true)], true)).toMatchObject({ main: { model: "f" }, fallback: { model: "g" } });
+  });
+
+  it("never proposes a free model, and saves one the user chooses for a task of its strength only", async () => {
+    await tieredPrices();
+    await passAll("test-free:free");
     expect(await routeTask(env.DB, userId, "match")).toBeUndefined();
     const first = (await readTaskRoutes(env.DB, userId)).routes[0]!;
     expect([first.current, first.proposal, first.pending]).toEqual([undefined, undefined, false]);
-    await recordTest(userId, "test-luna");
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
-    expect(routes.every((r) => r.proposal?.main.model === "test-luna" && r.proposal.fallback === undefined)).toBe(true);
-    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
-    expect(html).toContain(`test-free:free · ${FREE_NOTE}`);
-    expect(await changeTask(env.DB, userId, "match", "openrouter|test-free:free", undefined, NOW)).toBeUndefined();
+    expect(await changeTasks(env.DB, userId, [{ task: "score", main: or("test-free:free"), fallback: "" }], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await changeTasks(env.DB, userId, [{ task: "match", main: or("test-free:free"), fallback: "" }], NOW)).toBeUndefined();
     expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-free:free" } });
   });
 
-  it("saves a change naming provider and model, refuses the same model as its own fallback, and calls the fallback on a 429", async () => {
-    await recordTest(userId, "test-luna");
-    await recordTest(userId, "test-mini");
-    expect(await changeTask(env.DB, userId, "match", "openrouter|test-luna", "openrouter|test-luna", NOW)).toBe("same_model");
-    expect(await changeTask(env.DB, userId, "match", "openrouter|test-sonnet", undefined, NOW)).toBe("not_your_model");
-    expect(await changeTask(env.DB, userId, "match", "openrouter|test-luna", "openrouter|test-mini", NOW)).toBeUndefined();
+  it("saves changes all or none, refuses a model of another strength, an untested one or the main as its own fallback, and calls the fallback on a 429", async () => {
+    await tieredPrices();
+    await passAll("test-luna", "test-mini", "test-mid", "test-sonnet");
+    const change = (task: string, main: string, fallback = "") => ({ task, main: main && or(main), fallback: fallback && or(fallback) });
+    expect(await changeTasks(env.DB, userId, [change("match", "test-luna", "test-luna")], NOW)).toEqual({ task: "match", problem: "same_model" });
+    expect(await changeTasks(env.DB, userId, [change("match", "test-mid2")], NOW)).toEqual({ task: "match", problem: "not_your_model" });
+    expect(await changeTasks(env.DB, userId, [change("score", "test-sonnet")], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await changeTasks(env.DB, userId, [change("score", "test-mid", "test-luna")], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await changeTasks(env.DB, userId, [change("match", "")], NOW)).toEqual({ task: "match", problem: "no_main" });
+    expect(await changeTasks(env.DB, userId, [change("nope", "test-luna")], NOW)).toEqual({ task: "nope", problem: "no_such_task" });
+    // One refused change saves none of them.
+    expect(await changeTasks(env.DB, userId, [change("extract", "test-luna"), change("score", "test-sonnet")], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
+    expect(await changeTasks(env.DB, userId, [change("match", "test-luna", "test-mini"), change("score", "test-mid")], NOW)).toBeUndefined();
     expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" } });
+    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-mid" } });
     await setBudget(env.DB, userId, "openrouter", 5, "typed", NOW);
     plugin.replies.push(refused(429), ok({ input: 1, output: 1 }));
     expect(await callTask(env.DB, plugins(), { userId, task: "match", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "answered", model: "test-mini", fallback: true });
   });
 
-  it("accepts every proposal with one tap", async () => {
-    await recordTest(userId, "test-luna");
-    await recordTest(userId, "test-mini");
-    expect(await acceptProposals(env.DB, userId, NOW)).toBe(8);
-    const { routes } = await readTaskRoutes(env.DB, userId);
-    expect(routes.find((r) => r.task.id === "match")?.current).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" }, setHow: "accepted" });
+  it("keeps a saved choice of another strength running and shows it as it is, and lets one role change without the other", async () => {
+    await tieredPrices();
+    await passAll("test-mid", "test-mid2", "test-sonnet");
+    await env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, 'score', 'openrouter', 'test-sonnet', NULL, NULL, 'changed', ?)").bind(userId, NOW.toISOString()).run();
+    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-sonnet" } });
+    const html = await page();
+    const score = rowOf(html, "score");
+    expect(score).toContain('<span class="ov-nm">Test Sonnet</span><span class="ov-pr num">$3.00 / $15.00</span></span><span class="ov-l2"><span class="ov-id">test-sonnet</span><span class="pill">Strongest</span>');
+    expect(score).toContain('<span data-about="main">Its main model is a Strongest model, kept from before.</span>');
+    // Its plain select keeps it, the list offers only Middle models.
+    expect(optionsOf(html, "main", "score")).toEqual([or("test-sonnet"), or("test-mid"), or("test-mid2")]);
+    expect(listOf(html, "main", "score")).toEqual([or("test-mid"), or("test-mid2")]);
+    // A fallback added beside the kept main model saves; the kept model may not be chosen for another task.
+    expect(await changeTasks(env.DB, userId, [{ task: "score", main: or("test-sonnet"), fallback: or("test-mid") }], NOW)).toBeUndefined();
+    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-sonnet" }, fallback: { model: "test-mid" } });
+    expect(await changeTasks(env.DB, userId, [{ task: "fill_form", main: or("test-sonnet"), fallback: "" }], NOW)).toEqual({ task: "fill_form", problem: "wrong_strength" });
   });
 
-  it("keeps a task's model while its latest test passed; once it fails, the task runs on its named fallback, or reads Choose a model with none", async () => {
-    await recordTest(userId, "test-luna");
-    await recordTest(userId, "test-mini");
-    await recordTest(userId, "test-sonnet");
-    await changeTask(env.DB, userId, "match", "openrouter|test-luna", "openrouter|test-mini", NOW);
-    await changeTask(env.DB, userId, "score", "openrouter|test-luna", undefined, NOW);
+  it("accepts every proposal with one tap, only where the task's own strength has models", async () => {
+    await passAll("test-luna", "test-mini");
+    const smallest = TASKS.filter((t) => t.tier === "Smallest").length;
+    expect(await acceptProposals(env.DB, userId, NOW)).toBe(smallest);
+    const { routes } = await readTaskRoutes(env.DB, userId);
+    expect(routes.find((r) => r.task.id === "match")?.current).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" }, setHow: "accepted" });
+    expect(routes.find((r) => r.task.id === "score")).toMatchObject({ proposal: undefined, pending: false });
+    expect(routes.find((r) => r.task.id === "score")!.current).toBeUndefined();
+  });
+
+  it("keeps a task's model while its latest test passed; once it fails, the task runs on its named fallback, or has no model with none", async () => {
+    await passAll("test-luna", "test-mini");
+    await changeTasks(env.DB, userId, [{ task: "match", main: or("test-luna"), fallback: or("test-mini") }, { task: "extract", main: or("test-luna"), fallback: "" }], NOW);
     await setBudget(env.DB, userId, "openrouter", 5, "typed", NOW);
     expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" } });
     // test-luna fails a later test.
     await recordTest(userId, "test-luna", "failed", "2026-11-27T11:00:00.000Z");
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    const { routes } = await readTaskRoutes(env.DB, userId);
     const match = routes.find((r) => r.task.id === "match")!;
     expect(match).toMatchObject({ stopped: { main: { provider: "openrouter", model: "test-luna" }, fallback: { model: "test-mini" } }, pending: false });
     expect(match.current).toBeUndefined();
-    expect(routes.find((r) => r.task.id === "score")).toMatchObject({ stopped: { main: { model: "test-luna" } }, pending: false });
-    expect(routes.find((r) => r.task.id === "score")!.stopped!.fallback).toBeUndefined();
-    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
-    expect(html).toMatch(
-      /<td data-l="Task">Matching questions<\/td>[\s\S]*?<td data-l="Main">Runs on its fallback for now: test-luna failed its last test\. Choose a new main model with Change\.<\/td><td data-l="Fallback \(another model\)">test-mini · OpenRouter<\/td>\s*<td data-l=""><details class="change" open>/,
-    );
-    expect(html).toMatch(/<td data-l="Task">Scoring roles<\/td>[\s\S]*?<td data-l="Main">Choose a model <span class="small">test-luna failed its last test\.<\/span><\/td>[\s\S]*?<details class="change">/);
+    expect(routes.find((r) => r.task.id === "extract")).toMatchObject({ stopped: { main: { model: "test-luna" } }, pending: false });
+    expect(routes.find((r) => r.task.id === "extract")!.stopped!.fallback).toBeUndefined();
+    // The other Smallest task's proposal is taken first: Accept would be the one solid button.
+    await acceptProposals(env.DB, userId, NOW);
+    const html = await page({ nameOf: (x) => (x.model === "test-luna" ? "Test Luna" : undefined) });
+    // The saved model is still shown, marked, with why and the fix.
+    const fix = `<a class="btn small" href="/chief-of-staff/models/setup/providers?provider=openrouter#m-test-luna">Test it again</a>`;
+    expect(rowOf(html, "match")).toContain('<span class="ov-nm">Test Luna</span></span><span class="ov-l2"><span class="ov-id">test-luna</span><span class="pill bad">Not usable</span>');
+    expect(rowOf(html, "match")).toContain(`<p class="t-says"><span data-about="main">Test Luna failed its last test. Runs on its fallback for now.</span></p><span class="t-act" data-about="main">${fix}</span>`);
+    // With no fallback the task has no model: its fix is the page's one solid button.
+    expect(rowOf(html, "extract")).toContain(`<span data-about="main">Test Luna failed its last test. No model now: its calls are refused.</span></p><span class="t-act" data-about="main">${fix.replace('class="btn small"', 'class="btn small primary"')}</span>`);
+    // The save bar's Save, hidden until a row changes, aside.
+    expect(html.match(/class="btn[^"]* primary"(?! data-save)/g)).toHaveLength(1);
     // A call goes to the saved fallback, never to another model.
     expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
     plugin.replies.push(ok({ input: 1, output: 1 }));
     expect(await callTask(env.DB, plugins(), { userId, task: "match", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "answered", model: "test-mini" });
     // With no usable fallback the call is refused with a plain reason, even
     // though another model is usable.
-    expect(await routeTask(env.DB, userId, "score")).toBeUndefined();
+    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
     const before = plugin.calls.length;
-    expect(await callTask(env.DB, plugins(), { userId, task: "score", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "no_model", task: "score", detail: expect.stringMatching(/test its model again/) });
+    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "no_model", task: "extract", detail: expect.stringMatching(/test its model again/) });
     expect(plugin.calls.length).toBe(before);
     // One tap never replaces the choice by itself.
     await acceptProposals(env.DB, userId, NOW);
-    expect(await routeTask(env.DB, userId, "score")).toBeUndefined();
+    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
     // It works again once its model passes again.
     await recordTest(userId, "test-luna", "passed", "2026-11-27T12:00:00.000Z");
-    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-luna" } });
+    expect(await routeTask(env.DB, userId, "extract")).toMatchObject({ main: { model: "test-luna" } });
   });
 
-  it("says why a task's main model is no longer usable, by the same checks that decide it", async () => {
-    await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 3, output: 15 }, NOW);
+  it("says why a saved model is no longer usable, by the same checks that decide it, with the action that fixes it", async () => {
+    await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 0.3, output: 1 }, NOW);
     for (const model of ["test-luna", "test-mini", "openrouter/auto"]) await recordTest(userId, model);
-    const route = (task: string, main: string) =>
-      env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, ?, 'openrouter', ?, 'openrouter', 'test-mini', 'changed', ?)").bind(userId, task, main, NOW.toISOString());
+    const route = (task: string, main: string, fallback = "test-mini") =>
+      env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, ?, 'openrouter', ?, 'openrouter', ?, 'changed', ?)").bind(userId, task, main, fallback, NOW.toISOString());
     await env.DB.batch([
       route("match", "test-luna"),
-      route("score", "test-sonnet"),
-      route("fill_form", "openrouter/auto"),
-      route("check_form", "test-new"),
+      route("extract", "test-sonnet"),
+      route("linkedin_message", "openrouter/auto"),
+      route("score", "test-new"),
       // OpenRouter stops listing test-luna, and lists test-new, never tested.
       env.DB.prepare("DELETE FROM model_price_caps"),
       env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?)")
@@ -485,66 +576,134 @@ describe("the model for each task", () => {
     ]);
     await writeSnapshot(env.DB, {
       takenAt: "2026-11-27T11:00:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models.filter((m) => m.id !== "test-luna"), { id: "test-new", name: "Test New", tools: true }] },
+      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models.filter((x) => x.id !== "test-luna"), { id: "test-new", name: "Test New", tools: true }] },
       rows: [row("test-mini", "input", 0.25), row("test-mini", "output", 1), row("test-new", "input", 0.1), row("test-new", "output", 0.5), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
     });
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
-    expect(offered.map((m) => m.model)).toEqual(["test-mini"]);
+    const { routes } = await readTaskRoutes(env.DB, userId);
     const why = (task: string) => routes.find((r) => r.task.id === task)!.stopped?.why;
-    expect([why("match"), why("score"), why("fill_form"), why("check_form")]).toEqual(["not_listed", "left_out", "no_cap", "unknown"]);
-    const html = renderPickerPage({
-      viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false,
-      accountSettings: () => ({ label: "Privacy settings", href: "https://example.com/privacy" }),
-    });
-    const cell = (label: string) => html.match(new RegExp(`<td data-l="Task">${label}</td>[\\s\\S]*?<td data-l="Main">([\\s\\S]*?)</td>`))![1]!;
-    const on = (why: string) => `Runs on its fallback for now: ${why} Choose a new main model with Change.`;
-    expect(cell("Matching questions")).toBe(on("test-luna is no longer on OpenRouter's list."));
-    expect(cell("Scoring roles")).toBe(on(`test-sonnet is left out by your OpenRouter settings. <a href="https://example.com/privacy" target="_blank" rel="noopener noreferrer">Privacy settings</a>`));
-    expect(cell("Filling forms")).toBe(on(`openrouter/auto needs a price cap. <a href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;cap=openrouter%2Fauto#m-openrouter-auto">Set its price cap</a>`));
-    expect(cell("Checking a form")).toBe(on("test-new is no longer usable."));
+    expect([why("match"), why("extract"), why("linkedin_message"), why("score")]).toEqual(["not_listed", "left_out", "no_cap", "unknown"]);
+    const html = await page({ accountSettings: () => ({ label: "Privacy settings", href: "https://example.com/privacy" }) });
+    const says = (task: string) => rowOf(html, task).match(/<div class="t-note">([\s\S]*?)<button type="submit"/)![1]!;
+    const on = (text: string, fix: string) => `<p class="t-says"><span data-about="main">${text} Runs on its fallback for now.</span></p><span class="t-act" data-about="main">${fix}</span>`;
+    expect(says("match")).toBe(on("test-luna is no longer on OpenRouter&#39;s list.", `<a class="btn small" href="#main-match" data-open="main-match">Choose another</a>`));
+    expect(says("extract")).toBe(on("Test Sonnet is left out by your OpenRouter settings.", `<a class="btn small ext" href="https://example.com/privacy" target="_blank" rel="noopener noreferrer">Privacy settings</a>`));
+    expect(says("linkedin_message")).toBe(on("Auto router needs a price cap.", `<a class="btn small" href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;cap=openrouter%2Fauto#m-openrouter-auto">Set its price cap</a>`));
+    // A Middle task with a Smallest fallback kept from before still runs on it.
+    expect(says("score")).toContain("Test New is no longer usable.");
     // Each still answers on its fallback.
-    expect(await routeTask(env.DB, userId, "fill_form")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
+    expect(await routeTask(env.DB, userId, "linkedin_message")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
+  });
+
+  it("shows a saved fallback that is no longer usable, with why and its fix, while the main model runs alone", async () => {
+    await passAll("test-luna", "test-mini");
+    await changeTasks(env.DB, userId, [{ task: "match", main: or("test-luna"), fallback: or("test-mini") }], NOW);
+    await recordTest(userId, "test-mini", "failed", "2026-11-27T11:00:00.000Z");
+    const { routes } = await readTaskRoutes(env.DB, userId);
+    expect(routes[0]).toMatchObject({ current: { main: { model: "test-luna" }, fallback: undefined }, fallbackGone: { model: "test-mini", why: "failed" } });
+    expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-luna" }) });
+    const html = await page();
+    expect(rowOf(html, "match")).toContain('<span class="ov-id">test-mini</span><span class="pill bad">Not usable</span>');
+    expect(rowOf(html, "match")).toContain('<span data-about="fallback">Its fallback Test Mini failed its last test.</span></p><span class="t-act" data-about="fallback"><a class="btn small" href="/chief-of-staff/models/setup/providers?provider=openrouter#m-test-mini">Test it again</a>');
+  });
+
+  it("says in a strength's rows when it has no usable model, with a link to its models not tested yet on Providers", async () => {
+    await tieredPrices();
+    await passAll("test-luna");
+    const toTest = { provider: "openrouter" as const, connected: true, untested: { Middle: 2 } };
+    const html = await page({ toTest });
+    const link = `href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle&amp;show=pending#test">Test Middle models</a>`;
+    expect(rowOf(html, "score")).toContain(`<p class="t-says"><span>No Middle model has passed a test yet.</span></p><span class="t-act"><a class="btn small" ${link}`);
+    expect(rowOf(html, "score")).toContain('<button type="button" class="pick-btn" id="pb-main-score" aria-haspopup="listbox" aria-expanded="false" aria-controls="pl-main-score" aria-labelledby="lbl-main-score pb-main-score" disabled>');
+    // The tap comes first; once it is taken, the first such row's link is the one solid button.
+    expect(html).toContain('<button type="submit" class="btn primary">Accept all with one tap</button>');
+    await acceptProposals(env.DB, userId, NOW);
+    const after = await page({ toTest });
+    expect(rowOf(after, "score")).toContain(`<a class="btn small primary" ${link}`);
+    expect(rowOf(after, "fill_form")).toContain(`<a class="btn small" ${link}`);
+    // Every Middle model tested already: the link shows them all; not connected: Connect.
+    expect(await page({ toTest: { ...toTest, untested: {} } })).toContain('href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle#test">See Middle models</a>');
+    expect(await page({ toTest: { ...toTest, connected: false } })).toContain('href="/chief-of-staff/models/setup/providers">Connect OpenRouter</a>');
+    // The count comes from the strength chips of the models the user can still test.
+    expect(await readToTest(env.DB, plugins(), userId)).toEqual({ provider: "openrouter", connected: true, untested: { Smallest: 2, Middle: 2, Strongest: 1 } });
   });
 
   it("gives a task with no saved choice no model, even with one usable model, and says to choose one", async () => {
     await recordTest(userId, "test-luna");
-    expect(await routeTask(env.DB, userId, "cover_letter")).toBeUndefined();
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
-    const letters = routes.find((r) => r.task.id === "cover_letter")!;
-    expect(letters.current).toBeUndefined();
-    expect(letters).toMatchObject({ proposal: { main: { model: "test-luna" } }, pending: true });
-    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
-    expect(html).toMatch(/<td data-l="Task">Cover letters<\/td>[\s\S]*?<td data-l="Main">test-luna · OpenRouter <span class="pill">proposed<\/span>/);
+    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
+    const { routes } = await readTaskRoutes(env.DB, userId);
+    const extract = routes.find((r) => r.task.id === "extract")!;
+    expect(extract.current).toBeUndefined();
+    expect(extract).toMatchObject({ proposal: { main: { model: "test-luna" } }, pending: true });
+    const html = await page();
+    expect(rowOf(html, "extract")).toContain('<span class="pill">Proposed</span>');
     expect(html).toContain("Accept all with one tap");
-    expect(html).not.toContain("Model now");
-    expect(await callTask(env.DB, plugins(), { userId, task: "cover_letter", request: () => ({}) }, () => NOW)).toEqual({
+    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toEqual({
       kind: "no_model",
-      task: "cover_letter",
+      task: "extract",
       detail: "no model chosen for this task: choose one for it on Models › Setup › Model for each task (/chief-of-staff/models/setup/tasks)",
     });
     expect(plugin.calls).toEqual([]);
   });
 
-  it("asks for the provider and then the model, offering only usable models", async () => {
-    await recordTest(userId, "test-luna");
-    await recordTest(userId, "test-mini");
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
-    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: (m) => m.model === "test-mini" });
-    expect(html).toContain('name="main_provider"');
-    expect(html).toMatch(/<option value="openrouter"( selected)?>OpenRouter<\/option>/);
-    expect(html).toContain('<optgroup label="OpenRouter" data-provider="openrouter">');
-    expect(html).toContain("Fallback (another model)");
-    expect(html).not.toContain("test-sonnet");
-    expect(html).toContain("test-mini · no tool use");
-    const response = await handleTaskModels(
-      new Request("https://cos.example.com/chief-of-staff/models/setup/tasks/change", {
-        method: "POST",
-        headers: { origin: "https://cos.example.com" },
-        body: new URLSearchParams({ task: "score", main_provider: "openrouter", main_model: "test-mini", fallback_provider: "openrouter", fallback_model: "test-luna" }),
-      }),
-      { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW },
+  it("saves in place with the page's <main> as JSON, or redirects back without the script, and keeps the choices on a refusal", async () => {
+    await passAll("test-luna", "test-mini");
+    const post = (fields: Array<[string, string]>, json: boolean) =>
+      handleTaskModels(
+        new Request(`${ORIGIN}${TASK_MODELS_PATH}/change`, { method: "POST", headers: { origin: ORIGIN, ...(json ? { accept: "application/json" } : {}) }, body: new URLSearchParams(fields) }),
+        { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW },
+      );
+    const inPlace = await post([["task", "match"], ["main.match", or("test-mini")], ["fallback.match", or("test-luna")], ["task", "extract"], ["main.extract", or("test-luna")], ["fallback.extract", ""]], true);
+    expect(inPlace.status).toBe(200);
+    const body = (await inPlace.json()) as { main: string };
+    expect(body.main).toContain('<div class="banner ok" role="status" tabindex="-1">Saved: 2 tasks.</div>');
+    expect(body.main).not.toContain("<html");
+    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-mini" }, fallback: { model: "test-luna" } });
+    const refused = await post([["task", "match"], ["main.match", or("test-luna")], ["fallback.match", or("test-luna")]], true);
+    expect([refused.status, await refused.json()]).toEqual([400, { problem: "Matching questions: The fallback must be another model than the main one." }]);
+    const plain = await post([["task", "extract"], ["main.extract", or("test-mini")], ["fallback.extract", ""]], false);
+    expect([plain.status, plain.headers.get("location")]).toEqual([303, `${ORIGIN}${TASK_MODELS_PATH}?saved=extract`]);
+    const back = await (await handleTaskModels(new Request(plain.headers.get("location")!), { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW })).text();
+    expect(back).toContain("Saved: Extracting facts.");
+    const plainRefused = await post([["task", "score"], ["main.score", or("test-luna")], ["fallback.score", ""]], false);
+    expect(plainRefused.headers.get("location")).toBe(`${ORIGIN}${TASK_MODELS_PATH}?problem=wrong_strength&task=score`);
+    expect(await (await handleTaskModels(new Request(plainRefused.headers.get("location")!), { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW })).text()).toContain("Scoring roles: This task takes only Middle models. Choose one from its list.");
+    // A form from another site is refused.
+    const foreign = await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}/change`, { method: "POST", headers: { origin: "https://evil.example" }, body: new URLSearchParams([["task", "match"]]) }), { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW });
+    expect(foreign.status).toBe(403);
+  });
+
+  it("saves the rows changed and not saved with a tap, as the user chose them, all or none, and taps only the others", async () => {
+    await passAll("test-luna", "test-mini");
+    const post = (verb: string, fields: Array<[string, string]>, json: boolean) =>
+      handleTaskModels(
+        new Request(`${ORIGIN}${TASK_MODELS_PATH}/${verb}`, { method: "POST", headers: { origin: ORIGIN, ...(json ? { accept: "application/json" } : {}) }, body: new URLSearchParams(fields) }),
+        { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW },
+      );
+    const saved = async () => (await env.DB.prepare("SELECT task, main_model, fallback_model, set_how FROM task_routes WHERE user_id = ? ORDER BY task").bind(userId).all()).results;
+    // A refused change saves nothing, and takes no proposal either.
+    for (const verb of ["accept", "use-free"]) {
+      const refused = await post(verb, [["task", "match"], ["main.match", or("test-mini")], ["fallback.match", ""], ["task", "score"], ["main.score", or("test-luna")], ["fallback.score", ""]], true);
+      expect([refused.status, await refused.json()]).toEqual([400, { problem: "Scoring roles: This task takes only Middle models. Choose one from its list." }]);
+    }
+    expect(await saved()).toEqual([]);
+    // Matching questions is proposed test-luna with test-mini; the user chose test-mini alone.
+    const res = await post("accept", [["task", "match"], ["main.match", or("test-mini")], ["fallback.match", ""]], true);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { main: string }).main).toContain("Saved: Matching questions. Accepted: 2 tasks use their proposed models.");
+    expect(await saved()).toEqual([
+      { task: "extract", main_model: "test-luna", fallback_model: "test-mini", set_how: "accepted" },
+      { task: "linkedin_message", main_model: "test-luna", fallback_model: "test-mini", set_how: "accepted" },
+      { task: "match", main_model: "test-mini", fallback_model: null, set_how: "changed" },
+    ]);
+    // Without the script a tap posts no rows, and says what it did in the address.
+    const plain = await post("accept", [], false);
+    expect([plain.status, plain.headers.get("location")]).toEqual([303, `${ORIGIN}${TASK_MODELS_PATH}?accepted=0`]);
+    // Ask Admin for help saves no row sent with it, and answers in place with what it says only.
+    const help = await handleTaskModels(
+      new Request(`${ORIGIN}${TASK_MODELS_PATH}/help`, { method: "POST", headers: { origin: ORIGIN, accept: "application/json" }, body: new URLSearchParams([["task", "score"], ["main.score", or("test-mini")], ["fallback.score", ""]]) }),
+      { db: env.DB, plugins: plugins(), userId, viewer: "friend", now: NOW },
     );
-    expect(response.status).toBe(200);
-    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-mini" }, fallback: { model: "test-luna" } });
+    expect([help.status, await help.json()]).toEqual([200, { said: "Sent to Admin: this item's name and its reason only." }]);
+    expect((await saved()).map((r) => r.task)).toEqual(["extract", "linkedin_message", "match"]);
   });
 });

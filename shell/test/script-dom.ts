@@ -36,7 +36,8 @@ export function element(attrs: Record<string, string> = {}) {
 export type Sent = string[];
 
 // Runs `script` with the given document, at `href`, and every recorder.
-export function runScript(script: string, document: unknown, href: string, sent: Sent, extra: { window?: unknown } = {}): void {
+// `extra.fetch` answers a fetch after it is recorded.
+export function runScript(script: string, document: unknown, href: string, sent: Sent, extra: { window?: unknown; fetch?: (url: string, init?: RequestInit) => Promise<Response> } = {}): void {
   const url = new URL(href);
   const location = {
     href: url.href,
@@ -47,7 +48,7 @@ export function runScript(script: string, document: unknown, href: string, sent:
     replace: (u: string) => sent.push(`replace ${u}`),
     assign: (u: string) => sent.push(`assign ${u}`),
   };
-  const fetch = (u: unknown) => { sent.push(`fetch ${String(u)}`); return Promise.resolve(new Response()); };
+  const fetch = (u: unknown, init?: RequestInit) => { sent.push(`fetch ${String(u)}`); return extra.fetch ? extra.fetch(String(u), init) : Promise.resolve(new Response()); };
   const XMLHttpRequest = function () { sent.push("xhr"); };
   const navigator = { sendBeacon: (u: string) => { sent.push(`beacon ${u}`); return true; } };
   const window = extra.window ?? { addEventListener: () => {} };
