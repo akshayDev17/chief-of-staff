@@ -14,7 +14,7 @@
 // matches any part of a model's name, maker or ID; the Maker filter, its own
 // find box and its chips narrow the table; the Works / Doesn't work / Not
 // tested yet strip filters it too, over a bar of the true ratios, and counts
-// only the rows search and the Maker filter show. None of these sends a
+// only the rows search, the Maker filter and a strength show. None of these sends a
 // request: the page's script shows and hides rows, and recounts the strip.
 //
 // A row that cannot be tested has one action of its own: a model the
