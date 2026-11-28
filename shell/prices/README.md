@@ -30,7 +30,8 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   (`isTrulyFreeTextModel`: only text out, every listed price 0) can be chosen.
   On 2026-11-27 the API listed 477 models, 434 of them choosable.
 - **Refresh.** Cron `0 6 * * *`, and Refresh model list on the Connect screen
-  (at most once a minute). Each stores a dated snapshot; the newest 14 are
+  (at most once a minute); a second Cron Trigger, `* * * * *`, runs the
+  background host read (below), which does nothing when no hosts wait. Each stores a dated snapshot; the newest 14 are
   kept. A failed read keeps the last good rows with their own date read,
   marked stale, and the last model list, and raises a refresh-failed alert. A
   read that answers stores what OpenRouter lists: a model no longer listed has
@@ -65,11 +66,21 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   `migrations/0016_add_strength_figures.sql`) and each month's lines in
   `strength_lines`, worked out at the month's first daily refresh (or the
   first refresh of all). Every reader goes through `src/prices/strength.ts`;
-  a snapshot with no figures takes its headline prices until a refresh.
+  a snapshot with no figures takes its headline prices until the background
+  host read stores them.
 - **Host reads.** The daily refresh reads every tiered model's endpoints list,
-  six at a time; Refresh model list reads only the new ones, those whose
-  headline price changed and those last not read. A list that cannot be read
-  gives the model its headline price.
+  six at a time. Refresh model list needs only the new ones, those whose
+  headline price changed and those last not read, and reads them while the
+  user waits only when there are at most `HOST_READS_NOW` (30); with more (the
+  first Refresh after a release), it reads none, stores them at their headline
+  price and records them in `price_host_reads` (migration 0017). Every minute
+  the background read (`src/prices/host-reads.ts`) takes the current
+  snapshot's waiting hosts, or every host of a snapshot with no figures (one a
+  previous Worker wrote), under a 15-minute lease, runs the same refresh and
+  stores the next snapshot. While hosts wait, Providers, Model for each task
+  and the price table say so; Providers shows the count read and redraws in
+  place when they land. A list that cannot be read gives the model its
+  headline price.
 - **Admin · Price table** is at `GET /chief-of-staff/admin/price-table`, owner
   only, behind the Cloudflare Access check (`src/access.ts`, T15). Beside the
   table, OpenRouter's rate limits as its limits page states them (no default

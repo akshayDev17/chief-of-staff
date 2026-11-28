@@ -216,6 +216,8 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
 .capbox .acts { display: flex; gap: 12px; align-items: center; }
 .cap-err { color: var(--negative); font-size: 13px; }
 
+.reading { margin: 12px 16px 8px; padding: 10px 14px; border-radius: var(--radius-card); background: var(--raised); border: 1px solid var(--border); display: flex; gap: 10px; align-items: center; font-size: 14px; color: var(--muted); }
+.reading .spin { flex: none; width: 12px; height: 12px; color: var(--accent); }
 .stale { margin: 12px 16px 0; padding: 10px 12px 10px 14px; border-radius: var(--radius-card); background: var(--raised); border: 1px solid var(--border); font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; }
 .confirm { padding: 12px 14px; border-radius: var(--radius-card); background: var(--raised); border: 1px solid var(--border); display: grid; gap: 8px; font-size: 14px; }
 .confirm .why { font-size: var(--fs-small); color: var(--muted); }
@@ -254,6 +256,7 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
   .next-row { justify-content: stretch; }
   .next-row .btn { width: 100%; }
   .err, .stale { margin: 10px 12px 0; }
+  .reading { margin: 10px 12px 6px; }
 }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } .bar i, .btn { transition: none; } }
 `;

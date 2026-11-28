@@ -51,9 +51,11 @@ export interface StoredFigure extends Figure {
 
 // The header, its rows, OpenRouter's model list read with them
 // (src/prices/openrouter.ts), each model's figure, the month's lines when
-// this refresh works them out, and the pruning go in one batch, which D1
-// runs as one transaction: a write that fails leaves the previous snapshot
-// current, and no lines point at a snapshot that was not stored.
+// this refresh works them out, how many models' hosts are left for the
+// background read (src/prices/host-reads.ts) and the pruning go in one
+// batch, which D1 runs as one transaction: a write that fails leaves the
+// previous snapshot current, and no lines or waiting hosts point at a
+// snapshot that was not stored.
 export async function writeSnapshot(
   db: D1Database,
   s: {
@@ -64,6 +66,7 @@ export async function writeSnapshot(
     catalog?: OpenRouterCatalog;
     figures?: StoredFigure[];
     lines?: Lines;
+    hostsWaiting?: number;
   },
 ): Promise<number> {
   const header = db
@@ -117,6 +120,13 @@ export async function writeSnapshot(
         .bind(l.month, l.lower, l.upper, l.lowerRaw, l.upperRaw, l.models, l.computedAt),
     );
   }
+  if (s.hostsWaiting) {
+    statements.push(
+      db
+        .prepare("INSERT INTO price_host_reads (snapshot_id, waiting, queued_at) SELECT max(id), ?1, ?2 FROM price_snapshots")
+        .bind(s.hostsWaiting, s.takenAt),
+    );
+  }
   // Older snapshots beyond the kept number go, with their rows and lists. The
   // tables the previous Worker wrote (price_rows, bedrock_catalogs) are
   // pruned with them too, until a later release drops those tables.
@@ -125,6 +135,7 @@ export async function writeSnapshot(
   statements.push(
     prune("model_price_rows"),
     prune("model_price_figures"),
+    prune("price_host_reads"),
     prune("openrouter_catalogs"),
     prune("price_rows"),
     prune("bedrock_catalogs"),
@@ -165,6 +176,11 @@ export async function readFigures(db: D1Database, snapshotId: number): Promise<S
   return results.map(toFigure);
 }
 
+// Whether a snapshot has any figures; none for one the previous Worker wrote.
+export async function hasFigures(db: D1Database, snapshotId: number): Promise<boolean> {
+  return (await db.prepare("SELECT 1 FROM model_price_figures WHERE snapshot_id = ? LIMIT 1").bind(snapshotId).first()) !== null;
+}
+
 // One model's figure beside a snapshot, and whether the snapshot has any.
 export async function readFigure(
   db: D1Database,
@@ -180,6 +196,24 @@ export async function readFigure(
     .all<FigureRecord>();
   const figure = results.find((r) => r.provider === key.provider && r.model === key.model);
   return { ...(figure ? { figure: toFigure(figure) } : {}), any: results.length > 0 };
+}
+
+// The hosts a snapshot's figures still wait for (src/prices/host-reads.ts):
+// how many models, how many of them the background read has tried, and when
+// one took them.
+export interface HostReads {
+  waiting: number;
+  done: number;
+  queuedAt: string;
+  startedAt?: string;
+}
+
+export async function readHostReads(db: D1Database, snapshotId: number): Promise<HostReads | undefined> {
+  const r = await db
+    .prepare("SELECT waiting, done, queued_at, started_at FROM price_host_reads WHERE snapshot_id = ?")
+    .bind(snapshotId)
+    .first<{ waiting: number; done: number; queued_at: string; started_at: string | null }>();
+  return r ? { waiting: r.waiting, done: r.done, queuedAt: r.queued_at, ...(r.started_at ? { startedAt: r.started_at } : {}) } : undefined;
 }
 
 type LinesRecord = { month: string; lower_usd: number; upper_usd: number; lower_raw: number; upper_raw: number; models: number; computed_at: string };

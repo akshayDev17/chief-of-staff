@@ -12,7 +12,8 @@ import { readCurrentCatalog } from "../src/prices/store";
 import { providerPlugins } from "../src/providers/index";
 import { readCheck } from "../src/providers/check";
 import { handleProviders } from "../src/providers/page";
-import { PAGE_SCRIPT } from "../src/providers/page-script";
+import { PAGE_SCRIPT, POLL_MS } from "../src/providers/page-script";
+import { readWaitingHosts } from "../src/prices/host-reads";
 import { sha256Hex } from "../src/providers/openrouter";
 import { vaultSecrets } from "../src/providers/secrets";
 import { setBudget } from "../src/proxy/budgets";
@@ -78,6 +79,17 @@ const primaries = (html: string): string[] => [...html.matchAll(/class="btn(?: w
 const rowOf = (html: string, model: string) => html.match(new RegExp(`<li class="row"[^>]*data-id="${model.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}"[\\s\\S]*?</li>`))![0];
 
 const PATH = new URL(BASE).pathname;
+
+// DeepSeek V4.1 Flash's two hosts, priced apart, so its row shows ranges once they are read.
+const FLASH = "deepseek/deepseek-v4.1-flash-1017";
+const flashHosts = (s: { url: string }) =>
+  s.url.includes(FLASH)
+    ? Response.json({
+        data: {
+          endpoints: [[0.07, 1.4], [1.08, 3.98]].map(([i, o]) => ({ pricing: { prompt: String(i! / 1e6), completion: String(o! / 1e6) }, service_tier: null, supported_parameters: ["tools"], status: 0 })),
+        },
+      })
+    : new Response("not found", { status: 404 });
 // The page as the browser has it, its own script running: every request it
 // sends is recorded and answered by the app at `now`; `settle` waits for the
 // answers to be swapped in. `failNextPost`: the next form's request runs on
@@ -455,6 +467,65 @@ describe("Connect OpenRouter", () => {
     expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`]);
     expect(stamp()).toContain("10:05 UTC");
     expect(doc.querySelectorAll('[aria-busy="true"]')).toEqual([]);
+  });
+
+  it("redraws the rows' prices and strengths in place after a slow Refresh that read their hosts", async () => {
+    await connect();
+    const { doc, sent, settle, holdNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const flash = () => doc.querySelector(`li.row[data-id="${FLASH}"] .price`)!.textContent;
+    expect(flash()).toBe("$0.30 / $1.20");
+    fetcher = fakeFetch({ endpoints: flashHosts });
+    const release = holdNextPost();
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    release();
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`]);
+    expect(flash()).toBe("$0.07–$1.08 in · $1.40–$3.98 out");
+    expect(doc.querySelector("[data-reading]")).toBeNull();
+    expect(doc.querySelectorAll('[aria-busy="true"]')).toEqual([]);
+  });
+
+  it("says each model's hosts are still being read, reads itself again quietly, and redraws in place when they land", async () => {
+    await connect();
+    // A Refresh that left every model's hosts to the background read.
+    await refreshPrices({ db: env.DB, fetcher: fakeFetch(), now: new Date("2026-11-27T10:00:00Z"), hostReadsNow: 0 });
+    // The page's own timers, held here and run by hand; every other timer runs.
+    const real = globalThis.setTimeout;
+    const polls: Array<() => void> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => (ms === POLL_MS ? (polls.push(fn), 0) : real(fn, ms))) as typeof setTimeout);
+    const tick = () => polls.shift()!();
+    const { doc, sent, settle } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const note = () => doc.querySelector('[data-part="err"] [data-reading]');
+    expect(note()!.textContent).toBe("Reading each model's hosts on OpenRouter. Strengths may change.");
+    expect(polls).toHaveLength(1);
+    // A read while they are not in yet: the note stays, with no request but the page's own.
+    tick();
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}?provider=openrouter`]);
+    expect(note()).not.toBeNull();
+    expect(polls).toHaveLength(1);
+    // The background read lands.
+    await readWaitingHosts({ db: env.DB, fetcher: fakeFetch({ endpoints: flashHosts }), now: new Date("2026-11-27T10:06:00Z"), hostRetryPauseMs: 0 });
+    fetcher = fakeFetch();
+    tick();
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}?provider=openrouter`, `fetch ${PATH}?provider=openrouter`]);
+    expect(note()).toBeNull();
+    expect(doc.querySelector(`li.row[data-id="${FLASH}"] .price`)!.textContent).toBe("$0.07–$1.08 in · $1.40–$3.98 out");
+    // It kept the card: the account line was not read again; and nothing more is scheduled.
+    expect(fetcher.sent.filter((s) => s.url.endsWith("/api/v1/key"))).toEqual([]);
+    expect(polls).toEqual([]);
+    expect(sent.some((s) => s === "reload" || s.startsWith("replace") || s.startsWith("assign"))).toBe(false);
+  });
+
+  it("says so on Model for each task too while the hosts are read", async () => {
+    await connect();
+    await refreshPrices({ db: env.DB, fetcher: fakeFetch(), now: new Date("2026-11-27T10:00:00Z"), hostReadsNow: 0 });
+    const page = async () =>
+      (await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW })).text();
+    expect(visibleLines(await page())).toContain("Reading each model's hosts on OpenRouter. Strengths and lists may change.");
+    await readWaitingHosts({ db: env.DB, fetcher: fakeFetch({ endpoints: flashHosts }), now: new Date("2026-11-27T10:06:00Z"), hostRetryPauseMs: 0 });
+    expect(await page()).not.toContain("Reading each model's hosts");
   });
 
   it("gives Refresh back once its answer is in, even when the list it shows has not changed", async () => {

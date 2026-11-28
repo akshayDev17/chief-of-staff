@@ -15,6 +15,10 @@
 //   the rows until its answer is in. A request that fails (no
 //   answer, or an error status) reads the page again, so whatever the server
 //   saved shows, and says so with Try again, which sends it once more.
+// - While the page says each model's hosts are still being read (after a
+//   release, or a Refresh that left them to the background read), it reads
+//   itself again every POLL_MS, in turn with those requests and with the
+//   provider card kept, and redraws in place when they land. No other timer.
 // - Back from the provider's consent page (main is marked data-land), the
 //   search field takes focus once.
 // - An address with strength=<Smallest|Middle|Strongest> (and show=<ready|
@@ -28,6 +32,9 @@
 import { MAKER_FILTER_JS } from "../models/maker-filter";
 import { ICON } from "./models-table";
 
+// How often the page reads itself again while hosts are being read.
+export const POLL_MS = 4000;
+
 export const PAGE_SCRIPT = String.raw`
 (function () {
   "use strict";
@@ -35,6 +42,7 @@ export const PAGE_SCRIPT = String.raw`
   if (!main || !window.fetch || !window.history) return;
   var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, lists: 0, det: {}, allowed: {}, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
+  var POLL_MS = ${POLL_MS};
   var BAD = ${JSON.stringify(ICON.bad)};
   var STATES = ["ready", "credit", "step"];
   var NOUN = { ready: "ready", credit: "that need credit", step: "that need a step" };
@@ -202,12 +210,13 @@ export const PAGE_SCRIPT = String.raw`
   }
   function next() {
     var job = S.queue.shift();
-    if (!job) { S.busy = false; return; }
+    if (!job) { S.busy = false; poll(); return; }
     S.busy = true;
     var init = job.init || {};
     // The view shown now goes with every action, so a test keeps the results
     // already under their rows.
     init.headers = { accept: "application/json", "x-cos-view": S.view };
+    if (job.poll) init.headers["x-cos-poll"] = "1";
     init.credentials = "same-origin";
     fetch(job.url, init)
       .then(function (r) { if (!r.ok && r.status !== 400 && r.status !== 429 && r.status !== 502) throw new Error(String(r.status)); return r.json(); })
@@ -220,8 +229,22 @@ export const PAGE_SCRIPT = String.raw`
       .then(next, function () {
         if (job.k) delete S.waiting[job.k];
         if (job.list) S.lists--;
-        failed(job);
+        // A read of its own that failed says nothing; the next one tries again.
+        if (job.poll) next(); else failed(job);
       });
+  }
+  // While each model's hosts are still being read (models-table.ts
+  // readingNote), the page reads itself again every few seconds, in turn
+  // with the requests the user sends and with the card kept, until they land
+  // and the rows redraw in place. Otherwise nothing is scheduled.
+  function poll() {
+    if (S.timer || !main.querySelector("[data-reading]")) return;
+    S.timer = setTimeout(function () {
+      S.timer = null;
+      if (!main.querySelector("[data-reading]")) return;
+      S.queue.push({ url: location.pathname + "?" + S.view, init: { method: "GET" }, poll: true });
+      if (!S.busy) next();
+    }, POLL_MS);
   }
 
   // ---------- swapping the parts that changed ----------
@@ -340,6 +363,7 @@ export const PAGE_SCRIPT = String.raw`
   var makers = makerFilter({ scope: main, rows: rows, changed: apply });
   remember();
   apply();
+  poll();
   // Back from the consent page: the search field, once, with the section in view.
   if (main.hasAttribute("data-land")) {
     main.removeAttribute("data-land");
