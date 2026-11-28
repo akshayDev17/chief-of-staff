@@ -511,7 +511,7 @@ ${renderMain(input)}
 
 const CSS = `
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.tasks-head, .task-f { display: grid; grid-template-columns: minmax(170px, .9fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 72px; gap: 8px 16px; }
+.tasks-head, .task-f { display: grid; grid-template-columns: minmax(170px, .9fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 104px; gap: 8px 16px; }
 .tasks-head { padding: 10px var(--card-pad); font-size: var(--fs-small); color: var(--muted); border-bottom: 1px solid var(--border); }
 .task { border-bottom: 1px solid var(--rule); }
 .tasks > .task:last-child { border-bottom: 0; }
