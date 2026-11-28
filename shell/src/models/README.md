@@ -218,6 +218,10 @@ rows stay as they are, still to save.
   `accepted`); an accepted task whose proposal has since changed keeps its
   models until the next tap and its row names the new proposal, and a task
   the user changed is never overwritten;
+- a router (priced per call by the model it picks, its price the user's
+  cap, a ceiling and not what a call costs) is never proposed, as main or
+  fallback, at any cap, so Accept all never saves one; it stays in its
+  strength's list to choose;
 - a free model is never proposed, as main or fallback: a task uses it only
   once the user chooses it in its list or with **Use my free models for N
   tasks** (`useFreeModels`), the one tap the page offers, and explains, for

@@ -199,7 +199,7 @@ export interface RowFacts {
   tested?: boolean;
   refusal?: TestRecord;
 }
-export type RowAction = "credits" | "test-again" | "budgets";
+export type RowAction = "credits" | "test-again" | "budgets" | "fit";
 export type RowTag = "needs-credit" | "busy" | "couldnt-test";
 
 // One record as the row shows it, with the actions that answer it.
@@ -223,7 +223,7 @@ export interface RowView {
 }
 
 const actionsFor = (r: TestRecord): RowAction[] =>
-  r.reason === "no_credits" ? ["credits"] : r.reason === "busy" ? ["test-again"] : r.reason === "budget_spent" ? ["budgets"] : [];
+  r.reason === "no_credits" ? ["credits"] : r.reason === "busy" ? ["test-again"] : r.reason === "budget_spent" ? ["budgets"] : r.reason === "no_fit" ? ["fit"] : [];
 const shownOf = (result: TestRecord): Shown => ({ result, actions: actionsFor(result) });
 const askable = (reason: TestRefusal | undefined): TestRefusal | undefined => (reason && MODEL_HELP_REASONS.has(reason) ? reason : undefined);
 
@@ -254,7 +254,9 @@ function rowFacts(r: TableRow, input: ModelsTableInput): RowFacts {
   if (res?.reason) {
     const refused: Refused = { kind: "refused", model: r.model, reason: res.reason, ...(r.free ? { free: true } : {}) };
     const fix = refusalFix(refused, input.plugin);
-    refusal = { reason: res.reason, text: refusalText(refused, input.plugin), ...(fix ? { fix } : {}), ...(res.reply ? { reply: res.reply } : {}) };
+    // No model fits: its settings links, from the provider's own reply.
+    const links = res.reason === "no_fit" && res.reply ? input.plugin.connect.classify({ step: "call", status: res.reply.status, errorName: res.reply.errorName ?? "", message: res.reply.message ?? "" }, undefined).links : [];
+    refusal = { reason: res.reason, text: refusalText(refused, input.plugin), ...(fix ? { fix } : {}), ...(res.reply ? { reply: res.reply } : {}), ...(links.length ? { links } : {}) };
   }
   return { state: r.state, ...(latest ? { latest } : {}), ...(res && !res.reason ? { tested: true } : {}), ...(refusal ? { refusal } : {}) };
 }
@@ -401,10 +403,21 @@ function replyText(plugin: ProviderPlugin, reply: TestRecord["reply"]): string {
   return `${esc(plugin.connect.guide.short)} replied: ${esc(parts.join(" · "))}`;
 }
 
-// A record's reply, fix and links, for Details; `omit` is a link shown as a button.
+// A record's reply, fix and links, for Details; `omit` is a link shown as a
+// button, and a lead's own actions show on the row instead.
 function detailParts(plugin: ProviderPlugin, r: TestRecord, omit: string | undefined): string[] {
-  const links = (r.links ?? []).filter((l) => l.href !== omit).map((l) => newTab(l, "ext")).join(" · ");
+  const links = (actionsFor(r).includes("fit") ? [] : (r.links ?? []).filter((l) => l.href !== omit)).map((l) => newTab(l, "ext")).join(" · ");
   return [r.reply ? replyText(plugin, r.reply) : "", r.fix ? esc(r.fix) : "", links].filter(Boolean);
+}
+
+// What answers "no model fits": the provider's settings links from the
+// reply, and Change cap on a router.
+function fitActions(r: TableRow, result: TestRecord, input: ModelsTableInput, cls: string): string[] {
+  const p = input.plugin.provider;
+  const name = esc(shortName(r));
+  const settings = (result.links ?? []).map((l) => `<a class="${cls} ext" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(l.label)}: ${name}, on ${esc(input.plugin.connect.guide.short)}">${esc(l.label)}</a>`);
+  const cap = r.router ? [`<a class="${cls}" href="${esc(viewHref(p, { cap: r.model }, `#${rowAnchor(r.model)}`))}" data-view data-k="cf-${esc(r.model)}" aria-label="Change cap for ${name}">Change cap</a>`] : [];
+  return [...settings, ...cap];
 }
 
 // The result under a row: the lead's plain line and its actions, the
@@ -420,6 +433,7 @@ function resultHtml(r: TableRow, input: ModelsTableInput, v: RowView): string {
     credits: credits ? newTab(credits, "btn small outline ext") : "",
     "test-again": `<form method="post" action="${action(p, "test")}" data-fetch class="inline"><input type="hidden" name="model" value="${esc(r.model)}"><button type="submit" class="btn small outline" data-k="again-${esc(r.model)}" data-busy="Testing…">Test again</button></form>`,
     budgets: `<a class="btn small outline" href="${BUDGETS_PATH}">Budgets</a>`,
+    fit: fitActions(r, v.lead.result, input, "btn small outline").join(""),
   };
   const ask =
     input.viewer === "friend" && v.ask
@@ -491,7 +505,8 @@ function rowHtml(r: TableRow, input: ModelsTableInput, makerNames: Map<string, s
     meta = `<span class="meta capped"><span class="clip"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped</span><span class="cg">&nbsp;· <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span></span>`;
   } else if (v.lead && !resultHere) {
     const lead = v.failed ? `<span class="fw">${failedWord(v)}</span> · ${esc(v.lead.result.text)}` : esc(v.lead.result.text);
-    meta = `<span class="meta why">${lead} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button></span>`;
+    const acts = v.lead.actions.includes("fit") ? fitActions(r, v.lead.result, input, "link").map((a) => `${a} · `).join("") : "";
+    meta = `<span class="meta why">${lead} · ${acts}<button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button></span>`;
   } else meta = plainMeta;
   let extra = "";
   if (view.cap === r.model && r.router) extra = capEditor(r, input);

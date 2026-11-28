@@ -96,7 +96,7 @@ export type TestRefusal =
 
 // The refusals a friend can ask Admin about, by the sentence they saw.
 export const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<TestRefusal>([
-  "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
+  "not_set_up", "no_credits", "no_such_model", "no_fit", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
   "wrong_model", "budget_spent", "cannot_call", "no_price", "no_cap", "cap_refused",
 ]);
 
@@ -299,9 +299,14 @@ export async function testModel(
   }
   const connection = await readConnection(db, userId, provider);
   // A router called under the user's cap that OpenRouter refuses for the
-  // request itself (no model under the cap, a router's own limit): its own
-  // words, not a missing model.
-  if (outcome.failure?.step === "call" && plugin.connect.isRouter?.(model) && [400, 404, 422].includes(outcome.failure.status)) {
+  // request itself (a router's own limit): its own words, not a missing
+  // model. No model fitting the settings or the cap has its own reason.
+  if (
+    outcome.failure?.step === "call" &&
+    plugin.connect.isRouter?.(model) &&
+    [400, 404, 422].includes(outcome.failure.status) &&
+    plugin.connect.classify(outcome.failure, connection).reason !== "no_fit"
+  ) {
     const { failure } = outcome;
     return refuse("cap_refused", {
       reply: { status: failure.status, errorName: failure.errorName, message: failure.message },

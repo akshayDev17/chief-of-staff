@@ -38,7 +38,11 @@
 // provider, a fallback is another OpenRouter model). No task is
 // Strongest, and none is proposed or offered a model of another strength. A
 // saved choice made before this rule, of another strength, keeps running and
-// is shown as it is until the user changes it. A free model (prices/openrouter.ts
+// is shown as it is until the user changes it. A router (priced per call by
+// the model it picks, so its price is the user's cap) is never proposed
+// either, only chosen in its list (the owner, 2026-11-28: "A cap is a
+// ceiling, not a price: never propose a router; it stays choosable in the
+// dropdown"). A free model (prices/openrouter.ts
 // isTrulyFreeTextModel: rate-limited, and the provider may log prompts)
 // is never proposed: a task uses it only once the
 // user chooses it, in its list or, for the tasks with no model and no
@@ -96,7 +100,9 @@ export const taskById = (id: string): Task | undefined => TASKS.find((t) => t.id
 // `otherFees` for a model at $0 a token that is not free), its list price per
 // million input and output tokens (a router's is its cap), whether it is free
 // (prices/openrouter.ts isTrulyFreeTextModel), and its row's state
-// (models/ready.ts rowState): only a Ready one is offered to a task.
+// (models/ready.ts rowState): only a Ready one is offered to a task. `router`:
+// priced per call by the model it picks, so its price is the user's cap, a
+// ceiling and not what a call costs; it is chosen, never proposed.
 export interface Offered {
   provider: Provider;
   model: string;
@@ -108,6 +114,7 @@ export interface Offered {
   inputUsd?: number;
   outputUsd?: number;
   free?: boolean;
+  router?: true;
 }
 
 // Why the provider does not offer a saved model to the user now: its list no
@@ -161,6 +168,7 @@ const offeredOf = (r: TableRow): Offered => {
     ...(chip === "Other fees" ? { otherFees: true } : chip ? { tier: chip } : {}),
     ...(r.price ? { inputUsd: r.price.input, outputUsd: r.price.output } : {}),
     free: r.free,
+    ...(r.router ? { router: true as const } : {}),
   };
 };
 
@@ -192,9 +200,10 @@ export function offeredFor(task: Task, models: Offered[]): Offered[] {
     .sort((a, b) => (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) || (a.outputUsd ?? Infinity) - (b.outputUsd ?? Infinity) || modelKey(a).localeCompare(modelKey(b)));
 }
 
-// The cheapest model of the task's strength among `models`; never a free one
-// unless `free` says to take only free ones.
-const bestFor = (task: Task, models: Offered[], free = false): Offered | undefined => offeredFor(task, models).find((m) => Boolean(m.free) === free);
+// The cheapest model of the task's strength among `models`; never a router
+// (its cap is a ceiling, not a price: at a low cap it may route nowhere), and
+// never a free one unless `free` says to take only free ones.
+const bestFor = (task: Task, models: Offered[], free = false): Offered | undefined => offeredFor(task, models).find((m) => !m.router && Boolean(m.free) === free);
 
 export function proposeRoute(task: Task, models: Offered[], free = false): Route | undefined {
   const main = bestFor(task, models, free);

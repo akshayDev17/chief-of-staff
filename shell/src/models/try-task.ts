@@ -45,11 +45,14 @@ type Ref = { provider: Provider; model: string };
 
 // A model that did not answer, in plain words, with the provider's own
 // where it replied. `marked`: its Providers row now reads Failed when used.
+// `actions`: what answers it, where its reason has a direct one (no model
+// fits: the provider's settings, and a router's Change cap).
 export interface TryFailure extends Ref {
   role: "main" | "fallback";
   reason: string;
   reply?: string;
   marked: boolean;
+  actions?: Link[];
 }
 
 export type TryOutcome =
@@ -86,6 +89,8 @@ export type TryOutcome =
     };
 
 const budgetsLink = (label: string): Link => ({ label, href: BUDGETS_PATH });
+// A router's row on Providers, its price cap open.
+const capHref = (provider: Provider, model: string): string => `${PROVIDERS_PATH}?${viewQuery(provider, { cap: model })}#${rowAnchor(model)}`;
 
 // The plain reason a call that reached the provider failed, and whether it
 // marked its model, by the same rule as recordUse.
@@ -98,7 +103,9 @@ function failureOf(o: Extract<ProxyOutcome, { kind: "provider_error" }>, role: T
   // "404 No endpoints found…", the error's own name too where it is not just the status.
   const name = failure.errorName && failure.errorName !== `HTTP ${failure.status}` ? `${failure.errorName}: ` : "";
   const reply = `${failure.status} ${name}${failure.message}`.trim();
-  return { ...ref, reason: reasonText(plain.reason, plugin), reply, marked: marksModel(plain.reason) };
+  const changeCap = plugin.connect.isRouter?.(o.model) ? [{ label: "Change cap", href: capHref(o.provider, o.model) }] : [];
+  const actions = plain.reason === "no_fit" ? [...plain.links, ...changeCap] : [];
+  return { ...ref, reason: reasonText(plain.reason, plugin), reply, marked: marksModel(plain.reason), ...(actions.length ? { actions } : {}) };
 }
 
 // The plain reason for a call refused before it was sent, with its fix.
@@ -113,7 +120,7 @@ function refusalOf(o: Extract<ProxyOutcome, { kind: "refused" }>, plugin: Provid
     case "credential_failed":
       return { reason: o.reason === "not_connected" ? `${name} is not connected.` : `The ${name} connection gave no key.`, action: { label: `Connect ${name}`, href: PROVIDERS_PATH } };
     case "no_cap":
-      return { reason: "This router needs a price cap.", action: { label: "Set its price cap", href: `${PROVIDERS_PATH}?${viewQuery(o.provider, { cap: o.model })}#${rowAnchor(o.model)}` } };
+      return { reason: "This router needs a price cap.", action: { label: "Set its price cap", href: capHref(o.provider, o.model) } };
     case "no_price":
       return { reason: "This model has no price yet, so the budget stop can't count it." };
     default:
