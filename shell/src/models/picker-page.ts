@@ -43,8 +43,8 @@
 // last screen while the checklist's next item is not built).
 //
 // A free model is never proposed, only chosen: in its dropdown, or with one tap
-// for every task that has no model and no proposal (a $0 account's passed
-// models are all free), which the page offers and explains, with the
+// for the tasks of its strength (Smallest) that have no model and no proposal
+// (a $0 account's passed models are all free), which the page offers and explains, with the
 // provider's own terms for free models. A model known to make no tool call
 // (the plug-in's `noToolUse`) says so. Friend screens say "Admin" for the owner.
 //

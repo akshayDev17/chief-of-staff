@@ -15,7 +15,7 @@
 // saved choice: its main model while that is usable; once it is not (a later
 // test of the model failed, or the provider dropped it), its saved fallback
 // alone while that is usable, which the task shows it runs on, else nothing,
-// and the task reads "Choose a model" until the user chooses one. Its calls
+// and the task has no model until the user chooses one. Its calls
 // never go to a model the user did not choose for it. A task with no saved
 // choice has no model (migration 0013 saved, as accepted choices, the one
 // model each user's tasks used before this rule).
@@ -33,11 +33,12 @@
 // is shown as it is until the user changes it. A free model (prices/openrouter.ts
 // isTrulyFreeTextModel: rate-limited, and the provider may log prompts)
 // is never proposed: a task uses it only once the
-// user chooses it, with Change or, for every task with no model and no
+// user chooses it, in its list or, for the tasks with no model and no
 // proposal (all of a $0 account's passed models are free), with one tap
-// ("Use my free models for every task", the owner, 2026-11-27: "use only the
-// free models"), which picks by the proposal's own rule and saves the tasks
-// as the user's own choice. The proposal is used once the user accepts it;
+// ("Use my free models for N tasks", the owner, 2026-11-27: "use only the
+// free models"), which picks by the proposal's own rule among the free models
+// of each task's strength (a free model is Smallest, so it takes the Smallest
+// tasks) and saves the tasks as the user's own choice. The proposal is used once the user accepts it;
 // an accepted task whose proposal has since changed (say a model at another
 // provider was added) is pending again and keeps its accepted models until
 // the next tap. A task the user changed is never overwritten by a tap.
