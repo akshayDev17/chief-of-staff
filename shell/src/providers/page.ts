@@ -60,7 +60,7 @@ import { readBudget } from "../proxy/budgets";
 import { readConnection } from "../proxy/connections";
 import type { AccountInfo, ConnectionFields, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 
-import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, type Check } from "./check";
+import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, removedText, CONNECT_AGAIN, type Check } from "./check";
 import { formatCost, ICON, MAX_RESULTS, modelParts, nextStep, parseView, rowAnchor, viewQuery, type ModelsTableInput, type Step, type View, type Viewer } from "./models-table";
 import { MAKER_CHIPS_HTML, MAKER_FILTER_HTML } from "../models/maker-filter";
 import { NOSCRIPT_STYLE, PAGE_STYLE } from "./page-style";
@@ -142,7 +142,7 @@ function providerCard(state: PageState): string {
     return `<h3>${esc(g.name)} <span class="pill">Not connected</span></h3><div class="lines">${lines}</div><div class="acts">${connect}${help}</div>${view.disconnected ? "" : about}`;
   }
   if (!state.connected) {
-    return `<h3>${esc(g.name)} <span class="pill warn">Removed on ${esc(g.short)}'s side</span></h3><div class="lines"><p>Connect again to get a new key.</p></div><div class="acts">${connect}${help}</div>`;
+    return `<h3>${esc(g.name)} <span class="pill warn">${esc(removedText(g.short))}</span></h3><div class="lines"><p>${CONNECT_AGAIN} to get a new key.</p></div><div class="acts">${connect}${help}</div>`;
   }
   const a = state.account;
   const account = a === "unread" || !a ? `<p><strong>Account:</strong> could not be read just now.</p>` : `<p><strong>Account:</strong> ${esc(accountFacts(a))}</p>`;

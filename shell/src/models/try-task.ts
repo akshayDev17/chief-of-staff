@@ -32,7 +32,7 @@ import { monthSpend } from "../proxy/ledger";
 import type { Failure, Link, PluginRegistry, ProviderPlugin, Usage } from "../proxy/plugin";
 import { PROVIDER_NAMES, type ProxyOutcome } from "../proxy/proxy";
 import type { Provider } from "../prices/types";
-import { reasonText } from "../providers/check";
+import { CONNECT_AGAIN, reasonText, readCheck, removedText } from "../providers/check";
 import { rowAnchor, viewQuery } from "../providers/models-table";
 import { marksModel } from "./ready";
 import { callTask, readChoice, taskById, type Task } from "./tasks";
@@ -178,6 +178,14 @@ export async function tryTask(db: D1Database, plugins: PluginRegistry, userId: s
   const failed = [...mainFailed, ...failedOf(outcome, main ? "fallback" : "main")];
   if (outcome.kind === "provider_error") {
     const last = failed.at(-1)!;
+    // The key removed on the provider's side: the proxy recorded it as
+    // revoked (revoked.ts), the state Providers reads too, so both say the
+    // same and offer the same Connect.
+    const plugin = plugins[outcome.provider];
+    if (plugin && last.reason === reasonText("not_set_up", plugin) && (await readCheck(db, userId, outcome.provider))?.state === "revoked") {
+      const removed = `${removedText(plugin.connect.guide.short)}.`;
+      return { kind: "refused", task, reason: removed, action: { label: CONNECT_AGAIN, href: PROVIDERS_PATH }, failed: failed.map((f) => (f.provider === outcome.provider ? { ...f, reason: removed } : f)) };
+    }
     return { kind: "refused", task, reason: last.reason, failed };
   }
   return { kind: "refused", task, ...refusalOf(outcome, plugins[outcome.provider]), failed };

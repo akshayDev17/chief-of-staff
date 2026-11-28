@@ -89,6 +89,11 @@ async function saveCheck(db: D1Database, userId: string, c: Check): Promise<void
 // its key removed on the provider's side.
 export const isConnected = (connection: unknown, check: Check | undefined): boolean => connection !== undefined && check?.state !== "revoked";
 
+// The words for a connection whose key was removed on the provider's side
+// (a real call's 401, recorded by revoked.ts), on Providers and on Try it.
+export const removedText = (short: string): string => `Removed on ${short}'s side`;
+export const CONNECT_AGAIN = "Connect again";
+
 // The plain sentence for a reason: the first line of a test call's result.
 export function reasonText(reason: PlainReason | undefined, plugin: ProviderPlugin): string {
   const { name, short } = plugin.connect.guide;
@@ -169,6 +174,12 @@ export async function finishConsent(
   const name = plugin?.connect.guide.name ?? "the provider";
   const notThis = { problem: `That answer from ${name} was not for this Connect. Tap Connect ${name} again.` };
   const state = input.returned.get("state");
+  // A cancel or deny on the provider's page: seen live 2026-11-28, OpenRouter
+  // returns to the callback with no query at all (its docs: `state` is "Not
+  // returned when the user denies access"), so a return with no code, or
+  // with an error, is a cancel.
+  // A code with a state that is not this Connect's stays notThis.
+  if (plugin && (!input.returned.get("code") || input.returned.has("error"))) return { problem: `You cancelled on ${name}. Connect ${name} to try again.` };
   if (!plugin || !check?.consentState || !state || state !== check.consentState) return notThis;
   const spent = await db
     .prepare("UPDATE provider_checks SET consent_state = NULL WHERE user_id = ? AND provider = ? AND consent_state = ?")

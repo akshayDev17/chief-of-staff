@@ -222,6 +222,48 @@ describe("Try it", () => {
     expect(chatModels()).toEqual([main.model, main.model]);
   });
 
+  const tryHtml = async () => {
+    const res = await handleTaskModels(
+      new Request(`${ORIGIN}${TASK_MODELS_PATH}/try`, { method: "POST", headers: { origin: ORIGIN, accept: "application/json" }, body: new URLSearchParams([["task", "match"]]) }),
+      { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW },
+    );
+    return ((await res.json()) as { tried: string }).tried;
+  };
+
+  it("says a key deleted on OpenRouter is removed on its side, with Connect again to Providers, as Providers says it, and tries no fallback", async () => {
+    chat = () => Response.json({ error: { code: 401, message: "User not found." } }, { status: 401 });
+    expect(await tryIt()).toMatchObject({
+      kind: "refused", reason: "Removed on OpenRouter's side.", action: { label: "Connect again", href: "/chief-of-staff/models/setup/providers" },
+      failed: [{ role: "main", model: main.model, reason: "Removed on OpenRouter's side." }],
+    });
+    expect(chatModels()).toEqual([main.model]);
+    fetcher.sent.length = 0;
+    const tried = await tryHtml();
+    expect(tried).toContain("<strong>Not answered.</strong> Removed on OpenRouter&#39;s side.");
+    expect(tried).toContain(`<a class="btn small primary" href="/chief-of-staff/models/setup/providers">Connect again</a>`);
+    expect(tried).not.toContain("isn&#39;t set up");
+    expect(tried).not.toContain("tr-fails");
+    expect(chatModels()).toEqual([main.model]);
+  });
+
+  it("keeps the model's own line under a busy refusal, its name and reason both shown", async () => {
+    expect(await changeTasks(env.DB, await plugins(), userId, [{ task: "match", main: modelKey(main), fallback: "" }], NOW)).toBeUndefined();
+    chat = () => Response.json({ error: { code: 429, message: "Rate limited" } }, { status: 429 });
+    expect(await tryIt()).toMatchObject({ kind: "refused", reason: "Busy or out of quota, not a setup fault.", failed: [{ role: "main", model: main.model, reason: "Busy or out of quota, not a setup fault." }] });
+    const tried = await tryHtml();
+    expect(tried).toContain(`<ul class="tr-fails"><li>Model ${main.name ?? main.model}: Busy or out of quota, not a setup fault.</li></ul>`);
+    expect(tried).not.toContain("btn small primary");
+  });
+
+  it("says a connection never set up is not connected, with its own Connect, and sends nothing", async () => {
+    await env.DB.prepare("DELETE FROM provider_connections WHERE user_id = ?").bind(userId).run();
+    expect(await tryIt()).toMatchObject({ kind: "refused", reason: "OpenRouter is not connected.", action: { label: "Connect OpenRouter", href: "/chief-of-staff/models/setup/providers" }, failed: [] });
+    const tried = await tryHtml();
+    expect(tried).toContain(">Connect OpenRouter</a>");
+    expect(tried).not.toContain("Removed on");
+    expect(chatSent()).toEqual([]);
+  });
+
   it("has a short fixed sample prompt for every task, naming no model", async () => {
     const ids = (await readCurrentCatalog(env.DB))!.models.map((m) => m.id);
     for (const t of TASKS) {
