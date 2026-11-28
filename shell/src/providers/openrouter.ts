@@ -85,6 +85,9 @@ export const APP_TITLE = "Chief of staff";
 export const TEST_PROMPT = "Reply with the single word OK.";
 export const TEST_MAX_TOKENS = 16;
 
+// One user message, the reply capped at `maxTokens`, in Chat Completions' format.
+const promptRequest = (prompt: string, maxTokens: number) => ({ messages: [{ role: "user", content: prompt }], max_tokens: maxTokens });
+
 const SETTINGS_KEYS = "https://openrouter.ai/settings/keys";
 const SETTINGS_CREDITS = "https://openrouter.ai/settings/credits";
 const SETTINGS_PRIVACY = "https://openrouter.ai/settings/privacy";
@@ -507,7 +510,8 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         return typeof model === "string" && model ? model : undefined;
       },
       locations: () => ["global"],
-      testRequest: () => ({ messages: [{ role: "user", content: TEST_PROMPT }], max_tokens: TEST_MAX_TOKENS }),
+      testRequest: () => promptRequest(TEST_PROMPT, TEST_MAX_TOKENS),
+      promptRequest,
       replyText,
       classify,
     },

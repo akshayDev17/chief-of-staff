@@ -33,7 +33,7 @@
 // having credit; an account that cannot be read counts as having none.
 
 import { readConnection, readHasCredit, saveHasCredit } from "../proxy/connections";
-import type { AccountInfo, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
+import type { AccountInfo, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 import type { ProxyOutcome } from "../proxy/proxy";
 import { PROVIDERS, type Provider } from "../prices/types";
 import { latestTestWrite, readLatestTests, type LatestTest } from "./latest-tests";
@@ -118,7 +118,10 @@ export async function readReadyModels(db: D1Database, plugins: PluginRegistry, u
 // The refusals a task's call can meet that say nothing about its model: the
 // provider busy or not answering, the key gone, no credit (the credit figure
 // says that). Every other refusal marks the model Failed when used.
-const SAYS_NOTHING = new Set(["busy", "no_reply", "not_set_up", "no_credits"]);
+const SAYS_NOTHING = new Set<PlainReason>(["busy", "no_reply", "not_set_up", "no_credits"]);
+
+// Whether a refusal for `reason` marks the model Failed when used.
+export const marksModel = (reason: PlainReason): boolean => !SAYS_NOTHING.has(reason);
 
 // What a task's own call showed about its model: a refusal marks it Failed
 // when used, with the plain reason; an answer takes back an earlier failure.
@@ -139,7 +142,7 @@ export async function recordUse(db: D1Database, plugins: PluginRegistry, userId:
   if (outcome.kind !== "provider_error" || !outcome.failure || !plugin) return;
   const { failure } = outcome;
   const plain = plugin.connect.classify(failure, await readConnection(db, userId, provider));
-  if (SAYS_NOTHING.has(plain.reason)) return;
+  if (!marksModel(plain.reason)) return;
   const refused: Refused = {
     kind: "refused",
     model,

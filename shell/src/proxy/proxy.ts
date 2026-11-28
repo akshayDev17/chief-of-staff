@@ -92,10 +92,12 @@ export type Refusal = "no_plugin" | "not_callable" | "no_price" | "no_cap" | "no
 export const TEST_TASK = "test_call";
 
 export type ProxyOutcome =
-  | { kind: "answered"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown; usage: Usage; costUsd: number }
+  // `durationMs`: how long the provider took, as its ledger row records it;
+  // `callId`: the provider's own ID for the call, as the row keeps it.
+  | { kind: "answered"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown; usage: Usage; costUsd: number; durationMs: number; callId?: string }
   // The provider's own refusal or failure, passed back as it came; `failure`
   // is its status, error name and message, absent when it did not reply.
-  | { kind: "provider_error"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown; failure?: Failure }
+  | { kind: "provider_error"; provider: Provider; model: string; fallback: boolean; status: number; body: unknown; failure?: Failure; durationMs: number }
   // On `credential_failed`: the provider's own refusal (`failure`), or the
   // app's own settings still missing (`missing`).
   | {
@@ -301,10 +303,10 @@ async function attempt(
 
   if (failure) {
     await recordIfRevoked(failure);
-    return { kind: "provider_error", ...base, status, body, failure };
+    return { kind: "provider_error", ...base, status, body, failure, durationMs };
   }
-  if (status === 0) return { kind: "provider_error", ...base, status, body };
-  return { kind: "answered", ...base, status, body, usage, costUsd: cost.usd };
+  if (status === 0) return { kind: "provider_error", ...base, status, body, durationMs };
+  return { kind: "answered", ...base, status, body, usage, costUsd: cost.usd, durationMs, ...(callId ? { callId } : {}) };
 }
 
 // Why the main model's outcome hands the call to the fallback, or undefined

@@ -67,6 +67,7 @@ export const testPlugin = (
       },
       locations: () => ["global"],
       testRequest: () => ({ prompt: "test" }),
+      promptRequest: (prompt, maxTokens) => ({ prompt, max_tokens: maxTokens }),
       replyText: () => "OK",
       classify: (f) => ({ reason: f.step === "credential" || f.status === 401 ? "not_set_up" : f.status === 429 ? "busy" : f.status === 402 ? "no_credits" : "refused", fix: "", links: [] }),
     },

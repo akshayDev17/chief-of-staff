@@ -6,7 +6,7 @@
 //   acceptProposals(db, plugins, userId, now, changes?)    the one tap
 //   useFreeModels(db, plugins, userId, now, changes?)      the one tap for free models, where nothing is proposed
 //   changeTasks(db, plugins, userId, changes, now)        the user's own choices, all or none
-//   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
+//   callTask(db, plugins, call, now?) -> CallOutcome | NoModel
 //
 // Only the user's Ready models (models/ready.ts: on the account's own list,
 // with tool use, nothing blocking them, and free or the account has credit
@@ -57,13 +57,14 @@
 // rule hands any refusal of the call (or no reply) to the task's fallback,
 // named in its ledger row. What each call showed marks its model
 // (models/ready.ts recordUse): a refusal, Failed when used on its Providers
-// row; an answer takes that back.
+// row; an answer takes that back. An outcome the fallback gave carries the
+// main model's own as `fellBackFrom`, so the caller can say why.
 
 import { TASK_MODELS_PATH } from "../paths";
 import { strengthChip, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import type { ModelRequest, PluginRegistry } from "../proxy/plugin";
-import { callModel, type ModelChoice, type ProxyOutcome } from "../proxy/proxy";
+import { callModel, type CallOutcome, type ModelChoice } from "../proxy/proxy";
 import { readAllRows, recordUse, type RowState, type TableRow } from "./ready";
 import { blockKind } from "./test-model";
 
@@ -72,17 +73,20 @@ export interface Task {
   label: string;
   // The owner's tier for it (2026-11-24); never Strongest.
   tier: Exclude<Tier, "Strongest">;
+  // Try it's one short fixed prompt of this kind (models/try-task.ts):
+  // generic and made up, with no job data and nothing about the user.
+  sample: string;
 }
 
 export const TASKS: readonly Task[] = [
-  { id: "match", label: "Matching questions", tier: "Smallest" },
-  { id: "extract", label: "Extracting facts", tier: "Smallest" },
-  { id: "score", label: "Scoring roles", tier: "Middle" },
-  { id: "fill_form", label: "Filling forms", tier: "Middle" },
-  { id: "check_form", label: "Checking a form", tier: "Middle" },
-  { id: "cover_letter", label: "Cover letters", tier: "Middle" },
-  { id: "free_text", label: "Free-text answers", tier: "Middle" },
-  { id: "linkedin_message", label: "LinkedIn invitations and messages", tier: "Smallest" },
+  { id: "match", label: "Matching questions", tier: "Smallest", sample: "A form asks: \"Years of experience with SQL?\" Which of these facts answers it: \"Used SQL daily for 4 years\" or \"Speaks French\"? Reply with the fact only." },
+  { id: "extract", label: "Extracting facts", tier: "Smallest", sample: "From this made-up job post, give the job title and the city, one per line: \"Northwind Ltd is hiring a Data Analyst in Leeds, hybrid, three days a week.\"" },
+  { id: "score", label: "Scoring roles", tier: "Middle", sample: "Score from 1 to 5 how well a role asking for SQL, dashboards and stakeholder reports fits someone with 4 years of SQL and Tableau. Give the score and one sentence why." },
+  { id: "fill_form", label: "Filling forms", tier: "Middle", sample: "A job form has a number field \"Notice period (weeks)\". The known fact is \"one month's notice\". Reply with only the value to type." },
+  { id: "check_form", label: "Checking a form", tier: "Middle", sample: "Check this filled form and name any field that looks wrong, in one line: Email \"sam@example\", Phone \"+44 20 7946 0000\", Start date \"31 February\"." },
+  { id: "cover_letter", label: "Cover letters", tier: "Middle", sample: "Write the two opening sentences of a cover letter for a Data Analyst role at Northwind Ltd, a made-up company, for someone with 4 years of SQL." },
+  { id: "free_text", label: "Free-text answers", tier: "Middle", sample: "Answer this application question in two sentences, for someone with 4 years in data teams: \"Why do you want to work in a small team?\"" },
+  { id: "linkedin_message", label: "LinkedIn invitations and messages", tier: "Smallest", sample: "Write a LinkedIn invitation note under 200 characters to a recruiter at Northwind Ltd, a made-up company, about its Data Analyst role." },
 ];
 
 export const taskById = (id: string): Task | undefined => TASKS.find((t) => t.id === id);
@@ -212,7 +216,7 @@ export function freeRoutes(offered: Offered[], routes: TaskRoute[]): Array<{ tas
 const sameRoute = (a: Route, b: Route): boolean =>
   modelKey(a.main) === modelKey(b.main) && (a.fallback && modelKey(a.fallback)) === (b.fallback && modelKey(b.fallback));
 
-interface ChoiceRecord {
+export interface ChoiceRecord {
   task: string;
   main_provider: Provider;
   main_model: string;
@@ -267,7 +271,8 @@ export async function readTaskRoutes(db: D1Database, plugins: PluginRegistry, us
   return { offered, routes };
 }
 
-const readChoice = (db: D1Database, userId: string, task: string): Promise<ChoiceRecord | null> =>
+// The task's saved choice as stored, or null: no model is read or offered.
+export const readChoice = (db: D1Database, userId: string, task: string): Promise<ChoiceRecord | null> =>
   db.prepare(`SELECT ${CHOICE_COLUMNS} FROM task_routes WHERE user_id = ? AND task = ?`).bind(userId, task).first<ChoiceRecord>();
 
 // The models a call for `task` goes to, or undefined when the task has none,
@@ -421,7 +426,7 @@ export async function callTask(
   plugins: PluginRegistry,
   call: TaskCall,
   now: () => Date = () => new Date(),
-): Promise<ProxyOutcome | NoModel> {
+): Promise<CallOutcome | NoModel> {
   const route = await routeTask(db, plugins, call.userId, call.task);
   if (!route) {
     const choice = await readChoice(db, call.userId, call.task);
@@ -443,5 +448,5 @@ export async function callTask(
   const { fellBackFrom, ...answer } = outcome;
   if (fellBackFrom) await recordUse(db, plugins, userId, fellBackFrom, now());
   await recordUse(db, plugins, userId, answer, now());
-  return answer;
+  return outcome;
 }

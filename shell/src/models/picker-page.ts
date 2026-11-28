@@ -6,6 +6,7 @@
 //   POST /chief-of-staff/models/setup/tasks/accept    the one tap: every proposal is taken
 //   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
+//   POST /chief-of-staff/models/setup/tasks/try       task: Try it, one real call on its saved models
 //
 // Each tap also takes the fields of /change for the rows the user changed
 // and has not saved, saved as chosen (all or none) with it in one request,
@@ -54,17 +55,27 @@
 // provider's own terms for free models. A model with no tool use is never
 // listed (models/test-model.ts listOffer); one saved before that rule says so.
 // Friend screens say "Admin" for the owner.
+//
+// Try it, on each row with a saved model, sends the task's one short sample
+// prompt through the pipeline its own calls use (models/try-task.ts) and
+// shows, under the row and in place, the reply, the model that answered
+// (main or fallback), its tokens, cost and time, and the month's spend
+// after it. It reads the saved models only, never writes them, and waits
+// while the row has changes not saved. Without scripts it posts, and the
+// page comes back with the result under the row.
 
 import { esc } from "../prices/page";
 import type { Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
-import { PROVIDERS_PATH, TASK_MODELS_PATH } from "../paths";
+import { PROVIDERS_PATH, TASK_MODELS_PATH, USAGE_PATH } from "../paths";
 import { ICON, rowAnchor, usd, viewQuery } from "../providers/models-table";
 import { PAGE_STYLE } from "../providers/page-style";
 import type { Viewer } from "../providers/page";
 import type { Link, PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
+import { budgetText, money } from "../proxy/budget-bar";
 import { modelsSubtabs, nextAction, SETUP_TABS } from "./setup-tabs";
+import { tryTask, type TryFailure, type TryOutcome } from "./try-task";
 import { readModelNames, readToReady } from "./picker-data";
 import { readAccountLive } from "./ready";
 import { PROVIDERS } from "../prices/types";
@@ -118,6 +129,8 @@ export interface PickerPageInput {
   toReady?: ToReady;
   problem?: string;
   said?: string;
+  // A Try it's result, shown under its task's row.
+  tried?: TryOutcome;
 }
 
 type Ref = { provider: Provider; model: string };
@@ -316,10 +329,72 @@ function dropdown(r: TaskRoute, role: "main" | "fallback", list: Offered[], show
   return `<div class="t-pick"><span class="pl" id="lbl-${id}">${label}<span class="vh"> for ${esc(r.task.label)}</span></span>${picker}${select}</div>`;
 }
 
+// An exact cost, as the provider reports it: $0.000123, $0.50.
+const costText = (n: number): string => {
+  if (n === 0) return "$0";
+  const [whole, frac = ""] = n.toFixed(12).replace(/0+$/, "").split(".");
+  return `$${whole}.${frac.padEnd(2, "0")}`;
+};
+
+const seconds = (ms: number): string => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+
+// A reply longer than this shows its start, the rest collapsed.
+const REPLY_SHOWN = 280;
+
+// Try it's result under its row: the reply, who answered, the call's
+// figures and the month's spend; or why it did not answer, with its fix.
+export function renderTried(o: TryOutcome, input: PickerPageInput): string {
+  const nameOf = (m: { provider: Provider; model: string }) => input.offered.find((x) => modelKey(x) === modelKey(m))?.name ?? input.nameOf?.(m) ?? m.model;
+  const marked = (f: TryFailure) => (f.marked ? " Marked Failed when used." : "");
+  // The provider's own words, collapsed.
+  const replies = (fs: TryFailure[]) => {
+    const said = fs.filter((f) => f.reply);
+    return said.length ? `<details><summary>${esc(input.providerName(said[0]!.provider))}'s reply</summary>${said.map((f) => `<p>${esc(nameOf(f))}: ${esc(f.reply!)}</p>`).join("")}</details>` : "";
+  };
+  if (o.kind === "refused") {
+    const both = o.failed.some((f) => f.role === "main") && o.failed.some((f) => f.role === "fallback");
+    const head = both ? "Main model and fallback both failed." : o.reason;
+    const role = (f: TryFailure) => (f.role === "fallback" ? "Fallback" : both ? "Main model" : "Model");
+    const failed = o.failed.length ? `<ul class="tr-fails">${o.failed.map((f) => `<li>${esc(role(f))} ${esc(nameOf(f))}: ${esc(f.reason)}${marked(f)}</li>`).join("")}</ul>` : "";
+    const action = o.action ? `<p class="acts"><a class="btn small" href="${esc(o.action.href)}">${esc(o.action.label)}</a></p>` : "";
+    return `<div class="result bad tr" role="alert"><p class="v">${ICON.bad}<span><strong>Not answered.</strong> ${esc(head)}</span></p>${failed}${action}${replies(o.failed)}</div>`;
+  }
+  const text = o.text ?? "";
+  const reply = !text
+    ? `<p class="tr-none">The reply had no text.</p>`
+    : text.length <= REPLY_SHOWN
+      ? `<p class="tr-reply">${esc(text)}</p>`
+      : `<details class="tr-reply"><summary><span class="tr-start">${esc(text.slice(0, REPLY_SHOWN).trimEnd())}…</span><span class="tr-more">Show the whole reply</span></summary><p>${esc(text)}</p></details>`;
+  const fell = o.mainFailed
+    ? `<p class="tr-fell">Main model ${esc(nameOf(o.mainFailed))} failed: ${esc(o.mainFailed.reason)}${marked(o.mainFailed)}</p>`
+    : "";
+  const fact = (k: string, v: string) => `<div><dt>${k}</dt><dd class="num">${v}</dd></div>`;
+  const n = (x: number) => x.toLocaleString("en-US");
+  const month = `This month ${money(o.month.spentUsd)}${o.month.budgetUsd !== undefined ? ` of your ${budgetText(o.month.budgetUsd)} budget` : ""} · <a href="${USAGE_PATH}">Usage</a>`;
+  const provider = input.providerName(o.model.provider);
+  const about = [
+    `It proves the pipeline every task's calls use: your key, the saved model, the fallback, the budget stop and the usage record. Not how well the task is done.`,
+    `Prompt sent: ${o.task.sample}`,
+    o.costReported ? `Tokens and cost are ${provider}'s own, from its reply.` : `${provider}'s reply gave no cost, so it is estimated at list price.`,
+    ...(o.callId ? [`${provider}'s ID for the call: ${o.callId}`] : []),
+  ];
+  return `<div class="result ok tr" role="status"><p class="v">${ICON.ok}<span><strong>${esc(nameOf(o.model))}</strong> answered${o.picked ? ` with ${esc(o.picked)}` : ""} · ${o.role === "main" ? "main model" : "fallback"}</span></p>
+${fell}${reply}
+<dl class="tr-facts">${fact("Input", n(o.usage.input + o.usage.cacheWrite + o.usage.cacheWrite1h))}${fact("Cached", n(o.usage.cachedInput))}${fact("Output", n(o.usage.output))}${fact("Cost", `${costText(o.costUsd)}${o.costReported ? "" : " est."}`)}${fact("Time", seconds(o.durationMs))}</dl>
+<p class="tr-month">${month}</p>
+<details><summary>What this proves</summary>${about.map((a) => `<p>${esc(a)}</p>`).join("")}</details>${o.mainFailed ? replies([o.mainFailed]) : ""}</div>`;
+}
+
 function taskRow(r: TaskRoute, input: PickerPageInput, primary: boolean): string {
   const list = offeredFor(r.task, input.offered);
   const shown = shownFor(r);
   const need = rowNeed(r, list, shown, input);
+  // Try it reads the saved models: a row with none has nothing to try.
+  const canTry = Boolean(r.current || r.stopped?.fallback);
+  const tryCell = canTry
+    ? `<div class="t-try"><button type="submit" class="btn small" id="try-btn-${esc(r.task.id)}" formaction="${TASK_MODELS_PATH}/try" data-try aria-describedby="try-${esc(r.task.id)}">Try it</button></div>`
+    : "";
+  const tried = input.tried && input.tried.task?.id === r.task.id ? renderTried(input.tried, input) : "";
   const action = need.action?.(`btn small${primary ? " primary" : ""}`) ?? "";
   const tag = r.pending && !r.current ? `<span class="pill">Proposed</span>` : "";
   // The action goes with the note it fixes, and hides with it.
@@ -331,7 +406,9 @@ function taskRow(r: TaskRoute, input: PickerPageInput, primary: boolean): string
 <div class="t-name"><span class="t">${esc(r.task.label)}</span><span class="t-tags"><span class="pill" title="Suggested strength">${r.task.tier}</span>${tag}</span></div>
 ${dropdown(r, "main", list, shown, input)}
 ${dropdown(r, "fallback", list, shown, input)}
+${tryCell}
 <div class="t-note">${note}${action ? `<span class="t-act"${about ? ` data-about="${about}"` : ""}>${action}</span>` : ""}<button type="submit" class="btn small nojs">Save</button></div>
+<div class="try-out" id="try-${esc(r.task.id)}" aria-live="polite">${tried}</div>
 </form></li>`;
 }
 
@@ -394,7 +471,7 @@ ${tabsLine()}
 <div class="block-head"><h2 id="h-tasks">Model for each task</h2><p class="sub">${esc(finding(input))}</p>${accept ? `<div class="head-act">${accept}</div>` : ""}</div>
 ${freeTap(input, free && !pending)}
 <div class="panel">
-<div class="tasks-head" aria-hidden="true"><span>Task</span><span>Main model</span><span>Fallback</span></div>
+<div class="tasks-head" aria-hidden="true"><span>Task</span><span>Main model</span><span>Fallback</span><span></span></div>
 <ul class="tasks" aria-label="Tasks">
 ${rows}
 </ul>
@@ -403,6 +480,7 @@ ${rows}
 <li>When the main model fails a call, its fallback answers it, and the model's row on Providers and models says why.</li>
 <li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50.</li>
 <li>A free model is never proposed. Choose it in its list${free ? ", or with the one tap" : ""}.</li>
+<li>Try it sends one short made-up prompt to the task's saved model, its fallback if that fails. It costs a real call, counts toward your budget and never changes your choice.</li>
 ${terms}
 </ul></details></div>
 </div>
@@ -433,7 +511,7 @@ ${renderMain(input)}
 
 const CSS = `
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.tasks-head, .task-f { display: grid; grid-template-columns: minmax(170px, .9fr) minmax(0, 1.5fr) minmax(0, 1.5fr); gap: 8px 16px; }
+.tasks-head, .task-f { display: grid; grid-template-columns: minmax(170px, .9fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 104px; gap: 8px 16px; }
 .tasks-head { padding: 10px var(--card-pad); font-size: var(--fs-small); color: var(--muted); border-bottom: 1px solid var(--border); }
 .task { border-bottom: 1px solid var(--rule); }
 .tasks > .task:last-child { border-bottom: 0; }
@@ -494,6 +572,27 @@ html:not(.js) .t-note { display: flex; }
 .savebar .sb-err:empty { display: none; }
 .savebar[data-done] .btn { display: none; }
 .savebar[data-done] .sb-n { color: var(--positive); }
+.t-try { align-self: center; justify-self: end; }
+.t-try .btn[aria-busy="true"] { gap: 8px; }
+.try-out { grid-column: 2 / -1; min-width: 0; }
+.try-out:empty { display: none; }
+.tr { gap: 10px; }
+.tr .v strong { font-weight: 700; }
+.tr-fell { margin: 0; font-size: var(--fs-small); color: var(--pill-warning-ink); }
+.tr-reply { margin: 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; max-width: 72ch; }
+details.tr-reply summary { color: inherit; width: auto; font-size: 14px; list-style: none; }
+details.tr-reply summary::-webkit-details-marker { display: none; }
+details.tr-reply .tr-more { display: block; margin-top: 6px; color: var(--accent); font-size: var(--fs-small); }
+details.tr-reply[open] summary { display: none; }
+details.tr-reply p { margin: 0; color: inherit; font-size: 14px; }
+.tr-none { margin: 0; color: var(--muted); font-size: var(--fs-small); }
+.tr-facts { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0; }
+.tr-facts div { display: grid; gap: 1px; }
+.tr-facts dt { font-size: 12px; color: var(--muted); }
+.tr-facts dd { margin: 0; font-size: 14px; }
+.tr-month { margin: 0; font-size: var(--fs-small); color: var(--muted); }
+.tr-fails { margin: 0; padding-left: 18px; list-style: disc; display: grid; gap: 4px; font-size: var(--fs-small); }
+.tr-wait { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-small); color: var(--muted); }
 .next-row { gap: 10px; }
 .block-head .head-act { margin-left: auto; align-self: center; }
 .block-head .head-act form { display: block; }
@@ -502,12 +601,15 @@ html:not(.js) .t-note { display: flex; }
   .tasks-head { display: none; }
   .task-f { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 14px 16px; }
   .t-name { grid-column: 1 / -1; }
+  .task-f:has(.t-try) .t-name { grid-column: 1; }
+  .t-try { grid-column: 2; grid-row: 1; }
   .block-head .head-act { margin-left: 0; }
-  .t-note { grid-column: 1 / -1; }
+  .t-note, .try-out { grid-column: 1 / -1; }
   .pl { display: block; }
 }
 @media (max-width: 640px) {
-  .task-f { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .task-f { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .t-pick { grid-column: 1 / -1; }
   .pick-pop { width: 100%; }
   .pick-pop ul { max-height: 50vh; }
   .tasks-foot { padding: 14px 16px; }
@@ -517,7 +619,7 @@ html:not(.js) .t-note { display: flex; }
 }
 `;
 
-const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|use-free|help))?$`);
+const ROUTE = new RegExp(`^${TASK_MODELS_PATH}(?:/(accept|change|use-free|help|try))?$`);
 
 export const isTaskModelsPath = (pathname: string): boolean => ROUTE.test(pathname);
 
@@ -611,6 +713,13 @@ export async function handleTaskModels(
   if (verb === "use-free") {
     const set = await useFreeModels(db, plugins, userId, now, changes);
     return Array.isArray(set) ? said({ ...saved, free: String(set.length) }) : refuse(set);
+  }
+  // Try it: one real call on the task's saved models, which it never writes.
+  if (verb === "try") {
+    const task = field("task");
+    const tried = await tryTask(db, plugins, userId, task, () => now);
+    if (wantsJson) return json({ task, tried: renderTried(tried, await state({})) });
+    return new Response(renderPickerPage({ ...(await state({})), tried }), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
   }
   if (verb === "change") {
     const refused = changes.length ? await changeTasks(db, plugins, userId, changes, now) : { task: "", problem: "no_such_task" as const };
