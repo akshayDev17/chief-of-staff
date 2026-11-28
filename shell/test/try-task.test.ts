@@ -1,7 +1,7 @@
 // Try it on Model for each task, end to end through the real OpenRouter
 // plug-in against a stand-in OpenRouter (the owner, 2026-11-28: "the
 // pipeline that each task will eventually have to subscribe to and use is
-// the one being tested"): a spent budget sends nothing; an answer is one
+// the one being tested"): a spent budget sends no model request; an answer is one
 // ledger row naming the model that answered, with OpenRouter's own tokens
 // and cost; a failed main model gets exactly one retry on the fallback and
 // is marked Failed when used; a router's call carries its price cap; and the
@@ -32,7 +32,7 @@ const ENV = { APP_ORIGIN: ORIGIN, VAULT_KEY };
 let userId: string;
 let fetcher: ReturnType<typeof fakeFetch>;
 // Chat Completions as the stand-in answers it; a test swaps it.
-let chat: (s: Sent) => Response;
+let chat: (s: Sent) => Response | Promise<Response>;
 
 const plugins = async () => providerPlugins(ENV, vaultSecrets(env.DB, ENV), await readCurrentCatalog(env.DB), fetcher);
 const chatSent = () => fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"));
@@ -67,16 +67,16 @@ beforeEach(async () => {
 });
 
 describe("Try it", () => {
-  it("refuses a spent budget, or none set, with no request to OpenRouter at all", async () => {
+  it("refuses a spent budget, or none set, with no request to the model", async () => {
     await writeLedgerRow(env.DB, {
       userId, at: NOW, task: "score", site: "none", provider: "openrouter", model: main.model, region: "global", pluginVersion: "x", status: 200,
       inputTokens: 1, cachedInputTokens: 0, cacheWriteTokens: 0, cacheWrite1hTokens: 0, outputTokens: 1, longPrompt: false, durationMs: 1, costUsd: 5, costSource: "reported", costedConservatively: {},
     });
     expect(await tryIt()).toMatchObject({ kind: "refused", reason: "This month's budget is spent. Calls resume 1 December.", action: { label: "Raise the budget" }, failed: [] });
-    expect(fetcher.sent).toEqual([]);
+    expect(chatSent()).toEqual([]);
     await env.DB.prepare("DELETE FROM provider_budgets WHERE user_id = ?").bind(userId).run();
-    expect(await tryIt()).toMatchObject({ kind: "refused", reason: "Set a monthly budget for OpenRouter first.", action: { label: "Set a budget" } });
-    expect(fetcher.sent).toEqual([]);
+    expect(await tryIt()).toMatchObject({ kind: "refused", reason: "Set a monthly budget for OpenRouter first.", action: { label: "Set a budget" }, failed: [] });
+    expect(chatSent()).toEqual([]);
   });
 
   it("sends the task's sample prompt to its saved main model only, and writes one usage row naming the model that answered, with OpenRouter's own tokens and cost", async () => {
@@ -108,6 +108,35 @@ describe("Try it", () => {
     const both = await tryIt();
     expect(both).toMatchObject({ kind: "refused", failed: [{ model: main.model, marked: true }, { model: fallback.model, marked: true }] });
     expect(chatModels()).toEqual([main.model, fallback.model]);
+  });
+
+  it("says both when the main fails and the fallback is then refused before sending, with the fallback's fix", async () => {
+    // Another call spends the month's budget while the main model's is out.
+    chat = async () => {
+      await writeLedgerRow(env.DB, {
+        userId, at: NOW, task: "score", site: "none", provider: "openrouter", model: main.model, region: "global", pluginVersion: "x", status: 200,
+        inputTokens: 1, cachedInputTokens: 0, cacheWriteTokens: 0, cacheWrite1hTokens: 0, outputTokens: 1, longPrompt: false, durationMs: 1, costUsd: 5, costSource: "reported", costedConservatively: {},
+      });
+      return noEndpoints();
+    };
+    const spent = "This month's budget is spent. Calls resume 1 December.";
+    expect(await tryIt()).toMatchObject({
+      kind: "refused", reason: spent, action: { label: "Raise the budget" },
+      failed: [{ role: "main", model: main.model, marked: true }, { role: "fallback", model: fallback.model, reason: spent, marked: false }],
+    });
+    expect(chatModels()).toEqual([main.model]);
+
+    // As shown under the row: each model by its role, the main's mark, the fallback's fix.
+    await env.DB.prepare("DELETE FROM model_calls WHERE user_id = ?").bind(userId).run();
+    const res = await handleTaskModels(
+      new Request(`${ORIGIN}${TASK_MODELS_PATH}/try`, { method: "POST", headers: { origin: ORIGIN, accept: "application/json" }, body: new URLSearchParams([["task", "match"]]) }),
+      { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW },
+    );
+    const { tried } = (await res.json()) as { tried: string };
+    expect(tried).toContain("<strong>Not answered.</strong> Main model and fallback both failed.");
+    expect(tried).toContain(`<li>Main model ${main.name}: `);
+    expect(tried).toContain(`Marked Failed when used.</li><li>Fallback ${fallback.name}: This month&#39;s budget is spent. Calls resume 1 December.</li>`);
+    expect(tried).toContain(">Raise the budget</a>");
   });
 
   it("carries a router's price cap on its call", async () => {

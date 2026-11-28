@@ -249,15 +249,16 @@ subscribe to and use is the one being tested"):
 - it reads the task's saved main model and fallback, and never writes them;
   while the row has changes not saved it waits ("Save first"), since it
   calls the saved models only;
-- it checks the month's budget at the main model's provider first: none
-  set, or spent, is refused with no request to the provider at all;
+- the proxy checks the month's budget before each call: none set, or
+  spent, is refused with no request to the model;
 - it sends the task's one short fixed sample prompt (`Task.sample` in
   `tasks.ts`: made up, with no job data and nothing about the user) as the
   provider's own request (`connect.promptRequest`), the reply capped at
   `TRY_MAX_TOKENS`, through `callTask`, so the proxy routes it to the saved
   model only, carries a router's price cap, retries a failed main call once
   on the fallback (the main's row then reads Failed when used), and writes
-  one ledger row per call sent;
+  one ledger row per call sent; when the main fails and the fallback is
+  then refused, it says both, with the fallback's fix;
 - under the row, in place and with no reload, it shows the reply (a long
   one collapsed after its start), the model that answered and whether it
   was the main model or the fallback (a router's, with the model it picked),

@@ -352,10 +352,10 @@ export function renderTried(o: TryOutcome, input: PickerPageInput): string {
     return said.length ? `<details><summary>${esc(input.providerName(said[0]!.provider))}'s reply</summary>${said.map((f) => `<p>${esc(nameOf(f))}: ${esc(f.reply!)}</p>`).join("")}</details>` : "";
   };
   if (o.kind === "refused") {
-    const both = o.failed.length > 1;
+    const both = o.failed.some((f) => f.role === "main") && o.failed.some((f) => f.role === "fallback");
     const head = both ? "Main model and fallback both failed." : o.reason;
-    const roles = both ? ["Main model", "Fallback"] : ["Model"];
-    const failed = o.failed.length ? `<ul class="tr-fails">${o.failed.map((f, i) => `<li>${esc(roles[i] ?? "Model")} ${esc(nameOf(f))}: ${esc(f.reason)}${marked(f)}</li>`).join("")}</ul>` : "";
+    const role = (f: TryFailure) => (f.role === "fallback" ? "Fallback" : both ? "Main model" : "Model");
+    const failed = o.failed.length ? `<ul class="tr-fails">${o.failed.map((f) => `<li>${esc(role(f))} ${esc(nameOf(f))}: ${esc(f.reason)}${marked(f)}</li>`).join("")}</ul>` : "";
     const action = o.action ? `<p class="acts"><a class="btn small" href="${esc(o.action.href)}">${esc(o.action.label)}</a></p>` : "";
     return `<div class="result bad tr" role="alert"><p class="v">${ICON.bad}<span><strong>Not answered.</strong> ${esc(head)}</span></p>${failed}${action}${replies(o.failed)}</div>`;
   }
