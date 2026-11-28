@@ -127,11 +127,13 @@ push to `main` that touches `shell/`, it runs in the GitHub environment
    `CLOUDFLARE_API_TOKEN`, `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is not set in
    that environment, and
    refuses while `wrangler.jsonc` has the placeholder database id;
-3. lists the pending migrations and, when any may change or remove data
-   (anything but adding tables, indexes, views, columns or rows, and any
-   upsert that updates existing rows; every `.sql` file wrangler would apply is
-   checked, whatever its name; `src/release/migration-rules.ts`), records D1's restore bookmark with
-   `wrangler d1 time-travel info chief-of-staff` (`scripts/release-migrations.mjs`);
+3. lists the pending migrations and those among them that may change or
+   remove data (anything but adding tables, indexes, views, columns or rows,
+   and any upsert that updates existing rows; every `.sql` file wrangler would
+   apply is checked, whatever its name; `src/release/migration-rules.ts`) and,
+   when any is pending, records D1's restore bookmark with
+   `wrangler d1 time-travel info chief-of-staff` in the run's summary
+   (`scripts/release-migrations.mjs`); with no bookmark it stops;
 4. runs `wrangler d1 migrations apply chief-of-staff --remote`; a failed file
    is rolled back by D1 and stops the release, so the Worker is not deployed;
 5. deploys the Worker, with its route, as
@@ -175,8 +177,8 @@ two releases.** *Expand*: add the new table or column and switch the code
 over, leaving the old in place. *Contract*: remove the old in a later release,
 once no Worker version that may still run reads it. So the previous Worker
 always works with the current schema, and a Worker rollback never needs a
-schema rollback. A contract migration changes data, so the pipeline records
-the bookmark before it.
+schema rollback. The pipeline records the bookmark before every migration,
+an expand one included.
 
 **Data migrations** (backfills, reshaping rows, re-encrypting a vault) are
 jobs in the shell Worker, not SQL files: `runDataMigration`

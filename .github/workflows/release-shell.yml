@@ -89,7 +89,7 @@ jobs:
           echo "tag=shell-v$(node -p 'require("./package.json").version')-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       # Which migrations are pending, and D1's Time Travel bookmark when any
-      # of them may change or remove data.
+      # is pending.
       - name: Plan the migrations
         id: plan
         if: steps.gate.outputs.go == 'true'
