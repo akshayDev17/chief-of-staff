@@ -61,7 +61,8 @@ a link to the account's settings on OpenRouter, then Check again.
 **One table**, nothing to type but the search. Search matches any part of a
 model's name, maker or ID. The Maker filter has its own find box and chips.
 The Works / Doesn't work / Not tested yet strip filters the table, over a bar
-of the true ratios. An address with `strength=<Smallest|Middle|Strongest>`
+of the true ratios; it counts the rows search, the Maker filter and a strength
+show (each row's `rowState`), its end label then reading "N of M matching". An address with `strength=<Smallest|Middle|Strongest>`
 (and `show=pending`) opens the table showing that strength's models (not
 tested yet), as Model for each task links a strength with no usable model;
 the count line names it, with Show all. None of these sends a request. Each row shows the model's
@@ -107,7 +108,8 @@ time per user (a unique index holds it when two starts race), and a new one
 at most every 10 minutes. **Retest failed (N)** reruns, in the latest run,
 exactly the models the strip counts as Doesn't work (`test-all.ts`
 `failedModels`, by the strip's one rule `rowState`), so N is always the
-Doesn't work count: each one's row goes back to queued, or joins the run for
+Doesn't work count with no filter on (a filter narrows the strip, never
+Retest failed or Test all, which say then that they cover the whole list): each one's row goes back to queued, or joins the run for
 a model that failed on its own row's Test. A refusal that says nothing about
 the model (busy, no credit) is no failure: its row reads Works or Not tested
 yet, and Test on the row or Test all tests it again. A run made

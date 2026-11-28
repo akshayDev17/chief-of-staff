@@ -95,11 +95,11 @@ function makerNodes(scope: Node) {
 }
 
 // Runs `script` on `document`, and the ways a test acts on the filter.
-function drive(script: string, document: Record<string, unknown>, m: ReturnType<typeof makerNodes>) {
+function drive(script: string, document: Record<string, unknown>, m: ReturnType<typeof makerNodes>, href = "https://cos.example.com/chief-of-staff/models") {
   const docListeners: Record<string, Listener[]> = {};
   document.addEventListener = (type: string, fn: Listener) => { (docListeners[type] ??= []).push(fn); };
   const sent: Sent = [];
-  runScript(script, document, "https://cos.example.com/chief-of-staff/models", sent, { window: { fetch: () => { sent.push("fetch"); }, history: {}, addEventListener: () => {} } });
+  runScript(script, document, href, sent, { window: { fetch: () => { sent.push("fetch"); }, history: {}, addEventListener: () => {} } });
   // An event at `target`: its own listeners, then the document's.
   const dispatch = (type: string, target: Node, key?: string): FakeEvent => {
     const e: FakeEvent = { type, target, ...(key ? { key } : {}), defaultPrevented: false, preventDefault: () => { e.defaultPrevented = true; } };
@@ -118,7 +118,9 @@ function drive(script: string, document: Record<string, unknown>, m: ReturnType<
   return { ...m, sent, dispatch, listed, chipKeys, tick, removeChip, clearMakers, outside: node() };
 }
 
-export interface ListRow { text: string; maker: string; makerName: string }
+// `state` is the row's rowState (data-state), "pending" unless given;
+// `strength` its strength chip (data-strength).
+export interface ListRow { text: string; maker: string; makerName: string; state?: string; strength?: string }
 
 // Usage's Per model box for `rows`, its script run on it.
 export function perModelBox(rows: ListRow[]) {
@@ -147,22 +149,49 @@ export function perModelBox(rows: ListRow[]) {
   return { ...d, find, input, x, count, scroller, trs, none, said, fromMakers, clear, type, shown, footLabel };
 }
 
-// Providers' model table for `rows`, its page script run on it.
-export function providersTable(rows: ListRow[]) {
+// Providers' model table for `rows`, its page script run on it at `href`,
+// with the strip (its cells' counts, the bar and its end label) and the
+// line under Test all that says it covers the whole list.
+export function providersTable(rows: ListRow[], href = "https://cos.example.com/chief-of-staff/models") {
   const main = node({ id: "screen" });
+  const cellV = Object.fromEntries((["works", "fails", "pending"] as const).map((k) => [k, node({ class: "v" }, main)]));
+  for (const [k, v] of Object.entries(cellV)) main.q[`.cell[data-filter="${k}"] .v`] = v;
+  const bar = node({ class: "bar" }, main);
+  const barW = node({ class: "w" }, bar);
+  const barF = node({ class: "f" }, bar);
+  Object.assign(bar.q, { "i.w": barW, "i.f": barF });
+  const ends = node({ "data-ends": "" }, main);
+  const whole = node({ class: "why", "data-whole-list": "", hidden: "" }, main);
+  const cells = (["works", "fails", "pending"] as const).map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
+  Object.assign(main.q, { ".bar": bar, "[data-ends]": ends });
+  Object.assign(main.qa, { "[data-whole-list]": [whole], ".cell[data-filter]": cells });
   const q = node({ id: "pick-q", type: "search" }, main);
   const count = node({ id: "pick-count" }, main);
   const m = makerNodes(main);
   const box = node({ id: "tbl-box" }, main);
   const list = node({ id: "pick-list" }, box);
-  const lis = rows.map((r) => Object.assign(node({ class: "row", "data-hay": r.text, "data-state": "pending", "data-maker": r.maker, "data-maker-name": r.makerName }, list), { hidden: false }));
+  const lis = rows.map((r) => Object.assign(node({ class: "row", "data-hay": r.text, "data-state": r.state ?? "pending", "data-maker": r.maker, "data-maker-name": r.makerName, ...(r.strength ? { "data-strength": r.strength } : {}) }, list), { hidden: false }));
   main.qa["#pick-list > li.row"] = lis;
   const byId: Record<string, Node> = { screen: main, "pick-q": q, "pick-count": count, "tbl-box": box, "pick-list": list };
   // "No model matches": the row the script adds when none shows.
   const added: Node[] = [];
   Object.assign(list, { appendChild: (n: Node) => { added.push(n); } });
-  const d = drive(PAGE_SCRIPT, { getElementById: (id: string) => byId[id] ?? null, createElement: () => node(), activeElement: null, visibilityState: "visible", readyState: "complete" }, m);
+  const d = drive(PAGE_SCRIPT, { getElementById: (id: string) => byId[id] ?? null, createElement: () => node(), activeElement: null, visibilityState: "visible", readyState: "complete" }, m, href);
   const type = (v: string) => { q.value = v; d.dispatch("input", q); };
   const shown = () => lis.flatMap((r, i) => (r.hidden ? [] : [i]));
-  return { ...d, main, q, count, lis, added, type, shown };
+  // The strip as the script left it: each cell's count and colour, the bar's
+  // widths and label, the end label, and whether the whole-list line shows.
+  const strip = () => ({
+    works: cellV.works!.textContent,
+    fails: cellV.fails!.textContent,
+    pending: cellV.pending!.textContent,
+    good: cellV.works!.classList.contains("good"),
+    bad: cellV.fails!.classList.contains("bad"),
+    bar: [barW.getAttribute("style"), barF.getAttribute("style")],
+    label: bar.getAttribute("aria-label"),
+    ends: ends.textContent,
+    wholeList: !whole.hidden,
+  });
+  const press = (k: "works" | "fails" | "pending") => d.dispatch("click", cells.find((c) => c.getAttribute("data-filter") === k)!);
+  return { ...d, main, q, count, lis, added, type, shown, strip, press };
 }

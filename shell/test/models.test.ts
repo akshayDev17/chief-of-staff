@@ -318,9 +318,18 @@ describe("Test all models", () => {
     await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: later });
     const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
     expect(plan.models.map((m) => m.model)).toEqual(["test-luna", "test-mini"]);
-    const { strip, rail } = modelParts(await tableInput());
+    const { strip, rail, rows } = modelParts(await tableInput());
     expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num bad">2<\/span>/);
     expect(rail).toContain('Retest failed <span class="num">(2)</span>');
+    // One count source: the strip is the sum of its rows' data-state, which
+    // the page's script sums again over the rows a filter shows; Test all and
+    // Retest failed say then that they still cover the whole list.
+    const states = [...rows.matchAll(/data-state="(\w+)"/g)].map((m) => m[1]);
+    for (const k of ["works", "fails", "pending"]) {
+      expect(strip).toMatch(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">${states.filter((s) => s === k).length}</span>`));
+    }
+    expect(strip).toContain(`<span data-ends>${states.filter((s) => s !== "blocked").length} models</span>`);
+    expect(rail).toContain('<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the matching models.</p>');
     expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 2, skipped: 0 });
     const reopened = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(reopened.finishedAt).toBeUndefined();

@@ -3,7 +3,11 @@
 //
 // - Search, the Maker filter (models/maker-filter.ts: its find box and chips)
 //   and the strip's Works / Doesn't work / Not tested yet cells only show and
-//   hide rows: no request.
+//   hide rows: no request. The strip and its bar count the rows search, the
+//   Maker filter and a strength show (each row's data-state, its rowState),
+//   the end label then reading "N of M matching", and a line under Test all
+//   says Test all and Retest failed still cover the whole list. A strip cell
+//   filters within that view and leaves the counts as they are.
 // - Every form marked data-fetch (Test, Refresh, Check again, the price cap,
 //   Test all, Retest failed, Disconnect) and every link marked data-view (a
 //   confirm, the cap editor, Cancel) is sent in place, asking for JSON: the
@@ -46,16 +50,43 @@ export const PAGE_SCRIPT = String.raw`
 
 
   // ---------- filters: search, maker, the strip ----------
-  function matches(li, t) {
+  // In the view: the strength, the makers and the search; the strip's own
+  // cell filters within it.
+  function inView(li, t) {
     if (S.tier && li.getAttribute("data-strength") !== S.tier) return false;
     if (!makers.matches(li)) return false;
     var hay = li.getAttribute("data-hay") || "";
     for (var i = 0; i < t.length; i++) if (hay.indexOf(t[i]) === -1) return false;
-    if (S.filter) {
-      var st = li.getAttribute("data-state");
-      if (st !== S.filter) return false;
-    }
     return true;
+  }
+  function matches(li, t) { return inView(li, t) && (!S.filter || li.getAttribute("data-state") === S.filter); }
+  // The strip, its bar and its end label, from the rows in view.
+  function recount(all, t) {
+    var c = { works: 0, fails: 0, pending: 0 }, seen = 0;
+    each(all, function (li) {
+      if (!inView(li, t)) return;
+      seen++;
+      var st = li.getAttribute("data-state");
+      if (c.hasOwnProperty(st)) c[st]++;
+    });
+    var total = c.works + c.fails + c.pending, narrowed = !!(S.tier || t.length || makers.chosen().length);
+    function pct(n) { return (total ? (n / total) * 100 : 0).toFixed(3); }
+    each(["works", "fails", "pending"], function (k) {
+      var v = main.querySelector('.cell[data-filter="' + k + '"] .v');
+      if (!v) return;
+      v.textContent = String(c[k]);
+      if (k !== "pending") v.classList.toggle(k === "works" ? "good" : "bad", c[k] > 0);
+    });
+    var bar = main.querySelector(".bar");
+    if (bar) {
+      bar.setAttribute("aria-label", (c.works + c.fails) + " of " + total + " tested" + (narrowed ? " among the " + seen + " matching" : "") + ": " + c.works + " work, " + c.fails + " don't");
+      var w = bar.querySelector("i.w"), f = bar.querySelector("i.f");
+      if (w) w.setAttribute("style", "width:" + pct(c.works) + "%");
+      if (f) f.setAttribute("style", "width:" + pct(c.fails) + "%");
+    }
+    var ends = main.querySelector("[data-ends]");
+    if (ends) ends.textContent = narrowed ? total + " of " + seen + " matching" : total + " models";
+    each(main.querySelectorAll("[data-whole-list]"), function (p) { p.hidden = !narrowed; });
   }
   function mark(text, t) {
     var s = esc(text);
@@ -89,6 +120,7 @@ export const PAGE_SCRIPT = String.raw`
       li.innerHTML = "<p>" + (narrowed ? "No model matches “" + esc(S.q.trim() || "your filter") + "”" + (makers.chosen().length ? " from the makers you picked" : "") + "." : "No " + (S.tier ? S.tier + " " : "") + "models" + (S.filter ? " " + NOUN[S.filter] : "") + ".") + (S.tier ? ' <button type="button" class="link" data-show-all>Show all</button>' : "") + "</p>" + (narrowed ? '<button type="button" class="btn small outline" data-clear-all>Clear</button>' : "");
       list.appendChild(li);
     }
+    recount(all, t);
     var base = S.filter || S.tier ? stateCount(S.filter) : all.length, count = $("pick-count");
     var noun = (S.tier ? S.tier + " " : "") + "models" + (S.filter ? " " + NOUN[S.filter] : "");
     if (count) {
