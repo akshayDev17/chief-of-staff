@@ -24,8 +24,9 @@
 // user waits only when they are at most HOST_READS_NOW; with more (the first
 // Refresh after a release, when no figure is stored yet), it reads none, stores
 // those models at their headline price, and leaves their hosts to the
-// background read (src/prices/host-reads.ts), which runs this same refresh
-// in a Cron Trigger and stores the next snapshot. A Refresh never reads
+// background read (src/prices/host-reads.ts), a Cron Trigger that reads a
+// fixed batch of them each minute and stores their figures beside this same
+// snapshot. A Refresh never reads
 // hundreds of lists inside one request: at the live walk's pace (2026-11-28)
 // that ran past a minute, and Cloudflare's proxy ends a request at 100 s.
 // A list that cannot be read gives the model its headline price. The daily
@@ -80,10 +81,6 @@ export interface RefreshInput {
   // Refresh model list: the most endpoints lists to read now (HOST_READS_NOW).
   // With more needed, none is read, and they are left for the background read.
   hostReadsNow?: number;
-  // The background read (src/prices/host-reads.ts): told how many lists it
-  // has tried, of how many; an OpenRouter list that cannot be read stores
-  // nothing, so its hosts still wait for the next try.
-  background?: { onRead: (tried: number, of: number) => Promise<void> };
   // The pause before a busy endpoints list is read again.
   hostRetryPauseMs?: number;
 }
@@ -110,9 +107,7 @@ async function figuresFor(
   const needed = targets.filter((t) => !t.free && !kept(t));
   const waiting = input.hostReadsNow !== undefined && needed.length > input.hostReadsNow ? needed.length : 0;
   const toRead = waiting ? [] : needed;
-  const onRead = input.background ? (tried: number) => input.background!.onRead(tried, toRead.length) : undefined;
-  await onRead?.(0);
-  const hosts = await readAllHosts(input.fetcher, toRead.map((t) => t.model), input.hostRetryPauseMs, onRead);
+  const hosts = await readAllHosts(input.fetcher, toRead.map((t) => t.model), input.hostRetryPauseMs);
   const figures = targets.map((t) => {
     if (t.free) return headlineFigure(t, readAt);
     const k = kept(t);
@@ -123,12 +118,12 @@ async function figuresFor(
   return { figures, waiting };
 }
 
-const withWaiting = (figures: StoredFigure[]): { figures: StoredFigure[]; waiting: number } => ({ figures, waiting: figures.filter((f) => !f.free).length });
+// Figures with the paid ones still at the headline counted as waiting.
+const withWaiting = (figures: StoredFigure[]): { figures: StoredFigure[]; waiting: number } => ({ figures, waiting: figures.filter((f) => !f.free && f.basis === "unread").length });
 
 export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: number; results: SourceResult[] }> {
   const { db, fetcher, now } = input;
   const { read, catalog: catalogRead } = await readOpenRouter(fetcher, now);
-  if (!read.ok && input.background) throw new Error(`OpenRouter's model list could not be read (${read.error}); the hosts wait for the next try`);
   const reads = [read];
 
   const last = await currentSnapshot(db);
@@ -166,10 +161,12 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
   // A failed read keeps whatever of them still waited for its hosts waiting;
   // with no figures to keep (a snapshot the previous Worker wrote), every
   // paid model's hosts wait.
+  const lastReads = last && !read.ok ? await readHostReads(db, last.id) : undefined;
+  const lastWaits = lastReads !== undefined && lastReads.finishedAt === undefined;
   const { figures, waiting } = read.ok
     ? await figuresFor(input, merged.rows, catalog, new Map(previous.map((f) => [strengthKey(f), f])), headlinePrices(lastRows))
     : previous.length
-      ? { figures: previous, waiting: (last ? await readHostReads(db, last.id) : undefined)?.waiting ?? 0 }
+      ? lastWaits ? withWaiting(previous) : { figures: previous, waiting: 0 }
       : withWaiting(headlineFigures(merged.rows, catalog, now.toISOString()));
   const latestLines = await readLatestLines(db);
   const lines: Lines | undefined =

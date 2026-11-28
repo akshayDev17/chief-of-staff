@@ -391,23 +391,15 @@ export async function readHosts(fetcher: typeof fetch, model: string, pauseMs = 
 export const HOST_READS_AT_ONCE = 6;
 
 // The hosts of each of `models`, read HOST_READS_AT_ONCE at a time; a model
-// whose list could not be read is absent. `onRead`: told how many lists have
-// been tried after each one.
-export async function readAllHosts(
-  fetcher: typeof fetch,
-  models: readonly string[],
-  pauseMs = 1000,
-  onRead?: (tried: number) => Promise<void>,
-): Promise<Map<string, Host[]>> {
+// whose list could not be read is absent.
+export async function readAllHosts(fetcher: typeof fetch, models: readonly string[], pauseMs = 1000): Promise<Map<string, Host[]>> {
   const out = new Map<string, Host[]>();
   let next = 0;
-  let tried = 0;
   const worker = async (): Promise<void> => {
     while (next < models.length) {
       const model = models[next++]!;
       const hosts = await readHosts(fetcher, model, pauseMs);
       if (hosts) out.set(model, hosts);
-      await onRead?.(++tried);
     }
   };
   await Promise.all(Array.from({ length: Math.min(HOST_READS_AT_ONCE, models.length) }, worker));

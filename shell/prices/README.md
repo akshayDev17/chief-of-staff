@@ -74,10 +74,12 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   user waits only when there are at most `HOST_READS_NOW` (30); with more (the
   first Refresh after a release), it reads none, stores them at their headline
   price and records them in `price_host_reads` (migration 0017). Every minute
-  the background read (`src/prices/host-reads.ts`) takes the current
-  snapshot's waiting hosts, or every host of a snapshot with no figures (one a
-  previous Worker wrote), under a 15-minute lease, runs the same refresh and
-  stores the next snapshot. While hosts wait, Providers, Model for each task
+  the background read (`src/prices/host-reads.ts`) checks with one D1 read
+  and no write; when the current snapshot's hosts wait, or it has no figures
+  (one a previous Worker wrote), it takes them under a 15-minute lease, reads
+  at most `HOST_READS_PER_RUN` (60) endpoints lists and stores those figures
+  beside the same snapshot; the run that tries the last draws the first lines
+  when no month has them. About 290 take five minutes. While hosts wait, Providers, Model for each task
   and the price table say so; Providers shows the count read and redraws in
   place when they land. A list that cannot be read gives the model its
   headline price.

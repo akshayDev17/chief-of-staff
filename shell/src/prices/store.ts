@@ -49,6 +49,46 @@ export interface StoredFigure extends Figure {
   free: boolean;
 }
 
+// The statements that store figures and lines beside a snapshot: `snapshotId`,
+// or with null the newest one, written in the same batch (writeSnapshot). A
+// figure already stored for a model is kept.
+export function figureInserts(db: D1Database, figures: readonly StoredFigure[], snapshotId: number | null): D1PreparedStatement[] {
+  const insert = db.prepare(
+    `INSERT INTO model_price_figures (snapshot_id, provider, model, usd_per_mtok, basis, free, hosts, input_min, input_max,
+       output_min, output_max, read_at)
+     SELECT coalesce(?2, (SELECT max(id) FROM price_snapshots)), j.value ->> 0, j.value ->> 1, j.value ->> 2, j.value ->> 3,
+       j.value ->> 4, j.value ->> 5, j.value ->> 6, j.value ->> 7, j.value ->> 8, j.value ->> 9, j.value ->> 10
+     FROM json_each(?1) AS j WHERE true ON CONFLICT DO NOTHING`,
+  );
+  const out: D1PreparedStatement[] = [];
+  for (let i = 0; i < figures.length; i += ROWS_PER_INSERT) {
+    const chunk = figures.slice(i, i + ROWS_PER_INSERT).map((f) => [
+      f.provider, f.model, f.usd, f.basis, f.free ? 1 : 0, f.hosts, f.input?.min ?? null, f.input?.max ?? null,
+      f.output?.min ?? null, f.output?.max ?? null, f.readAt,
+    ]);
+    out.push(insert.bind(JSON.stringify(chunk), snapshotId));
+  }
+  return out;
+}
+
+// One model's figure beside a snapshot, replaced.
+export const figureUpdate = (db: D1Database, snapshotId: number, f: StoredFigure): D1PreparedStatement =>
+  db
+    .prepare(
+      `UPDATE model_price_figures SET usd_per_mtok = ?3, basis = ?4, hosts = ?5, input_min = ?6, input_max = ?7, output_min = ?8,
+         output_max = ?9, read_at = ?10 WHERE snapshot_id = ?1 AND provider = ?2 AND model = ?11`,
+    )
+    .bind(snapshotId, f.provider, f.usd, f.basis, f.hosts, f.input?.min ?? null, f.input?.max ?? null, f.output?.min ?? null, f.output?.max ?? null, f.readAt, f.model);
+
+// A month's lines; a month that has them keeps them.
+export const linesInsert = (db: D1Database, l: Lines, snapshotId: number | null): D1PreparedStatement =>
+  db
+    .prepare(
+      `INSERT INTO strength_lines (month, lower_usd, upper_usd, lower_raw, upper_raw, models, snapshot_id, computed_at)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, coalesce(?8, (SELECT max(id) FROM price_snapshots)), ?7 WHERE true ON CONFLICT (month) DO NOTHING`,
+    )
+    .bind(l.month, l.lower, l.upper, l.lowerRaw, l.upperRaw, l.models, l.computedAt, snapshotId);
+
 // The header, its rows, OpenRouter's model list read with them
 // (src/prices/openrouter.ts), each model's figure, the month's lines when
 // this refresh works them out, how many models' hosts are left for the
@@ -94,32 +134,8 @@ export async function writeSnapshot(
         .bind(s.catalog.readAt, JSON.stringify(s.catalog)),
     );
   }
-  const figure = db.prepare(
-    `INSERT INTO model_price_figures (snapshot_id, provider, model, usd_per_mtok, basis, free, hosts, input_min, input_max,
-       output_min, output_max, read_at)
-     SELECT (SELECT max(id) FROM price_snapshots), j.value ->> 0, j.value ->> 1, j.value ->> 2, j.value ->> 3, j.value ->> 4,
-       j.value ->> 5, j.value ->> 6, j.value ->> 7, j.value ->> 8, j.value ->> 9, j.value ->> 10
-     FROM json_each(?1) AS j`,
-  );
-  const figures = s.figures ?? [];
-  for (let i = 0; i < figures.length; i += ROWS_PER_INSERT) {
-    const chunk = figures.slice(i, i + ROWS_PER_INSERT).map((f) => [
-      f.provider, f.model, f.usd, f.basis, f.free ? 1 : 0, f.hosts, f.input?.min ?? null, f.input?.max ?? null,
-      f.output?.min ?? null, f.output?.max ?? null, f.readAt,
-    ]);
-    statements.push(figure.bind(JSON.stringify(chunk)));
-  }
-  if (s.lines) {
-    const l = s.lines;
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO strength_lines (month, lower_usd, upper_usd, lower_raw, upper_raw, models, snapshot_id, computed_at)
-           SELECT ?1, ?2, ?3, ?4, ?5, ?6, max(id), ?7 FROM price_snapshots WHERE true ON CONFLICT (month) DO NOTHING`,
-        )
-        .bind(l.month, l.lower, l.upper, l.lowerRaw, l.upperRaw, l.models, l.computedAt),
-    );
-  }
+  statements.push(...figureInserts(db, s.figures ?? [], null));
+  if (s.lines) statements.push(linesInsert(db, s.lines, null));
   if (s.hostsWaiting) {
     statements.push(
       db
@@ -176,11 +192,6 @@ export async function readFigures(db: D1Database, snapshotId: number): Promise<S
   return results.map(toFigure);
 }
 
-// Whether a snapshot has any figures; none for one the previous Worker wrote.
-export async function hasFigures(db: D1Database, snapshotId: number): Promise<boolean> {
-  return (await db.prepare("SELECT 1 FROM model_price_figures WHERE snapshot_id = ? LIMIT 1").bind(snapshotId).first()) !== null;
-}
-
 // One model's figure beside a snapshot, and whether the snapshot has any.
 export async function readFigure(
   db: D1Database,
@@ -199,21 +210,33 @@ export async function readFigure(
 }
 
 // The hosts a snapshot's figures still wait for (src/prices/host-reads.ts):
-// how many models, how many of them the background read has tried, and when
-// one took them.
+// how many models, how many of them the background read has tried, when a
+// run took them, and when the last of them was read.
 export interface HostReads {
   waiting: number;
   done: number;
   queuedAt: string;
   startedAt?: string;
+  finishedAt?: string;
 }
 
 export async function readHostReads(db: D1Database, snapshotId: number): Promise<HostReads | undefined> {
   const r = await db
-    .prepare("SELECT waiting, done, queued_at, started_at FROM price_host_reads WHERE snapshot_id = ?")
+    .prepare("SELECT waiting, done, queued_at, started_at, finished_at FROM price_host_reads WHERE snapshot_id = ?")
     .bind(snapshotId)
-    .first<{ waiting: number; done: number; queued_at: string; started_at: string | null }>();
-  return r ? { waiting: r.waiting, done: r.done, queuedAt: r.queued_at, ...(r.started_at ? { startedAt: r.started_at } : {}) } : undefined;
+    .first<{ waiting: number; done: number; queued_at: string; started_at: string | null; finished_at: string | null }>();
+  return r
+    ? { waiting: r.waiting, done: r.done, queuedAt: r.queued_at, ...(r.started_at ? { startedAt: r.started_at } : {}), ...(r.finished_at ? { finishedAt: r.finished_at } : {}) }
+    : undefined;
+}
+
+// The rows of some models beside a snapshot.
+export async function readRowsOf(db: D1Database, snapshotId: number, models: readonly string[]): Promise<PriceRow[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM model_price_rows WHERE snapshot_id = ?1 AND model IN (SELECT value FROM json_each(?2))")
+    .bind(snapshotId, JSON.stringify(models))
+    .all<RowRecord>();
+  return results.map(toRow);
 }
 
 type LinesRecord = { month: string; lower_usd: number; upper_usd: number; lower_raw: number; upper_raw: number; models: number; computed_at: string };

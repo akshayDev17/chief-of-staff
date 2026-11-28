@@ -113,7 +113,7 @@ export default {
         alerts: await recentAlerts(env.DB),
         sort: parseSort(url.searchParams),
         strength: await readStrength(env.DB, snapshot, { rows, ...(catalog ? { catalog } : {}) }),
-        hosts: await readHostsWaiting(env.DB, snapshot),
+        hosts: await readHostsWaiting(env.DB),
       });
       return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
@@ -121,13 +121,13 @@ export default {
   },
 
   // Two Cron Triggers (wrangler.jsonc): the daily refresh, and every minute
-  // the background read of any hosts the current snapshot's figures still
-  // wait for (src/prices/host-reads.ts), which does nothing when none wait.
+  // one batch of any hosts the current snapshot's figures still wait for
+  // (src/prices/host-reads.ts), which reads once and does nothing when none wait.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === HOST_READ_CRON) {
-      const snapshotId = await readWaitingHosts({ db: env.DB, fetcher: fetch, now });
-      if (snapshotId !== undefined) console.log(`host read: snapshot ${snapshotId} stored ${Date.now() - now.getTime()} ms after its minute`);
+      const batch = await readWaitingHosts({ db: env.DB, fetcher: fetch, now });
+      if (batch) console.log(`host read: ${JSON.stringify(batch)}`);
       return;
     }
     const { results } = await refreshPrices({ db: env.DB, fetcher: fetch, now, daily: true });
