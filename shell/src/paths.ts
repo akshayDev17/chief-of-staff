@@ -19,6 +19,7 @@ export const isHomePath = (pathname: string): boolean => pathname === BASE_PATH 
 
 export const HEALTH_PATH = `${BASE_PATH}/health`;
 export const PRICE_TABLE_PATH = `${BASE_PATH}/admin/price-table`;
+export const STORAGE_CHECK_PATH = `${BASE_PATH}/admin/checks/run-storage`;
 export const PROVIDERS_PATH = `${BASE_PATH}/models/setup/providers`;
 export const BUDGETS_PATH = `${BASE_PATH}/models/setup/budgets`;
 export const ADD_MODEL_PATH = `${BASE_PATH}/models/setup/add`;

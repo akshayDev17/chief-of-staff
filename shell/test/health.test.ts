@@ -15,7 +15,7 @@ afterEach(() => vi.restoreAllMocks());
 const get = async (path: string): Promise<Response> => {
   serveCerts(() => [key]);
   const headers = { "cf-access-jwt-assertion": await signToken(key) };
-  return worker.fetch(new Request(`https://shell.test${path}`, { headers }), { ...ENV, DB: env.DB });
+  return worker.fetch(new Request(`https://shell.test${path}`, { headers }), { ...env, ...ENV });
 };
 
 describe("GET /chief-of-staff/health", () => {

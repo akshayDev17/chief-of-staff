@@ -39,7 +39,7 @@ const send = async (path: string, init: RequestInit = {}, claims: Record<string,
   serveCerts(() => [key]);
   const headers = new Headers(init.headers);
   headers.set("cf-access-jwt-assertion", await signToken(key, claims));
-  return worker.fetch(new Request(`${BASE}${path}`, { ...init, headers, redirect: "manual" }), { ...ENV, DB: env.DB });
+  return worker.fetch(new Request(`${BASE}${path}`, { ...init, headers, redirect: "manual" }), { ...env, ...ENV });
 };
 const post = (fields: Record<string, string>, headers: Record<string, string> = {}) =>
   send("", { method: "POST", body: new URLSearchParams(fields), headers: { "content-type": "application/x-www-form-urlencoded", ...headers } });

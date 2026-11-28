@@ -37,6 +37,23 @@
       "migrations_dir": "migrations"
     }
   ],
+  // The Durable Object classes, declared with the `exports` map, never the
+  // older `migrations` array (src/objects/README.md, "Declaring a class").
+  // A class change here cannot be undone and a rollback cannot cross it, so
+  // each is reviewed on its own; a `deleted` state removes the class's every
+  // object and its storage, and never ships without the owner's word.
+  "exports": {
+    "Chief": { "type": "durable-object", "storage": "sqlite" },
+    "Run": { "type": "durable-object", "storage": "sqlite" },
+    "Owner": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "CHIEF", "class_name": "Chief" },
+      { "name": "RUN", "class_name": "Run" },
+      { "name": "OWNER", "class_name": "Owner" }
+    ]
+  },
   // 06:00 UTC daily: refresh the price table and model list from
   // OpenRouter's models API. Every minute: read any hosts the current price
   // snapshot's figures still wait for, which does nothing when none wait

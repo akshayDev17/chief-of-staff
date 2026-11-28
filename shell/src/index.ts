@@ -11,8 +11,17 @@ import { handleProviders, isProvidersPath } from "./providers/page";
 import { handleTaskModels, isTaskModelsPath } from "./models/picker-page";
 import { handleBudgets } from "./proxy/budgets-page";
 import { handleUsage, isUsagePath } from "./models/usage-page";
-import { ADD_MODEL_PATH, BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH } from "./paths";
+import { ADD_MODEL_PATH, BUDGETS_PATH, HEALTH_PATH, isAppPath, isHomePath, PRICE_TABLE_PATH, PROVIDERS_PATH, STORAGE_CHECK_PATH } from "./paths";
 import { userFromAccess } from "./users";
+import type { Chief } from "./objects/chief";
+import type { Owner } from "./objects/owner";
+import type { Run } from "./objects/run";
+import { handleStorageCheck } from "./objects/storage-check";
+
+// The Durable Object classes, declared in wrangler.jsonc's `exports` map.
+export { Chief } from "./objects/chief";
+export { Owner } from "./objects/owner";
+export { Run } from "./objects/run";
 
 // Variables and secrets the Worker reads besides Access's: APP_ORIGIN (in
 // wrangler.jsonc "vars") and VAULT_KEY (secret: the vault key, which seals
@@ -25,6 +34,11 @@ export interface Env extends ProvidersEnv {
   // The Access application's AUD tag.
   ACCESS_AUD?: string;
   DB: D1Database;
+  // The Durable Objects (src/objects/README.md): each user's Chief, named by
+  // the user's id; each run's Run, named by its user and run; the one Owner.
+  CHIEF: DurableObjectNamespace<Chief>;
+  RUN: DurableObjectNamespace<Run>;
+  OWNER: DurableObjectNamespace<Owner>;
 }
 
 // The Cron Triggers in wrangler.jsonc: 06:00 UTC daily, and every minute.
@@ -101,6 +115,11 @@ export default {
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
       return handleUsage({ db: env.DB, userId: user.id, now, secrets: vaultSecrets(env.DB, env), plugins: await readProviderPlugins(env, env.DB) });
+    }
+    // Owner only, behind the Access check above: M3 step 10 on the deployed
+    // Worker, on a made-up test user's own Run object (T21).
+    if (url.pathname === STORAGE_CHECK_PATH) {
+      return handleStorageCheck(request, env);
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === PRICE_TABLE_PATH && request.method === "GET") {

@@ -467,7 +467,7 @@ describe("the route", () => {
     const key = await generateKey("kid-usage");
     serveCerts(() => [key]);
     const send = (headers: Record<string, string> = {}) =>
-      worker.fetch(new Request(`${ORIGIN}${USAGE_PATH}`, { headers }), { ...ENV, DB: env.DB, APP_ORIGIN: ORIGIN });
+      worker.fetch(new Request(`${ORIGIN}${USAGE_PATH}`, { headers }), { ...env, ...ENV, APP_ORIGIN: ORIGIN });
     expect((await send()).status).toBe(403);
     const response = await send({ "cf-access-jwt-assertion": await signToken(key) });
     expect(response.status).toBe(200);

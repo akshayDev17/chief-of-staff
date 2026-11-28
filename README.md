@@ -23,6 +23,11 @@ file and version, so a component's CI job sees only its own changes:
   (see `shell/src/providers/README.md`), with OpenRouter's model list on its
   Connect screen, the model for each task, and Models › Usage, the month's
   spend per model and per task (see `shell/src/models/README.md`).
+  It holds the Durable Objects: each user's `Chief`, each run's `Run` with
+  the run's record and its ADK session, served to the run's container as
+  `sessions.cos`, and the one `Owner`, each upgrading its own storage (see
+  `shell/src/objects/README.md`). Each user's files go in R2 under that
+  user's own prefix, sealed with that user's own key (`shell/src/files.ts`).
   D1 migrations are in `shell/migrations/`. Managed with
   npm 11 (pinned in `packageManager`); `package-lock.json` pins every
   dependency with integrity hashes. Version in `shell/package.json`.
@@ -188,12 +193,25 @@ step already logged, so a job is safe to run twice and an interrupted one
 resumes where it stopped. A job starts after the Worker that carries it is
 live; none exists yet, and the first one adds its start to the pipeline.
 
+**Durable Object classes and their storage** (design-v3 8.4). The `Chief`,
+`Run` and `Owner` classes are declared in `shell/wrangler.jsonc`'s `exports`
+map, so a deploy creates, renames or deletes them; a class change cannot be
+undone, so each is reviewed on its own, and a `deleted` class, which removes
+its every object and its storage, needs the owner's word. Each object
+upgrades its own storage when it wakes, with expand-only steps like a D1
+migration, so the previous Worker still works on it
+(`shell/src/objects/README.md`).
+
 **Rolling the Worker back.** Each deploy is a Cloudflare Worker version.
 List them with `npx wrangler versions list` (in `shell/`, with
 `CLOUDFLARE_API_TOKEN` set) and go back to the previous one with
 `npx wrangler rollback --message "<why>"`, or to a named one with
 `npx wrangler rollback <version-id> --message "<why>"`. Migrations stay
 applied: the rule above keeps the previous Worker working on the newer schema.
+A rollback cannot cross a Durable Object class change: no version from
+before the release that created, renamed or deleted a class can be rolled
+back to, so the release that first declared `Chief`, `Run` and `Owner` is
+the earliest a rollback reaches.
 
 **Restoring the database** is a deliberate, owner-approved act, never
 automatic. D1's Time Travel restores to any minute in the last 30 days and
