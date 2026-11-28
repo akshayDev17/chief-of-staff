@@ -138,11 +138,17 @@ const WHY: Record<NotUsable, string> = {
   not_listed: "is no longer on the provider's list",
   left_out: "is left out by your account settings",
   no_cap: "needs a price cap",
+  earlier_key: "needs a test on your new key",
   unknown: "is no longer usable",
 };
 
-const whyText = (why: NotUsable, provider: Provider, input: PickerPageInput): string =>
-  why === "not_listed" ? `is no longer on ${input.providerName(provider)}'s list` : why === "left_out" ? `is left out by your ${input.providerName(provider)} settings` : WHY[why];
+const whyText = (why: NotUsable, provider: Provider, input: PickerPageInput): string => {
+  const name = input.providerName(provider);
+  if (why === "not_listed") return `is no longer on ${name}'s list`;
+  if (why === "left_out") return `is left out by your ${name} settings`;
+  if (why === "earlier_key") return `needs a test on your new ${name} key`;
+  return WHY[why];
+};
 
 const newTab = (l: Link, cls: string): string => `<a class="${cls}" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
 
@@ -157,6 +163,8 @@ function fixFor(m: Ref, why: NotUsable, pickId: string, input: PickerPageInput, 
     }
     case "no_cap":
       return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, { cap: m.model })}#${rowAnchor(m.model)}`)}">Set its price cap</a>`;
+    case "earlier_key":
+      return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, { confirm: "test-all" })}#ta`)}">Test all models</a>`;
     default:
       return `<a class="${cls}" href="#${pickId}" data-open="${pickId}">Choose another</a>`;
   }

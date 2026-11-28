@@ -22,6 +22,23 @@ run, a single Test's in the page's view. The strip's Works / Doesn't work
 counts and filters go by the verdict. Each model's latest verdict is one row of
 `model_latest_tests`. A Test all models run that is still testing a model
 does not change it, so tasks keep their models while a run goes on.
+
+**A test counts only for the key that ran it.** Connect makes a new key and
+records when (`connected_at`); a Connect that brings back the very same key
+(the same `key_hash`) keeps the earlier `connected_at`, so its tests still
+count. A test made before then ran on an earlier key
+(`usable.ts` `onEarlierKey`), whose account may have had credit the current
+one has not. Such a model is not usable (`readUsableModels`, so tasks, the
+Model for each task lists, the budget suggestion and the proxy all leave it
+out), and its row reads Not tested yet with a grey "Passed on an earlier
+key" (or "Failed on an earlier key") note, counted in no Works or Doesn't
+work cell. A run's results from an earlier key show on no row, and its line
+says "on an earlier key". Test on the row, or Test all, tests it on the
+current key. A task whose saved main model passed only on an earlier key
+follows the rule below: it says the model needs a test on the new key, with
+a link to Test all models on Models › Setup › Providers and models, and runs
+on its usable fallback, else has no model and its calls are refused saying
+the same, also when no model is usable on the new key at all.
 Migration 0013 carried the tests made before it over: each model's newest
 of its latest run verdict and the passed test it was added with; a run's
 refusal that says nothing about the model is not carried. The old
@@ -87,8 +104,13 @@ again. A 200 with no text (a reasoning model that spent its tokens thinking)
 counts as working. Each result is recorded in the run, and each verdict
 becomes the model's latest test. One run at a
 time per user (a unique index holds it when two starts race), and a new one
-at most every 10 minutes. **Retest failed (N)** reruns, in the same run, the
-run's failures, verdicts or not, that can still be tested and have not passed since. A run made
+at most every 10 minutes. **Retest failed (N)** reruns, in the latest run,
+exactly the models the strip counts as Doesn't work (`test-all.ts`
+`failedModels`, by the strip's one rule `rowState`), so N is always the
+Doesn't work count: each one's row goes back to queued, or joins the run for
+a model that failed on its own row's Test. A refusal that says nothing about
+the model (busy, no credit) is no failure: its row reads Works or Not tested
+yet, and Test on the row or Test all tests it again. A run made
 on an older model list (`CATALOG_VERSION`) offers no Retest failed. The real
 total is the sum of the run's ledger rows: OpenRouter's reported cost.
 
@@ -167,10 +189,12 @@ rows stay as they are, still to save.
   says why, by the same checks as `readUsableModels` (`readNotUsable`): it
   failed its last test (Test it again, on its Providers row), it is no longer
   on OpenRouter's list (Choose another), the account's settings leave it out
-  (a link to them), or it needs a price cap (Set its price cap), else that it
-  is no longer usable (Choose another). Its calls go to its saved fallback
-  while that is usable, and the row says it runs on its fallback; with no
-  usable fallback the task has no model and its calls are refused with a
+  (a link to them), it needs a price cap (Set its price cap), or it was
+  tested only on an earlier key, so it needs a test on the new key (Test all
+  models), else that it is no longer usable (Choose another). Its calls go to
+  its saved fallback while that is usable, and the row says it runs on its
+  fallback; with no usable fallback the task has no model and its calls are
+  refused with a
   plain reason, never sent to a model the user did not choose for the task
   (`readTaskRoutes` `stopped`, the one rule `routeTask` calls by and the
   Providers page's note under a failed result follows). A saved fallback no
@@ -205,7 +229,9 @@ budget or a missing key stops both, since they share the one provider.
 Until a proposal is accepted or a model chosen, a task has none, and
 `callTask` refuses it (`no_model`), saying to choose a model for it on Model
 for each task; so does a task whose saved main model and fallback are both no
-longer usable, saying to test its model again or choose another. Every query is scoped to the
+longer usable, saying to test its model again or choose another, or, where
+the main model was tested only on an earlier key, that it needs a test on the
+new key, with Test all models on Models › Setup › Providers and models. Every query is scoped to the
 signed-in user.
 
 # Models › Usage (design-v3 10.1)

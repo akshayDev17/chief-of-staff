@@ -18,6 +18,12 @@
 //
 // A Test all models run that is still testing a model does not change its
 // latest test: tasks keep their models while a run goes on.
+//
+// A test counts only for the key that ran it: one made before the
+// provider's current connection (connected_at, moved by each Connect that
+// makes a new key) was made on an earlier key, so its model is not usable
+// and its row reads Not tested yet until a test on the current key. A key
+// whose account has no credit fails calls that the earlier key's passed.
 
 import type { OpenRouterModel } from "../prices/openrouter";
 import { readCurrentCatalog } from "../prices/store";
@@ -44,7 +50,14 @@ export interface LatestTest {
   state: "passed" | "failed";
   testedAt: string;
   result: TestRecord;
+  // Made before the provider's current connection: on an earlier key.
+  earlierKey?: true;
 }
+
+// A test made at `testedAt` ran on an earlier key than the connection made at
+// `connectedAt`. With no connection there is no current key to compare.
+export const onEarlierKey = (testedAt: string, connectedAt: string | null | undefined): boolean =>
+  Boolean(connectedAt) && Date.parse(testedAt) < Date.parse(connectedAt!);
 
 export interface UsableModel {
   provider: Provider;
@@ -75,19 +88,34 @@ export function latestTestWrite(
     .bind(userId, provider, model, state, JSON.stringify(record), testedAt.toISOString());
 }
 
+// Each latest test with the provider's current connection, for onEarlierKey.
+const LATEST_WITH_KEY = `SELECT t.provider, t.model, t.state, t.result, t.tested_at, c.connected_at FROM model_latest_tests t
+  LEFT JOIN provider_connections c ON c.user_id = t.user_id AND c.provider = t.provider WHERE t.user_id = ?`;
+
+interface LatestRecord {
+  provider: string;
+  model: string;
+  state: LatestTest["state"];
+  result: string;
+  tested_at: string;
+  connected_at: string | null;
+}
+
 export async function readLatestTests(db: D1Database, userId: string, provider: Provider): Promise<Map<string, LatestTest>> {
-  const { results } = await db
-    .prepare("SELECT model, state, result, tested_at FROM model_latest_tests WHERE user_id = ? AND provider = ?")
-    .bind(userId, provider)
-    .all<{ model: string; state: LatestTest["state"]; result: string; tested_at: string }>();
-  return new Map(results.map((r) => [r.model, { model: r.model, state: r.state, testedAt: r.tested_at, result: JSON.parse(r.result) as TestRecord }]));
+  const { results } = await db.prepare(`${LATEST_WITH_KEY} AND t.provider = ?`).bind(userId, provider).all<LatestRecord>();
+  return new Map(
+    results.map((r) => [
+      r.model,
+      { model: r.model, state: r.state, testedAt: r.tested_at, result: JSON.parse(r.result) as TestRecord, ...(onEarlierKey(r.tested_at, r.connected_at) ? { earlierKey: true as const } : {}) },
+    ]),
+  );
 }
 
 // Why a model is not usable: its latest test failed; the provider's current
 // list no longer names it; the user's own account list leaves it out; a
-// router has no price cap; `unknown` for anything else (no passed test, or
-// the app cannot call it).
-export type NotUsable = "failed" | "not_listed" | "left_out" | "no_cap" | "unknown";
+// router has no price cap; its latest test ran on an earlier key; `unknown`
+// for anything else (no passed test, or the app cannot call it).
+export type NotUsable = "failed" | "not_listed" | "left_out" | "no_cap" | "earlier_key" | "unknown";
 
 interface OfferChecks {
   listed: Map<string, OpenRouterModel>;
@@ -117,12 +145,11 @@ function notOffered(c: OfferChecks, provider: Provider, model: string): NotUsabl
 }
 
 // The signed-in user's usable models at every provider a plug-in serves,
-// ordered by provider and model. Scoped to the user.
+// ordered by provider and model: passed on the current key and offered.
+// Scoped to the user.
 export async function readUsableModels(db: D1Database, userId: string): Promise<UsableModel[]> {
-  const { results } = await db
-    .prepare("SELECT provider, model, result, tested_at FROM model_latest_tests WHERE user_id = ? AND state = 'passed' ORDER BY provider, model")
-    .bind(userId)
-    .all<{ provider: string; model: string; result: string; tested_at: string }>();
+  const { results: latest } = await db.prepare(`${LATEST_WITH_KEY} AND t.state = 'passed' ORDER BY t.provider, t.model`).bind(userId).all<LatestRecord>();
+  const results = latest.filter((r) => !onEarlierKey(r.tested_at, r.connected_at));
   if (!results.length) return [];
   const checks = await readOfferChecks(db, userId, [...new Set(results.map((r) => r.provider))].filter(isProvider));
   return results.flatMap((r) => {
@@ -135,13 +162,17 @@ export async function readUsableModels(db: D1Database, userId: string): Promise<
 
 // Why each of `models`, none of them usable, is not usable, in order, by the
 // same checks as readUsableModels. Scoped to the user.
+// A failed test on the current key leads; then the provider's list; then a
+// test on an earlier key, which a test on the current key replaces.
 export async function readNotUsable(db: D1Database, userId: string, models: Array<{ provider: Provider; model: string }>): Promise<NotUsable[]> {
   if (!models.length) return [];
-  const { results } = await db
-    .prepare("SELECT provider, model FROM model_latest_tests WHERE user_id = ? AND state = 'failed'")
-    .bind(userId)
-    .all<{ provider: string; model: string }>();
-  const failed = new Set(results.map((r) => `${r.provider}|${r.model}`));
+  const { results } = await db.prepare(LATEST_WITH_KEY).bind(userId).all<LatestRecord>();
+  const latest = new Map(results.map((r) => [`${r.provider}|${r.model}`, r]));
   const checks = await readOfferChecks(db, userId, [...new Set(models.map((m) => m.provider))]);
-  return models.map((m) => (failed.has(`${m.provider}|${m.model}`) ? "failed" : (notOffered(checks, m.provider, m.model) ?? "unknown")));
+  return models.map((m) => {
+    const l = latest.get(`${m.provider}|${m.model}`);
+    const earlier = l ? onEarlierKey(l.tested_at, l.connected_at) : false;
+    if (l?.state === "failed" && !earlier) return "failed";
+    return notOffered(checks, m.provider, m.model) ?? (earlier ? "earlier_key" : "unknown");
+  });
 }

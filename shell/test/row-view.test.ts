@@ -1,6 +1,7 @@
 // What a model's row and the result under it show, for every combination of
 // the one rule's inputs (models-table.ts describeRow): the latest verdict
-// (none, passed, failed), the newest refusal that says nothing about the
+// (none, passed, failed, or a pass or failure on an earlier key, which is no
+// verdict), the newest refusal that says nothing about the
 // model (none, or each kind, from the user's own Test or from a run), and
 // whether the row is open, blocked or being tested in a run. Each is rendered
 // as the page renders it, for an owner and for a friend.
@@ -44,12 +45,13 @@ const record = (k: (typeof KINDS)[number]): TestRecord => {
 const ACTIONS: Partial<Record<TestRefusal, string>> = { no_credits: "Add credits", busy: "Test again", budget_spent: "Budgets" };
 const TAG: Partial<Record<TestRefusal, string>> = { no_credits: "Needs credit", busy: "Busy" };
 
-type Verdict = "none" | "passed" | "failed";
+type Verdict = "none" | "passed" | "failed" | "earlier-passed" | "earlier-failed";
+const EARLIER_NOTE = { "earlier-passed": "Passed on an earlier key", "earlier-failed": "Failed on an earlier key" } as const;
 type Row = "open" | "blocked" | "testing";
 type Case = { verdict: Verdict; kind?: (typeof KINDS)[number]; from?: "test" | "run"; row: Row };
 
 const cases: Case[] = [];
-for (const verdict of ["none", "passed", "failed"] as const) {
+for (const verdict of ["none", "passed", "failed", "earlier-passed", "earlier-failed"] as const) {
   for (const row of ["open", "blocked", "testing"] as const) {
     cases.push({ verdict, row });
     for (const kind of KINDS) for (const from of kind.runOnly ? (["run"] as const) : (["test", "run"] as const)) cases.push({ verdict, kind, from, row });
@@ -60,7 +62,11 @@ function shownFor(c: Case): Map<string, ShownTest> {
   if (c.row === "testing") return new Map([[MODEL, { state: "testing" }]]);
   const run = c.kind && c.from === "run" ? record(c.kind) : undefined;
   let s: ShownLatest | undefined;
-  if (c.verdict === "failed") s = { state: "failed", verdict: "failed", testedAt: AT, result: FAILED, ...(run ? { later: run } : {}) };
+  if (c.verdict === "earlier-passed" || c.verdict === "earlier-failed") {
+    const earlier = c.verdict === "earlier-passed" ? "passed" : "failed";
+    // A run's refusal on the current key, over a test on an earlier key.
+    s = run ? { state: "failed", notVerdict: true, testedAt: AT, result: run, earlier } : { state: "earlier", earlier, testedAt: AT, result: earlier === "passed" ? WORKS : FAILED };
+  } else if (c.verdict === "failed") s = { state: "failed", verdict: "failed", testedAt: AT, result: FAILED, ...(run ? { later: run } : {}) };
   else if (run) s = { state: "failed", ...(c.verdict === "passed" ? { verdict: "passed" as const } : {}), notVerdict: true, testedAt: AT, result: run };
   else if (c.verdict === "passed") s = { state: "passed", verdict: "passed", testedAt: AT, result: WORKS };
   return new Map(s ? [[MODEL, s]] : []);
@@ -97,7 +103,9 @@ function expected(c: Case) {
       : failed && askable(FAILED.reason)
         ? { reason: FAILED.reason, on: "lead" }
         : undefined;
-  return { state, tag, lead, note, leadActions, noteActions, passed, ask };
+  // An earlier key's test: a grey note on an open row, never a verdict.
+  const earlier = c.row === "open" && (c.verdict === "earlier-passed" || c.verdict === "earlier-failed") ? EARLIER_NOTE[c.verdict] : undefined;
+  return { state, tag, lead, note, leadActions, noteActions, passed, ask, earlier };
 }
 
 const label = (c: Case) => `${c.verdict} verdict, ${c.kind ? `${c.kind.name} from ${c.from}` : "no refusal"}, ${c.row} row`;
@@ -105,7 +113,7 @@ const labels = (html: string) => [...html.matchAll(/>(Add credits|Test again|Bud
 
 describe("a model's row and its result", () => {
   it(`shows what the one rule says, in all ${cases.length} combinations`, () => {
-    expect(cases.length).toBe(3 * 3 * (1 + 7 * 2 + 1));
+    expect(cases.length).toBe(5 * 3 * (1 + 7 * 2 + 1));
     for (const c of cases) {
       const e = expected(c);
       const name = label(c);
@@ -114,9 +122,10 @@ describe("a model's row and its result", () => {
       const row = render(c, "owner", fromTest);
       expect(row.match(/data-state="([a-z]+)"/)![1], name).toBe(e.state);
       expect([...row.matchAll(/<span class="pill[^"]*">([^<]+)<\/span>/g)].map((m) => m[1]!.replace(/&#39;/g, "'")), name).toEqual(e.tag ? [e.tag] : []);
-      const why = row.match(/<span class="meta why">([\s\S]*?) · <button[^>]*>Details<\/button>(?: · <span class="later">([^<]*)<\/span>)?<\/span>/);
-      if (e.lead && c.row !== "blocked" && !fromTest) expect([why?.[1], why?.[2]], name).toEqual([esc(e.lead), e.note && esc(e.note)]);
+      const why = row.match(/<span class="meta why">([\s\S]*?) · <button[^>]*>Details<\/button>(?: · <span class="later">([^<]*)<\/span>)?(?: · <span class="ek">([^<]*)<\/span>)?<\/span>/);
+      if (e.lead && c.row !== "blocked" && !fromTest) expect([why?.[1], why?.[2], why?.[3]], name).toEqual([esc(e.lead), e.note && esc(e.note), e.earlier]);
       else expect(why, name).toBeNull();
+      expect([...row.matchAll(/<span class="ek">([^<]*)<\/span>/g)].map((m) => m[1]).slice(0, 1), name).toEqual(e.earlier ? [e.earlier] : []);
       // The result under it, for the owner.
       const result = render(c, "owner", true);
       if (e.passed) expect(result, name).toContain("passed.</strong> Tasks can use it.");
@@ -130,7 +139,10 @@ describe("a model's row and its result", () => {
       const noteHtml = box!.match(/<div class="later"><p>([^<]*)<\/p>([\s\S]*?)(?=<details>|$)/);
       expect(noteHtml?.[1], name).toBe(e.note && esc(e.note));
       const before = noteHtml ? box!.slice(0, box!.indexOf('<div class="later">')) : box!.split("<details>")[0]!;
+      // Every action its lead takes, Add credits among them, stays on an earlier key's row.
       expect(labels(before), name).toEqual(e.leadActions);
+      const earlierHtml = box!.match(/<div class="later"><p><span class="ek">([^<]*)<\/span>\. Tasks can use it once it passes on this key\.<\/p><\/div>/);
+      expect(earlierHtml?.[1], name).toBe(e.earlier);
       expect(noteHtml ? labels(noteHtml[2]!) : [], name).toEqual(e.noteActions);
       // A failed verdict's own fix, and the refusal's, are in Details.
       const det = box!.match(/<details><summary>Details<\/summary>([\s\S]*)<\/details>/)?.[1] ?? "";
@@ -151,6 +163,13 @@ describe("a model's row and its result", () => {
         expect(MODEL_HELP_REASONS.has(asked[1]!), name).toBe(true);
       }
     }
+  });
+
+  it("keeps Add credits on a Needs credit result over a pass on an earlier key, as on Nova Micro", () => {
+    const c: Case = { verdict: "earlier-passed", kind: KINDS.find((k) => k.reason === "no_credits"), from: "test", row: "open" };
+    const result = render(c, "owner", true);
+    expect(result).toMatch(new RegExp(`<strong>${esc(record(c.kind!).text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</strong>[\\s\\S]*?<div class="acts"><a class="btn small outline ext" href="${plugin.connect.guide.credits!.href}"[^>]*>Add credits</a></div><div class="later"><p><span class="ek">Passed on an earlier key</span>`));
+    expect(result).toMatch(/data-state="pending"/);
   });
 
   it("never changes the case of a refusal's text in the note", () => {

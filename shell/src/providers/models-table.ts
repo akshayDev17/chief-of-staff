@@ -38,7 +38,7 @@ import { makerKey, makerRowAttrs, nameMakers } from "../models/maker-filter";
 import { strengthChip } from "../prices/tiers";
 import { DEFAULT_CAP } from "../models/price-caps";
 import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type OfferRow, type Refused, type TestRefusal } from "../models/test-model";
-import { isCurrentRun, type RetestPlan, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
+import { failedModels, isCurrentRun, rowState, type RetestPlan, type RowState, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import type { TestRecord } from "../models/usable";
 import type { Link, ProviderPlugin } from "../proxy/plugin";
 
@@ -125,7 +125,7 @@ export function nextStep(state: { connected: boolean; view: View; run?: TestAllR
   if (state.view.confirm === "test-all" || state.view.confirm === "retest") return "confirm";
   if (!state.catalogCurrent) return "refresh";
   if (state.run && !state.run.finishedAt) return undefined;
-  if (state.run && isCurrentRun(state.run)) return "next";
+  if (state.run && isCurrentRun(state.run) && !state.run.earlierKey) return "next";
   return state.plan.wait ? "next" : "test-all";
 }
 
@@ -195,20 +195,22 @@ const shortName = (r: OfferRow): string => {
 
 // ---------- the one rule for what a row shows ----------
 
-// What a row's test state is made of: whether it is blocked (its account
-// leaves it out, a router has no cap, the app can't call it, it has no
-// price) or being tested in a run; the model's latest verdict; and the
-// newest refusal that says nothing about the model (models/test-model.ts
-// isVerdict), newer than that verdict, from the user's own Test (carried in
-// the view) or from a run.
+// What a row's test state is made of: its place in the strip (rowState, the
+// one rule the strip, its filters and Retest failed share); whether it is
+// blocked (its account leaves it out, a router has no cap, the app can't
+// call it, it has no price) or being tested in a run; the model's latest
+// verdict; how its latest test went on an earlier key, which is no verdict;
+// and the newest refusal that says nothing about the model
+// (models/test-model.ts isVerdict), newer than that verdict, from the user's
+// own Test (carried in the view) or from a run.
 export interface RowFacts {
+  state: RowState;
   blocked: boolean;
   testing: boolean;
   verdict?: { state: "passed" } | { state: "failed"; result: TestRecord };
+  earlier?: "passed" | "failed";
   refusal?: { result: TestRecord; from: "test" | "run" };
 }
-
-type RowState = "works" | "fails" | "pending" | "blocked";
 export type RowAction = "credits" | "test-again" | "budgets";
 export type RowTag = "doesnt-work" | "needs-credit" | "busy" | "couldnt-test";
 
@@ -224,9 +226,11 @@ export interface Shown {
 // result that says it passed; `ask`, the reason a friend's Ask Admin sends
 // and the block it sits in, the one whose reason it is: the refusal just
 // hit, else the lead's, and only a reason the model-help form takes
-// (MODEL_HELP_REASONS).
+// (MODEL_HELP_REASONS); `earlier`, how its latest test went on an earlier
+// key, the grey note on a row that reads Not tested yet.
 export interface RowView {
   state: RowState;
+  earlier?: "passed" | "failed";
   tag?: RowTag;
   lead?: Shown;
   note?: Shown & { from: "test" | "run" };
@@ -252,7 +256,8 @@ function askOn(first: TestRefusal | undefined, on: "lead" | "note", lead?: TestR
 // Couldn't test) shows only on a model still usable: passed and not blocked.
 // While a run tests the row, only the user's own Test shows.
 export function describeRow(f: RowFacts): RowView {
-  const state: RowState = f.blocked ? "blocked" : f.testing ? "pending" : f.verdict?.state === "passed" ? "works" : f.verdict?.state === "failed" ? "fails" : "pending";
+  const state = f.state;
+  const earlier = f.earlier && !f.testing && !f.blocked ? { earlier: f.earlier } : {};
   const failed = !f.testing && f.verdict?.state === "failed" ? f.verdict.result : undefined;
   const refusal = f.testing && f.refusal?.from === "run" ? undefined : f.refusal;
   if (failed) {
@@ -263,9 +268,9 @@ export function describeRow(f: RowFacts): RowView {
     const usable = !f.blocked && !f.testing && f.verdict?.state === "passed";
     const reason = refusal.result.reason;
     const tag: RowTag | undefined = usable ? (reason === "no_credits" ? "needs-credit" : reason === "busy" ? "busy" : "couldnt-test") : undefined;
-    return { state, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, ...askOn(reason, "lead") };
+    return { state, ...earlier, ...(tag ? { tag } : {}), lead: shownOf(refusal.result), passed: false, ...askOn(reason, "lead") };
   }
-  return { state, passed: !f.testing && f.verdict?.state === "passed" };
+  return { state, ...earlier, passed: !f.testing && f.verdict?.state === "passed" };
 }
 
 // The facts of `r`'s row, from its shown test and the view.
@@ -279,26 +284,29 @@ function rowFacts(r: OfferRow, input: ModelsTableInput): RowFacts {
     refusal = { result: { reason: res.reason, text: refusalText(refused, input.plugin), ...(fix ? { fix } : {}), ...(res.reply ? { reply: res.reply } : {}) }, from: "test" };
   }
   const blocked = Boolean(blockKind(r));
-  if (!s || s.state === "testing") return { blocked, testing: s?.state === "testing", ...(refusal ? { refusal } : {}) };
+  const state = rowState(blocked, s);
+  if (!s || s.state === "testing") return { state, blocked, testing: s?.state === "testing", ...(refusal ? { refusal } : {}) };
+  if (s.state === "earlier") return { state, blocked, testing: false, earlier: s.earlier, ...(refusal ? { refusal } : {}) };
   const run = s.notVerdict ? s.result : s.later;
   refusal ??= run ? { result: run, from: "run" } : undefined;
   const verdict: RowFacts["verdict"] = s.notVerdict ? (s.verdict === "passed" ? { state: "passed" } : undefined) : s.state === "passed" ? { state: "passed" } : { state: "failed", result: s.result };
-  return { blocked, testing: false, ...(verdict ? { verdict } : {}), ...(refusal ? { refusal } : {}) };
+  return { state, blocked, testing: false, ...(verdict ? { verdict } : {}), ...(s.earlier ? { earlier: s.earlier } : {}), ...(refusal ? { refusal } : {}) };
 }
 
 const running = (input: ModelsTableInput): boolean => Boolean(input.run && !input.run.finishedAt);
 const primaryIf = (input: ModelsTableInput, step: Step): string => (input.step === step ? "primary" : "outline");
 
+// The strip's counts, by rowState; Doesn't work is failedModels, the same
+// models Retest failed tests again.
 function counts(input: ModelsTableInput): { w: number; f: number; p: number; t: number } {
   let w = 0;
-  let f = 0;
   let p = 0;
   for (const r of input.rows) {
-    const s = describeRow(rowFacts(r, input)).state;
+    const s = rowState(Boolean(blockKind(r)), input.shown.get(r.model));
     if (s === "works") w++;
-    else if (s === "fails") f++;
     else if (s === "pending") p++;
   }
+  const f = failedModels(input.rows, input.shown).length;
   return { w, f, p, t: w + f + p };
 }
 
@@ -339,6 +347,9 @@ const TAGS: Record<RowTag, string> = {
   busy: '<span class="pill">Busy</span>',
   "couldnt-test": `<span class="pill">Couldn't test</span>`,
 };
+
+// The grey note on a row whose latest test ran on an earlier key.
+const earlierNote = (v: RowView): string => (v.earlier ? `<span class="ek">${v.earlier === "passed" ? "Passed" : "Failed"} on an earlier key</span>` : "");
 
 // "Latest test couldn't run. <its plain line, as written>".
 const noteLine = (note: NonNullable<RowView["note"]>): string => `${note.from === "test" ? "This test" : "Latest test"} couldn't run. ${note.result.text}`;
@@ -427,7 +438,7 @@ function resultHtml(r: OfferRow, input: ModelsTableInput, v: RowView): string {
     ...usedBy.flatMap((u) => (u.fallback ? [`<p>${esc(u.task)} runs on its fallback ${esc(u.fallback)} now.</p>`] : [])),
     none.length ? `<p>${esc(joinAnd(none))} ${none.length === 1 ? "reads" : "read"} “Choose a model” now.</p>` : "",
   ].join("");
-  const note = v.note ? `<div class="later"><p>${esc(noteLine(v.note))}</p>${acts(v.note, "note")}</div>` : "";
+  const note = v.note ? `<div class="later"><p>${esc(noteLine(v.note))}</p>${acts(v.note, "note")}</div>` : v.earlier ? `<div class="later"><p>${earlierNote(v)}. Tasks can use it once it passes on this key.</p></div>` : "";
   const det = [...detailParts(plugin, v.lead.result, credits?.href), ...(v.note ? detailParts(plugin, v.note.result, credits?.href) : [])].map((d) => `<p>${d}</p>`).join("");
   const cls = v.lead.result.reason === "no_credits" ? "warn" : "bad";
   return `<div class="result ${cls}" role="alert"><p class="v">${ICON.bad}<span><strong>${esc(v.lead.result.text)}</strong></span>${hide}</p>${used}${acts(v.lead, "lead")}${note}${det ? `<details><summary>Details</summary>${det}</details>` : ""}</div>`;
@@ -473,7 +484,7 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
   if (r.free) tags += '<span class="pill free">Free</span>';
   if (v.tag) tags += TAGS[v.tag];
   const resultHere = view.results?.some((x) => x.model === r.model) ?? false;
-  const plainMeta = `<span class="meta"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span></span>`;
+  const plainMeta = `<span class="meta">${v.earlier ? `${earlierNote(v)} · ` : ""}<span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span></span>`;
   let meta: string;
   if (kind === "account") meta = `<span class="meta" title="${esc(blockedReason(r, plugin) ?? "")}">Your ${esc(plugin.connect.guide.short)} settings leave it out</span>`;
   else if (kind === "router") meta = `<span class="meta">Priced per call by the model it picks</span>`;
@@ -483,7 +494,7 @@ function rowHtml(r: OfferRow, input: ModelsTableInput, makerNames: Map<string, s
     // Only the maker and ID clip; Change cap always shows whole, even on a phone.
     meta = `<span class="meta capped"><span class="clip"><span data-hl>${esc(maker)}</span> · <span data-hl>${id}</span> · capped</span><span class="cg">&nbsp;· <a class="link" href="${esc(viewHref(p, { cap: r.model }, `#${anchor}`))}" data-view data-k="cg-${id}">Change cap</a></span></span>`;
   } else if (v.lead && !resultHere) {
-    const note = v.note ? ` · <span class="later">${esc(noteLine(v.note))}</span>` : "";
+    const note = v.note ? ` · <span class="later">${esc(noteLine(v.note))}</span>` : v.earlier ? ` · ${earlierNote(v)}` : "";
     meta = `<span class="meta why">${esc(v.lead.result.text)} · <button type="button" class="link" data-det="${esc(anchor)}" aria-expanded="false" aria-controls="det-${esc(anchor)}">Details</button>${note}</span>`;
   } else meta = plainMeta;
   let extra = "";
@@ -565,7 +576,8 @@ function railPart(input: ModelsTableInput): string {
     line = `Retesting… <span class="num">${n - left}</span> of <span class="num">${n}</span> that failed · spent <span class="num">${formatCost(run.realCostUsd)}</span>`;
   } else if (run) {
     const again = run.retestedAt ? ` · retested ${run.retestCount ?? 0} at ${esc(stamp(run.retestedAt, input.now))}` : "";
-    line = `Tested ${esc(stamp(run.startedAt, input.now))}${again} · spent <span class="num">${formatCost(run.realCostUsd)}</span> · estimate <span class="num">${formatCost(run.estimateUsd)}</span>`;
+    const key = run.earlierKey ? " on an earlier key" : "";
+    line = `Tested ${esc(stamp(run.startedAt, input.now))}${key}${again} · spent <span class="num">${formatCost(run.realCostUsd)}</span> · estimate <span class="num">${formatCost(run.estimateUsd)}</span>`;
   } else line = "Not run yet for this account.";
   const staleBox = stale
     ? `<div class="stale"><p>The ${esc(stamp(run!.startedAt, input.now))} run used the old model list, so Retest failed waits for a new run. ${current ? "Test all again first." : "Refresh, then test all again."}</p>${current ? "" : refreshButton(input, primaryIf(input, "refresh"))}</div>`
