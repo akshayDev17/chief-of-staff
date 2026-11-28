@@ -254,9 +254,7 @@ function rowFacts(r: TableRow, input: ModelsTableInput): RowFacts {
   if (res?.reason) {
     const refused: Refused = { kind: "refused", model: r.model, reason: res.reason, ...(r.free ? { free: true } : {}) };
     const fix = refusalFix(refused, input.plugin);
-    // No model fits: its settings links, from the provider's own reply.
-    const links = res.reason === "no_fit" && res.reply ? input.plugin.connect.classify({ step: "call", status: res.reply.status, errorName: res.reply.errorName ?? "", message: res.reply.message ?? "" }, undefined).links : [];
-    refusal = { reason: res.reason, text: refusalText(refused, input.plugin), ...(fix ? { fix } : {}), ...(res.reply ? { reply: res.reply } : {}), ...(links.length ? { links } : {}) };
+    refusal = { reason: res.reason, text: refusalText(refused, input.plugin), ...(fix ? { fix } : {}), ...(res.reply ? { reply: res.reply } : {}) };
   }
   return { state: r.state, ...(latest ? { latest } : {}), ...(res && !res.reason ? { tested: true } : {}), ...(refusal ? { refusal } : {}) };
 }

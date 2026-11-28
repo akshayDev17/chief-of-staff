@@ -298,24 +298,18 @@ export async function testModel(
     };
   }
   const connection = await readConnection(db, userId, provider);
-  // A router called under the user's cap that OpenRouter refuses for the
-  // request itself (a router's own limit): its own words, not a missing
-  // model. No model fitting the settings or the cap has its own reason.
-  if (
-    outcome.failure?.step === "call" &&
-    plugin.connect.isRouter?.(model) &&
-    [400, 404, 422].includes(outcome.failure.status) &&
-    plugin.connect.classify(outcome.failure, connection).reason !== "no_fit"
-  ) {
-    const { failure } = outcome;
-    return refuse("cap_refused", {
-      reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
-      fix: `${plugin.connect.guide.short}'s own words are above. Raise the price cap if no model fits under it, then test again.`,
-    });
-  }
   if (outcome.failure) {
     const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
+    // A router called under the user's cap that OpenRouter refuses for the
+    // request itself (a router's own limit): its own words, not a missing
+    // model. No model fitting the settings or the cap has its own reason.
+    if (failure.step === "call" && plugin.connect.isRouter?.(model) && [400, 404, 422].includes(failure.status) && plain.reason !== "no_fit") {
+      return refuse("cap_refused", {
+        reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
+        fix: `${plugin.connect.guide.short}'s own words are above. Raise the price cap if no model fits under it, then test again.`,
+      });
+    }
     const credential = outcome.kind === "refused" && outcome.reason === "credential_failed";
     return refuse(plain.reason, {
       reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,
