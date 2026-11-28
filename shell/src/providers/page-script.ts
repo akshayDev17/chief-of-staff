@@ -33,7 +33,7 @@ export const PAGE_SCRIPT = String.raw`
   "use strict";
   var main = document.getElementById("screen");
   if (!main || !window.fetch || !window.history) return;
-  var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, built: false };
+  var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, lists: 0, det: {}, allowed: {}, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
   var BAD = ${JSON.stringify(ICON.bad)};
   var STATES = ["ready", "credit", "step"];
@@ -143,7 +143,7 @@ export const PAGE_SCRIPT = String.raw`
       if (panel) panel.hidden = !open;
     });
     Object.keys(S.allowed).forEach(showCheck);
-    Object.keys(S.waiting).forEach(function (k) { var b = byK(k); if (b) busy(b); });
+    showBusy();
     makers.render(true);
   }
 
@@ -168,6 +168,11 @@ export const PAGE_SCRIPT = String.raw`
     if (lbl) { lbl.textContent = label; if (ico) ico.innerHTML = SPIN; else lbl.insertAdjacentHTML("beforebegin", SPIN); }
     else b.innerHTML = SPIN + (label ? " " + esc(label) : "");
   }
+  // Every request still waiting shows it: its button, and for Refresh the strip and the rows.
+  function showBusy() {
+    Object.keys(S.waiting).forEach(function (k) { var b = byK(k); if (b) busy(b); });
+    if (S.lists) each(main.querySelectorAll('[data-part="strip"], [data-part="rows"]'), function (p) { p.setAttribute("aria-busy", "true"); });
+  }
   // A request that failed: the page as the server has it now, then the
   // failure, with Try again sending the same request.
   function failed(job) {
@@ -178,16 +183,21 @@ export const PAGE_SCRIPT = String.raw`
       .then(function () {
         var box = main.querySelector('[data-part="err"]') || main.querySelector('[data-part="banner"]');
         if (!box) return;
-        box.innerHTML = '<div class="err" role="alert">' + BAD + '<div><p>Couldn&#39;t reach the app just now.</p><div class="acts"><button type="button" class="btn small outline" data-retry data-k="retry">Try again</button></div></div></div>';
+        var old = box.querySelector("[data-failed]");
+        if (old) old.remove();
+        box.insertAdjacentHTML("afterbegin", '<div class="err" role="alert" data-failed>' + BAD + '<div><p>Couldn&#39;t reach the app just now.</p><div class="acts"><button type="button" class="btn small outline" data-retry data-k="retry">Try again</button></div></div></div>');
         delete S.last[box.getAttribute("data-part")];
       })
       .then(next);
   }
   // opens: a view link, whose answer may open a confirm or an editor: focus
   // goes to what it marks data-autofocus.
-  function send(url, init, k, opens) {
+  // list: a Refresh, which re-reads the whole list.
+  function send(url, init, k, opens, list) {
     if (k) S.waiting[k] = true;
-    S.queue.push({ url: url, init: init, k: k, opens: !!opens });
+    if (list) S.lists++;
+    S.queue.push({ url: url, init: init, k: k, opens: !!opens, list: !!list });
+    showBusy();
     if (!S.busy) next();
   }
   function next() {
@@ -203,11 +213,13 @@ export const PAGE_SCRIPT = String.raw`
       .then(function (r) { if (!r.ok && r.status !== 400 && r.status !== 429 && r.status !== 502) throw new Error(String(r.status)); return r.json(); })
       .then(function (j) {
         if (job.k) delete S.waiting[job.k];
+        if (job.list) S.lists--;
         if (typeof j.view === "string") S.view = j.view;
         swap(j.main, j.focus, job.opens);
       })
       .then(next, function () {
         if (job.k) delete S.waiting[job.k];
+        if (job.list) S.lists--;
         failed(job);
       });
   }
@@ -280,8 +292,7 @@ export const PAGE_SCRIPT = String.raw`
     if (b && b.name) data.append(b.name, b.value);
     var k = b && b.getAttribute("data-k");
     if (b) busy(b);
-    if (form.hasAttribute("data-busy-list")) each(main.querySelectorAll('[data-part="strip"], [data-part="rows"]'), function (p) { p.setAttribute("aria-busy", "true"); });
-    send(form.action, { method: "POST", body: data }, k);
+    send(form.action, { method: "POST", body: data }, k, false, form.hasAttribute("data-busy-list"));
   });
   document.addEventListener("click", function (e) {
     var t = e.target;
@@ -294,7 +305,8 @@ export const PAGE_SCRIPT = String.raw`
     }
     var allow = t.closest("a[data-allow]");
     if (allow) { var id = allow.getAttribute("data-allow"); S.allowed[id] = true; setTimeout(function () { showCheck(id); var f = main.querySelector('form[data-check-for="' + cssq(id) + '"] button'); if (f) f.focus({ preventScroll: true }); }, 0); return; }
-    if (t.closest("[data-retry]")) { var again = S.retry; S.retry = null; if (again) send(again.url, again.init, again.k, again.opens); return; }
+    var retry = t.closest("[data-retry]");
+    if (retry) { var again = S.retry; S.retry = null; if (again) { busy(retry); send(again.url, again.init, again.k, again.opens, again.list); } return; }
     var hide = t.closest("[data-hide]");
     if (hide) {
       var more = hide.closest(".more"), gone = hide.getAttribute("data-hide");

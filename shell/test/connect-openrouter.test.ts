@@ -82,14 +82,16 @@ const PATH = new URL(BASE).pathname;
 // sends is recorded and answered by the app at `now`; `settle` waits for the
 // answers to be swapped in. `failNextPost`: the next form's request runs on
 // the app, which saves what it does, but its answer is a 503, as when the
-// Worker runs past its limits. `holdNextPost`: the next form's answer waits
-// until the function it returns is called, as a slow request does.
+// Worker runs past its limits; with `{ saved: false }` the request never
+// reaches the app. `holdNextPost`: the next form's answer waits until the
+// function it returns is called, as a slow request does. Each request takes
+// the hold or the failure set when it is sent.
 async function inPlace(now: Date) {
   const html = await (await get()).text();
   const doc = documentOf(html);
   const sent: Sent = [];
   let answered: Promise<unknown> = Promise.resolve();
-  let failing = false;
+  let failing: false | "saved" | "unsaved" = false;
   let held: Promise<void> | undefined;
   runScript(pageScripts(html), doc, `${BASE}?provider=openrouter`, sent, {
     window: { addEventListener: () => {}, fetch: () => {}, history: {} },
@@ -102,15 +104,16 @@ async function inPlace(now: Date) {
     },
     fetch: (url, init) => {
       const post = init?.method === "POST";
-      const answer = handle(new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }), { now }).then((r) => {
-        if (post && held) {
-          const wait = held;
-          held = undefined;
-          return wait.then(() => r);
-        }
-        if (!post || !failing) return r;
+      const wait = post ? held : undefined;
+      const fail = post ? failing : false;
+      if (post) {
+        held = undefined;
         failing = false;
-        return new Response("Worker exceeded resource limits", { status: 503 });
+      }
+      const request = new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } });
+      const answer = (fail === "unsaved" ? Promise.resolve(undefined) : handle(request, { now })).then(async (r) => {
+        if (wait) await wait;
+        return fail ? new Response("Worker exceeded resource limits", { status: 503 }) : r!;
       });
       answered = answer;
       return answer;
@@ -124,7 +127,7 @@ async function inPlace(now: Date) {
       for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
     } while (seen !== answered);
   };
-  const failNextPost = () => { failing = true; };
+  const failNextPost = (opts: { saved?: boolean } = {}) => { failing = opts.saved === false ? "unsaved" : "saved"; };
   const holdNextPost = () => {
     let release = () => {};
     held = new Promise<void>((r) => { release = r; });
@@ -358,7 +361,7 @@ describe("Connect OpenRouter", () => {
   it("shows what Refresh saved even when its answer fails: the read stamp, the rows and the strip, with no reload, and Try again", async () => {
     await connect();
     const later = new Date("2026-11-27T10:05:00Z");
-    const { doc, sent, settle, failNextPost } = await inPlace(later);
+    const { doc, sent, settle, failNextPost, holdNextPost } = await inPlace(later);
     const stamp = () => doc.querySelector('[data-part="head"] .src')!.textContent;
     const stateOf = (model: string) => doc.querySelector(`li.row[data-id="${model}"]`)!.getAttribute("data-state");
     const cells = () => ["ready", "credit", "step"].map((k) => Number(doc.querySelector(`.cell[data-filter="${k}"] .v`)!.textContent));
@@ -383,11 +386,55 @@ describe("Connect OpenRouter", () => {
     // It says the request failed, with Try again, which sends the same request once more.
     const err = doc.querySelector('[data-part="err"]')!;
     expect(err.textContent).toContain("Couldn't reach the app just now.");
-    doc.fire("click", err.querySelector("[data-retry]")!);
+    // Try again shows it is busy at once, on Refresh, the strip and the rows, until its answer is in.
+    const release = holdNextPost();
+    const retry = err.querySelector("[data-retry]")!;
+    doc.fire("click", retry);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    expect([retry.disabled, refresh.disabled, refresh.getAttribute("aria-busy")]).toEqual([true, true, "true"]);
+    expect(["strip", "rows"].map((p) => doc.querySelector(`[data-part="${p}"]`)!.getAttribute("aria-busy"))).toEqual(["true", "true"]);
+    release();
     await settle();
     expect(sent.at(-1)).toBe(`fetch ${PATH}/openrouter/refresh`);
     expect(sent).toHaveLength(3);
     expect(doc.querySelector('[data-part="err"]')!.textContent).not.toContain("Couldn't reach the app");
+  });
+
+  it("keeps a Refresh queued behind a slow Test busy, on its button, the strip and the rows, until its own answer is in", async () => {
+    await connect();
+    const { doc, settle, holdNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const busyNow = () => [doc.querySelector('[data-part="head"] button[data-k="refresh"]')!.getAttribute("aria-busy"), ...["strip", "rows"].map((p) => doc.querySelector(`[data-part="${p}"]`)!.getAttribute("aria-busy"))];
+    const releaseTest = holdNextPost();
+    doc.fire("submit", doc.querySelector('li.row[data-id="openai/gpt-6-luna"] form')!);
+    const releaseRefresh = holdNextPost();
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    expect(busyNow()).toEqual(["true", "true", "true"]);
+    // The Test's answer is swapped in while the Refresh still waits.
+    releaseTest();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(busyNow()).toEqual(["true", "true", "true"]);
+    releaseRefresh();
+    await settle();
+    expect(doc.querySelectorAll('[aria-busy="true"]')).toEqual([]);
+    expect(doc.querySelector('[data-part="head"] .src')!.textContent).toContain("10:05 UTC");
+  });
+
+  it("keeps the stale-list notice when Refresh model list fails before anything is saved, and adds the failure above it", async () => {
+    await connect();
+    await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = json_set(catalog, '$.version', 2)").run();
+    const { doc, settle, failNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    failNextPost({ saved: false });
+    doc.fire("submit", doc.querySelector('[data-part="err"] form')!);
+    await settle();
+    const err = doc.querySelector('[data-part="err"]')!;
+    expect(err.textContent).toContain("Couldn't reach the app just now.");
+    expect(err.textContent).toContain("This list follows older rules. Read OpenRouter's list again.");
+    expect(err.querySelector('button[data-k="refresh-list"]')).not.toBeNull();
+    // A second failure replaces the first box, never stacks it.
+    failNextPost({ saved: false });
+    doc.fire("submit", err.querySelector("form")!);
+    await settle();
+    expect(doc.querySelectorAll("[data-failed]")).toHaveLength(1);
   });
 
   it("shows Refresh busy on its button, the strip and the rows for the whole of a slow request, then redraws in place", async () => {

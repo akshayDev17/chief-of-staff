@@ -99,11 +99,11 @@ export class El {
   remove() { El.detach(this); }
   cloneNode(): El { const copy = parse(this.outerHTML).children[0]!; copy.parent = null; return copy; }
   insertAdjacentHTML(where: string, html: string) {
-    if (where !== "beforebegin" || !this.parent) return;
     const nodes = parse(html).children;
-    const at = this.parent.children.indexOf(this);
-    this.parent.children.splice(at, 0, ...nodes);
-    for (const c of nodes) c.parent = this.parent;
+    const into = where === "afterbegin" ? this : where === "beforebegin" ? this.parent : null;
+    if (!into) return;
+    into.children.splice(where === "afterbegin" ? 0 : into.children.indexOf(this), 0, ...nodes);
+    for (const c of nodes) c.parent = into;
   }
   contains(other: unknown): boolean { for (let e = other as El | null; e; e = e.parent) if (e === this) return true; return false; }
   matches(sel: string): boolean { return matches(this, sel); }
