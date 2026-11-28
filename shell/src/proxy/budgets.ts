@@ -1,13 +1,20 @@
-// Each user's monthly budget per provider (design-v3 1.8), and the value each
-// budget field suggests.
+// Each user's one monthly OpenRouter budget (design-v3 1.8), and the value
+// Models › Setup › Budgets suggests for it.
 //
-// The budget is required: a provider with none set cannot be called. There is
-// no default, no daily budget and no per-model budget. The user sets it by
-// accepting the suggestion or typing their own value.
+//   readBudget(db, userId, provider) -> Budget | undefined
+//   setBudget(db, userId, provider, usd, how, now)
+//   readSuggestionBasis(db, userId) -> SuggestionBasis | undefined
+//   suggest(basis, applicationsADay) -> Suggestion
+//
+// The budget is required: with none set, no model can be called except a
+// model's test call and Test all models (proxy.ts, `no_budget`). There is no
+// default, no daily budget and no per-model budget. The user sets it by
+// accepting the suggestion or typing their own value, and may change it any
+// time.
 
-import { currentSnapshot, readSnapshotRows } from "../prices/store";
-import type { Provider } from "../prices/types";
-import { readUsableModels } from "../models/usable";
+import { readPriceCaps } from "../models/price-caps";
+import { readUsableModels, type UsableModel } from "../models/usable";
+import { currentSnapshot, readCurrentCatalog, readSnapshotRows } from "../prices/store";
 
 export interface Budget {
   monthlyUsd: number;
@@ -65,59 +72,114 @@ export async function setBudget(
 export const TOKENS_PER_APPLICATION = { input: 51_100, output: 3_225 } as const;
 export const DAYS_A_MONTH = 30;
 export const DEFAULT_APPLICATIONS_A_DAY = 5;
+export const MAX_APPLICATIONS_A_DAY = 100;
 
-export interface PickedModel {
-  provider: Provider;
+// The model a suggestion is worked from, at its price on OpenRouter's list
+// (the current model list's price rows, src/prices/openrouter.ts, the same
+// read the Providers page's table shows), or, for a router, at the user's
+// own price cap on it (models/price-caps.ts), the most a call to it can cost.
+export interface PricedModel {
   model: string;
-  location: string;
+  // As OpenRouter's list names it; the ID when the list has no name for it.
+  name: string;
+  inputUsdPerMTok: number;
+  outputUsdPerMTok: number;
+  free: boolean;
+  // Priced at the user's price cap: a router.
+  capped: boolean;
+  // When OpenRouter's list was read for these prices, or the cap set (YYYY-MM-DD).
+  checkedOn: string;
 }
 
-export interface Suggestion {
-  monthlyUsd: number; // whole dollars, rounded up
-  model: string; // the picked model it is worked from
+export interface SuggestionBasis {
+  // Which models it was chosen among: the usable models the user's tasks use
+  // (their saved choices, main and fallback), or, before any task uses one,
+  // every usable model.
+  from: "tasks" | "usable";
+  model: PricedModel;
+  // What one application costs at the design's tokens, in USD.
+  perApplicationUsd: number;
+}
+
+export interface Suggestion extends SuggestionBasis {
+  monthlyUsd: number; // whole dollars, rounded up, at least $1
   applicationsADay: number;
-  checkedOn: string; // the older date read of the two prices used
 }
 
-// The suggestion for one provider: if that provider carried every task at
-// the given volume, on the dearest of `picked`: the models the user's tasks
-// use there, or, before any task has a model, every model the user picked
-// there. Undefined when none of them has both an input and an output price.
-// Prices come from one read of the current snapshot.
-export async function suggestBudget(db: D1Database, picked: PickedModel[], applicationsADay: number): Promise<Suggestion | undefined> {
-  const snapshot = picked.length ? await currentSnapshot(db) : undefined;
-  const rows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
-  const dearest = (m: PickedModel, kind: "input" | "output") =>
-    rows
-      .filter((r) => r.provider === m.provider && r.model === m.model && r.tokenKind === kind && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location))
-      .sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];
-  let best: Suggestion | undefined;
-  for (const m of picked) {
-    const input = dearest(m, "input");
-    const output = dearest(m, "output");
-    if (!input || !output) continue;
-    const perApplication =
-      (TOKENS_PER_APPLICATION.input * input.usdPerMTok + TOKENS_PER_APPLICATION.output * output.usdPerMTok) / 1_000_000;
-    const monthlyUsd = Math.max(1, Math.ceil(perApplication * applicationsADay * DAYS_A_MONTH));
-    if (!best || monthlyUsd > best.monthlyUsd) {
-      best = { monthlyUsd, model: m.model, applicationsADay, checkedOn: input.dateRead < output.dateRead ? input.dateRead : output.dateRead };
-    }
-  }
-  return best;
-}
+// One application at a model's prices, at the design's tokens.
+export const applicationCost = (m: Pick<PricedModel, "inputUsdPerMTok" | "outputUsdPerMTok">): number =>
+  (TOKENS_PER_APPLICATION.input * m.inputUsdPerMTok + TOKENS_PER_APPLICATION.output * m.outputUsdPerMTok) / 1_000_000;
 
-// The models the suggestion is worked from at one provider: the user's
-// usable models there (models/usable.ts) that their tasks' saved choices use
-// (main and fallback, task_routes), else every usable model there.
-export async function pickedModels(db: D1Database, userId: string, provider: Provider): Promise<PickedModel[]> {
-  const usable = (await readUsableModels(db, userId)).filter((m) => m.provider === provider).map((m) => ({ provider: m.provider, model: m.model, location: m.location }));
+// A month at `applicationsADay`, in whole dollars rounded up, at least $1.
+// The page's script repeats this exact sum as the volume is typed
+// (budgets-page.ts), so the figure it shows is the one Set saves.
+export const monthlyFor = (perApplicationUsd: number, applicationsADay: number): number =>
+  Math.max(1, Math.ceil(perApplicationUsd * applicationsADay * DAYS_A_MONTH));
+
+export const suggest = (basis: SuggestionBasis, applicationsADay: number): Suggestion => ({
+  ...basis,
+  applicationsADay,
+  monthlyUsd: monthlyFor(basis.perApplicationUsd, applicationsADay),
+});
+
+// The models the suggestion may be worked from: the user's usable models on
+// OpenRouter (models/usable.ts readUsableModels, the one rule for what a task
+// can use) that their tasks' saved choices use, main or fallback; else every
+// usable model. Empty before any model has passed its test.
+export async function suggestionCandidates(db: D1Database, userId: string): Promise<{ from: SuggestionBasis["from"]; models: UsableModel[] }> {
+  const usable = (await readUsableModels(db, userId)).filter((m) => m.provider === "openrouter");
   const { results: routes } = await db
     .prepare("SELECT main_provider, main_model, fallback_provider, fallback_model FROM task_routes WHERE user_id = ?")
     .bind(userId)
     .all<{ main_provider: string; main_model: string; fallback_provider: string | null; fallback_model: string | null }>();
   const used = new Set(
-    routes.flatMap((r) => [r.main_provider === provider ? r.main_model : undefined, r.fallback_provider === provider ? r.fallback_model : undefined].filter((m): m is string => Boolean(m))),
+    routes.flatMap((r) => [
+      r.main_provider === "openrouter" ? r.main_model : undefined,
+      r.fallback_provider === "openrouter" ? (r.fallback_model ?? undefined) : undefined,
+    ]).filter((m): m is string => Boolean(m)),
   );
   const inUse = usable.filter((m) => used.has(m.model));
-  return inUse.length ? inUse : usable;
+  return inUse.length ? { from: "tasks", models: inUse } : { from: "usable", models: usable };
+}
+
+// The suggestion's basis: the dearest of the candidates for one application,
+// ties by name. Undefined when there is no candidate, or none has a price.
+// Prices come from one read of the current price rows; a router's from the
+// user's cap.
+export async function readSuggestionBasis(db: D1Database, userId: string): Promise<SuggestionBasis | undefined> {
+  const { from, models } = await suggestionCandidates(db, userId);
+  if (!models.length) return undefined;
+  const snapshot = await currentSnapshot(db);
+  const [rows, catalog, caps] = await Promise.all([
+    snapshot ? readSnapshotRows(db, snapshot.id) : Promise.resolve([]),
+    readCurrentCatalog(db),
+    readPriceCaps(db, userId, "openrouter"),
+  ]);
+  const listed = new Map((catalog?.models ?? []).map((m) => [m.id, m]));
+  const standard = (m: UsableModel, kind: "input" | "output") =>
+    rows
+      .filter((r) => r.provider === m.provider && r.model === m.model && r.tokenKind === kind && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location))
+      .sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];
+  let best: SuggestionBasis | undefined;
+  for (const m of models) {
+    const entry = listed.get(m.model);
+    const cap = entry?.router ? caps.get(m.model) : undefined;
+    const input = cap ? undefined : standard(m, "input");
+    const output = cap ? undefined : standard(m, "output");
+    if (!cap && (!input || !output)) continue;
+    const priced: PricedModel = {
+      model: m.model,
+      name: entry?.name ?? m.model,
+      inputUsdPerMTok: cap ? cap.input : input!.usdPerMTok,
+      outputUsdPerMTok: cap ? cap.output : output!.usdPerMTok,
+      free: entry?.free === true,
+      capped: Boolean(cap),
+      checkedOn: cap ? (cap.setAt ?? "").slice(0, 10) : input!.dateRead < output!.dateRead ? input!.dateRead : output!.dateRead,
+    };
+    const perApplicationUsd = applicationCost(priced);
+    if (!best || perApplicationUsd > best.perApplicationUsd || (perApplicationUsd === best.perApplicationUsd && priced.name.localeCompare(best.model.name) < 0)) {
+      best = { from, model: priced, perApplicationUsd };
+    }
+  }
+  return best;
 }

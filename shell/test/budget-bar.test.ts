@@ -174,7 +174,7 @@ describe("the bar on the Models pages", () => {
     expect(html).toContain(`<span class="small">$1.75 of $31 by the app's count · $29.25 left</span>`);
     expect(html).toContain("Spent, as OpenRouter reports it $1.50</li>");
     expect(html).toContain("Counted by the app, not in OpenRouter&#39;s figure yet $0.25</li>");
-    expect(html).toContain('href="#amount-openrouter">Change the budget</a>');
+    expect(html).toContain('href="#amount">Change the budget</a>');
     expect(html).toContain("The key's own credit limit on OpenRouter: $31 (resets monthly), $29.50 left.");
     expect(html).toContain(`<a href="https://openrouter.ai/keys/${HASH}" target="_blank" rel="noopener noreferrer">This key on OpenRouter</a>`);
     expect(html).not.toContain(ISSUED_KEY);
@@ -206,6 +206,7 @@ function element(attrs: Record<string, string> = {}) {
     attrs: { ...attrs },
     getAttribute(n: string) { return this.attrs[n] ?? null; },
     setAttribute(n: string, v: string) { this.attrs[n] = v; },
+    hasAttribute(n: string) { return n in this.attrs; },
     addEventListener(type: string, fn: Listener) { (listeners[type] ??= []).push(fn); },
     fire(type: string, e: Event = {}) {
       for (const fn of listeners[type] ?? []) fn({ target: this, ...e });
