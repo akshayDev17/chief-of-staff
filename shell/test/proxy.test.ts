@@ -165,11 +165,18 @@ describe("one fallback: another model on the same provider", () => {
     expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "answered", fallback: true });
   });
 
-  it("passes the request's own fault, no credits, and a missing key back without falling back", async () => {
-    openrouter.replies.push(refused(400));
-    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "provider_error", status: 400, fallback: false });
-    openrouter.replies.push(refused(402));
-    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "provider_error", status: 402, fallback: false });
+  it("answers any refusal of the main call with the fallback, and names the main model's own outcome", async () => {
+    for (const status of [400, 402, 403, 404]) {
+      openrouter.replies.push(refused(status), ok({ input: 1, output: 1 }));
+      const outcome = await callModel(env.DB, plugins(), call(), clock);
+      expect(outcome, String(status)).toMatchObject({ kind: "answered", model: "test-mini", fallback: true, fellBackFrom: { kind: "provider_error", model: "test-sonnet", status } });
+    }
+  });
+
+  it("passes a key removed on OpenRouter and a missing key back without falling back: the fallback shares the key", async () => {
+    openrouter.replies.push(refused(401));
+    expect(await callModel(env.DB, plugins(), call(), clock)).toMatchObject({ kind: "provider_error", status: 401, fallback: false });
+    expect(openrouter.calls).toHaveLength(1);
     const noKey = testPlugin("openrouter", { refuseMint: true });
     expect(await callModel(env.DB, { openrouter: noKey }, call(), clock)).toMatchObject({ kind: "refused", reason: "credential_failed", fallback: false });
   });

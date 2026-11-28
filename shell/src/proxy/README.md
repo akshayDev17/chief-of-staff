@@ -39,9 +39,8 @@ no key in the vault) records the connection as revoked, for T49's alert
    current price table (one read of its rows, `modelPrices`), else it is
    refused (`no_price`).
 3. Enforces the provider's monthly budget: none set is refused (`no_budget`),
-   except for a model's test call (Test on its row) and Test all models
-   (`sendTestCall`),
-   which run before budgets are set; the user's spend at that provider since
+   except for a model's test call (Test on its row, `sendTestCall`),
+   which runs before budgets are set; the user's spend at that provider since
    00:00 UTC on the 1st reaching it is refused (`budget_spent`) until the 1st,
    with the date it resumes. The call that crosses the budget is the last one:
    the check runs before each call, whose cost is known only from the reply.
@@ -63,12 +62,16 @@ no key in the vault) records the connection as revoked, for T49's alert
    reasoning rates (src/prices/openrouter.ts). The row also keeps OpenRouter's generation ID
    (`provider_call_id`).
 6. Falls back once, to the task's fallback, another model, when the provider
-   refuses or fails the main call (408, 429, 5xx, or no reply). The fallback
-   passes every check above, and its ledger row carries `fallback` 1 and the
-   reason. With one provider, a spent budget, no credits or a missing key stop
+   refuses or fails the main call (any refusal of the call, or no reply): a
+   free fallback answers where a paid main model needs credit, and another
+   model where the account's settings refuse this one. The fallback passes
+   every check above, and its ledger row carries `fallback` 1 and the reason;
+   the outcome carries the main model's own (`fellBackFrom`), which marks its
+   row Failed when used (`src/models/ready.ts` `recordUse`). With one
+   provider, a spent budget or a missing key (a 401, or no credential) stop
    the fallback too; a fallback on another provider would also answer a spent
    budget or a failed credential at the main model's provider. A setup
-   refusal and the request's own fault (another 4xx) are returned as they are.
+   refusal made before any call is returned as it is.
 
 No prompt, reply or credential is logged or stored anywhere.
 
@@ -87,8 +90,8 @@ One monthly budget per user for OpenRouter (`provider_budgets`), required,
 with no default, no daily and no per-model budget. Models › Setup › Budgets
 (`GET`/`POST /chief-of-staff/models/setup/budgets`, `budgets-page.ts`)
 suggests one before it is set: the dearest model, for one application, among
-the user's usable models (`src/models/usable.ts`) that their tasks' saved
-choices use, else among all of them, at its price on OpenRouter's list (a
+the models their tasks' saved choices use, else among the Ready models
+(`src/models/ready.ts`) proposed for their tasks, at its price on OpenRouter's list (a
 router at the user's price cap on it), and the design's tokens per
 application (`TOKENS_PER_APPLICATION` in `budgets.ts`, from design-v3 12.2)
 at the applications a day the user plans (5 until they type another; the

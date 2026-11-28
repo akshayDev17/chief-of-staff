@@ -1,85 +1,111 @@
-# Testing models, and the usable ones (T17, design-v3 1.5)
+# The model list, and the Ready models (T17, design-v3 1.5)
 
 There is no separate Add a model page, and no Add at all (the owner,
 2026-11-27: "quite franky remove the add feature altogether"). The model
 table is on the provider's Connect screen, shown once connected (Models ›
-Setup › Providers, `src/providers/models-table.ts`; logic in
-`test-model.ts`, `usable.ts`, `test-all.ts`, `price-caps.ts`), and the old
-path `/chief-of-staff/models/setup/add` redirects there.
+Setup › Providers, `src/providers/models-table.ts`; logic in `ready.ts`,
+`test-model.ts`, `latest-tests.ts`, `price-caps.ts`), and the old path
+`/chief-of-staff/models/setup/add` redirects there.
 
-**Usable models** (`usable.ts` `readUsableModels`) are the models a user's
-tasks can use: every model whose latest test passed, whichever way it ran (Test
-on its row, Test all models, Retest failed), that the provider's current list
-still offers the user. That means the list names it and the app can call it,
-a router has the user's price cap, and the account's own list, where read,
-includes it. A later failed test takes the model out, and a later pass puts
-it back. Only the model's own verdict counts as its latest test: a refusal
-that says nothing about the model (`test-model.ts` `isVerdict`: the
-provider not connected, the month's budget spent, no credential, no credit,
-the provider busy, or a test that could not run) changes nothing about
-whether it is usable. Its row still shows that outcome: Test all's in the
-run, a single Test's in the page's view. The strip's Works / Doesn't work
-counts and filters go by the verdict. Each model's latest verdict is one row of
-`model_latest_tests`. A Test all models run that is still testing a model
-does not change it, so tasks keep their models while a run goes on.
+**Ready models** (`ready.ts` `rowState`, the one rule) are the models a
+user's tasks can use, with no test call (the owner, 2026-11-28: "why would i
+as a user wanna waste my money on testing models i dont wish to test"). A
+model is Ready when:
 
-**A test counts only for the key that ran it.** Connect makes a new key and
-records when (`connected_at`); a Connect that brings back the very same key
-(the same `key_hash`) keeps the earlier `connected_at`, so its tests still
-count. A test made before then ran on an earlier key
-(`usable.ts` `onEarlierKey`), whose account may have had credit the current
-one has not. Such a model is not usable (`readUsableModels`, so tasks, the
-Model for each task lists, the budget suggestion and the proxy all leave it
-out), and its row reads Not tested yet with a grey "Passed on an earlier
-key" (or "Failed on an earlier key") note, counted in no Works or Doesn't
-work cell. A run's results from an earlier key show on no row, and its line
-says "on an earlier key". Test on the row, or Test all, tests it on the
-current key. Once a run on the current key has a result for it (a verdict,
-or Needs credit), the note goes. A task whose saved main model passed only on an earlier key
-follows the rule below: it says the model needs a test on the new key, with
-a link to Test all models on Models › Setup › Providers and models, and runs
-on its usable fallback, else has no model and its calls are refused saying
-the same, also when no model is usable on the new key at all.
-Migration 0013 carried the tests made before it over: each model's newest
-of its latest run verdict and the passed test it was added with; a run's
-refusal that says nothing about the model is not carried. The old
-`user_models` table is no longer read or written.
+- the model list has it, which means OpenRouter lists tool use among its
+  `supported_parameters` (a model without tool use never reaches the list,
+  `test-model.ts` `listOffer`, and "About this list" counts the ones left
+  out);
+- nothing blocks it: the account's own list includes it, a router has the
+  user's price cap, it has a price, and the app can call it;
+- its latest real call on the current key did not fail (below); and
+- it is free, or the account has credit left.
 
-**The list** is every model OpenRouter lists that a test can pass (the owner,
+No test decides it, and its label is Ready, never Works: no call was made.
+Every other row is in exactly one other state: **Needs credit** (a paid
+model on an account with no credit left, with Add credits, OpenRouter's
+credits page), **Failed when used** (its latest call failed), or **Needs a
+step** (the account's settings leave it out, with a link to them and Check
+again; a router with Set price cap; no price yet; the app can't call it).
+Ready + Needs credit + Failed when used + Needs a step is the list's own
+count, the strip's total and the count line's, from that one rule
+(`models-table.ts` `stripCounts`).
+
+**The credit figure** is the account line's: OpenRouter's `GET /api/v1/key`,
+read live with the user's key, server side, on every visit to Providers and
+to Model for each task (`ready.ts` `readAccountLive`). The account has
+credit left when it has bought credit (`is_free_tier` false) and, where the
+key has its own limit, the limit is not used up. The app cannot read the
+balance itself (`GET /api/v1/credits` needs a management key), so an account
+whose bought credit ran out reads as having credit: its paid model's call is
+refused with no credit, the task falls to its fallback, and the model's row
+shows Failed when used, Needs credit, until a later call works. The figure
+is kept on the connection (`has_credit`, migration 0014), so every reader
+takes the same one; a Connect with another key empties it, and the first
+reader that needs it reads it live again. Because it is read on every visit,
+credit added on OpenRouter makes the paid models Ready on the next visit,
+with no click.
+
+**Failed when used.** A task's own call (`tasks.ts` `callTask`) that the
+provider refuses goes to the task's fallback (`src/proxy/README.md`), and
+marks the main model's row "Failed when used · <its plain reason> · Try
+again" (`ready.ts` `recordUse`); a fallback that fails too is marked the
+same way. A refusal that says nothing about the model (busy, no reply, the
+key removed) marks nothing. A later call of the model that answers, a
+task's or a Test's, takes the mark back. Try again, in place of Test on that
+row, is the same one test call. A failed model leaves the task dropdowns,
+but a task that has it saved keeps it and tries it first on each call, so it
+answers again as soon as the provider takes it back, with no click. Each
+model's latest call is one row of `model_latest_tests`
+(`latest-tests.ts`); one made on an earlier key (`onEarlierKey`, before the
+connection's `connected_at`) marks nothing, since that key's account may
+have had other settings. Connect makes a new key and records when; a Connect
+that brings back the very same key (the same `key_hash`) keeps the earlier
+`connected_at`. Migration 0013 carried the tests made before it over. The
+old `user_models`, `model_test_runs` and `model_tests` tables are no longer
+read or written.
+
+**The list** is every model OpenRouter lists with tool use (the owner,
 2026-11-27: "i would like to list all models and then choose"; 2026-11-28:
 anything the app can identify as never choosable is not shown), from its
 public models API, read with the price table (`src/prices/README.md`). These
 are left out, each kind counted under "About this list": `~` aliases,
-`:batch` variants, routers no price cap can bound, and models that give
-audio, images or video, give no text, or list no price. The public list needs
-no key and is the same for every account. The user's own account can allow
-fewer: OpenRouter's `/api/v1/models/user`, read with the user's key after
-Connect, on Refresh model list and on Check again (`account-list.ts`),
-"filtered by user provider preferences, privacy settings, and guardrails". A
-model the account leaves out stays in the table with one action on its row:
-a link to the account's settings on OpenRouter, then Check again.
+`:batch` variants, routers no price cap can bound, models that give audio,
+images or video, give no text, or list no price, and models that list no
+tool use. The public list needs no key and is the same for every account.
+The user's own account can allow fewer: OpenRouter's `/api/v1/models/user`,
+read with the user's key after Connect, on Refresh model list and on Check
+again (`account-list.ts`), "filtered by user provider preferences, privacy
+settings, and guardrails". A model the account leaves out stays in the table
+in Needs a step, with one action on its row: a link to the account's
+settings on OpenRouter, then Check again.
 
 **One table**, nothing to type but the search. Search matches any part of a
 model's name, maker or ID. The Maker filter has its own find box and chips.
-The Works / Needs credit / Doesn't work / Not tested yet strip filters the
-table, over a bar of the true ratios (Works + Needs credit + Doesn't work +
-Not tested yet = its total, filtered or not); it counts the rows search, the Maker filter and a strength
-show (each row's `rowState`), its end label then reading "N shown". An address with `strength=<Smallest|Middle|Strongest>`
-(and `show=pending`) opens the table showing that strength's models (not
-tested yet), as Model for each task links a strength with no usable model;
-the count line names it, with Show all. None of these sends a request. Each row shows the model's
-name and maker, its input and output list price per million tokens, its
-strength from the input price (Smallest, Middle, Strongest), a Free label on a
-free model and "Other fees" on one at $0 a token that is not free, Works or
-its failure ("Doesn't work", "Needs credit", "Busy"), and **Test**. Test runs
-the model's own test call once through the proxy (`sendTestCall`, task
-`test_call`), capped at 16 reply tokens, and the result opens under the row.
-The call passes when it answers and its reply names that model
-(`namesPickedModel`: the same ID, or with a date stamp or a variant such as
-`:batch`, never a longer ID such as `<model>-pro` for `<model>`). A router's
-reply names the model it picked, which is the point. A failure shows its
-plain reason, with OpenRouter's own reply collapsed, and names the tasks
-whose saved model it was.
+The Ready / Needs credit / Failed when used / Needs a step strip filters the
+table, over a bar of the true ratios; it counts the rows search, the Maker
+filter and a strength show (each row's `rowState`), its end label then
+reading "N shown". An address with `strength=<Smallest|Middle|Strongest>`
+(and `show=<ready|credit|failed|step>`) opens the table showing that
+strength's models (in that state), as Model for each task links a strength
+with no Ready model; the count line names it, with Show all. None of these
+sends a request. Each row shows the model's name and maker, its input and
+output list price per million tokens, its strength from the input price
+(Smallest, Middle, Strongest), a Free label on a free model and "Other fees"
+on one at $0 a token that is not free, Needs credit or Failed when used
+where it is so, and **Test**. Test is optional: it runs the model's own test
+call once through the proxy (`sendTestCall`, task `test_call`), capped at 16
+reply tokens, and the result opens under the row. The call passes when it
+answers and its reply names that model (`namesPickedModel`: the same ID, or
+with a date stamp or a variant such as `:batch`, never a longer ID such as
+`<model>-pro` for `<model>`). A router's reply names the model it picked,
+which is the point. A failure shows its plain reason, with OpenRouter's own
+reply collapsed, and names the tasks whose saved model it is, with the
+fallback each falls to. Only the model's own verdict is recorded
+(`test-model.ts` `isVerdict`): a refusal that says nothing about the model
+(the provider not connected, the month's budget spent, no credential, no
+credit, the provider busy, or a test that could not run) shows in the result
+only.
 
 **A router's price cap** (`price-caps.ts`). OpenRouter prices a router such as
 `openrouter/auto` by the model it picks for each call (`pricing.prompt`
@@ -94,54 +120,19 @@ a per-search or per-request fee, since `max_price` has no field for search
 fees. A refusal under the cap (no model fits, say) shows OpenRouter's own
 words.
 
-**Test all models** (`test-all.ts`) tests every model the user can test, to
-show which work for their account right now (the owner, 2026-11-27:
-"post-connection testing just to let a COS user see that w.r.t. that provider
-what all models work and what arent at the moment"). It first shows how many
-models and the estimated total, and runs only on confirm. The every-minute
-cron then claims the queued tests and runs them, at most 50 a minute across
-every user, 5 at once, each the model's own test call (task
-`test_all_models`). A tick claims each test before calling, so overlapping
-ticks never test a model twice, and a claim older than 10 minutes is taken
-again. A 200 with no text (a reasoning model that spent its tokens thinking)
-counts as working. Each result is recorded in the run, and each verdict
-becomes the model's latest test. One run at a
-time per user (a unique index holds it when two starts race), and a new one
-at most every 10 minutes. **Retest failed (N)** reruns, in the latest run,
-exactly the models the strip counts as Doesn't work (`test-all.ts`
-`modelsIn`, by the strip's one rule `rowState`), so N is always the
-Doesn't work count with no filter on (a filter narrows the strip, never
-Retest failed or Test all, which say then that they cover the whole list): each one's row goes back to queued, or joins the run for
-a model that failed on its own row's Test. A refusal that says nothing about
-the model (busy, no credit) is no failure: its row reads Works or Not tested
-yet, and Test on the row or Test all tests it again. One exception: a run's
-Needs credit answer on the current key, for a model with no pass on that key,
-is a result of its own, the strip's **Needs credit** cell (amber, with Add
-credits, OpenRouter's credits page): the model stays out of the usable set
-and out of Doesn't work. Retest failed's confirm offers those models too, as
-an unticked "Also the N that needed credit, about $X more", and the button
-reads **Retest needs credit (N)** when nothing failed. A run made
-on an older model list (`CATALOG_VERSION`) offers no Retest failed. The real
-total is the sum of the run's ledger rows: OpenRouter's reported cost.
-
-**The estimate** is each model's last measured test cost where the user has
-one: its latest answered test call's ledger row, which is the same request
-and so the same price. Otherwise it is the model's list price for at most 40
-input and 16 output tokens, plus any fee per call, plus one search for a
-model that searches the web on its own. The run of 2026-11-27 cost $0.35
-against a $0.07 token-only estimate, for two reasons. Per-search fees were
-$0.24 of it (Perplexity's Sonar Deep Research alone was $0.23). And some
-models billed 1,300 to 2,100 input tokens for the one-line prompt
-(`test/test-all-estimate.test.ts`, on that run's reported costs).
+**Test all models is gone** (the owner, 2026-11-28: "what if i dont wish to
+test all after having credits"), with Retest failed and the every-minute
+cron that ran its queue. Its calls stay in this month's ledger under the
+task `test_all_models`, named "Test all models" on Models › Usage.
 
 A free model (`src/prices/openrouter.ts` `isTrulyFreeTextModel`: it gives
 only text and every price OpenRouter lists for it is 0, see
 `src/providers/README.md`) carries a Free label. It reads "free:
 rate-limited, and the provider may log prompts" in the picker, and the plug-in's
 terms for free models are under "About this list" (`freeModelTerms`). A $0
-account can do the whole flow. Connect makes no call. A free model passes its
-test. Test all models shows its paid models as needing credit on OpenRouter.
-Its free models that pass are usable for tasks.
+account can do the whole flow with no call at all. Connect makes no call.
+Its free models the account's list includes are Ready. Its paid models read
+Needs credit, with Add credits.
 
 # Model for each task (T18, design-v3 1.5 and decision 6)
 
@@ -153,17 +144,20 @@ scoring, filling and checking forms, cover letters and free-text answers. No
 task defaults to Strongest.
 
 Each task has one dropdown for its main model and one for its fallback, and
-each lists only the usable models of the task's strength (the owner,
-2026-11-27: "when suggested strenght == Smallest --> the dropdown next to it
-should only contain all passing run models tagged with the smallest chip"):
-a usable model whose strength chip (`prices/tiers.ts` `strengthChip`, the chip
+each lists every Ready model of the task's strength (`ready.ts`, no test
+needed; the owner, 2026-11-27: "when suggested strenght == Smallest --> the
+dropdown next to it should only contain all passing run models tagged with
+the smallest chip"; 2026-11-28: "why would i as a user wanna waste my time
+and money searching for models i want to use followed by hitting test? just
+so that they get added in the "Models for each task"?"): a Ready model whose
+strength chip (`prices/tiers.ts` `strengthChip`, the chip
 its Providers row shows: its tier, or "Other fees" for a model at $0 a token
 that is not free) is the task's tier (`tasks.ts` `offeredFor`), the cheapest
 first. Each reads as its row does: name, ID, and price per million input and
 output tokens, or Free. The models are grouped under their provider, so
 choosing one chooses the provider and the model (the owner, 2026-11-27: "for
 each kind of task : choose the provider and the model"); the provider list
-has one entry today, OpenRouter, and another provider's usable models join
+has one entry today, OpenRouter, and another provider's Ready models join
 the same lists (`task_routes` names each by provider and model). A list of
 more than six has a search box at its top (any part of the name, ID or
 provider).
@@ -193,30 +187,29 @@ rows stay as they are, still to save.
   says so; Save keeps a model a role already names, so a change to one role
   never forces the other, but a model of another strength is never newly
   chosen (`wrong_strength`);
-- a saved choice holds while its main model is usable. Once that model is not
-  usable (a later test of it failed, or the provider dropped it), no proposal
-  or one tap replaces the choice by itself. The row marks it "Not usable" and
-  says why, by the same checks as `readUsableModels` (`readNotUsable`): it
-  failed its last test (Test it again, on its Providers row), it is no longer
-  on OpenRouter's list (Choose another), the account's settings leave it out
-  (a link to them), it needs a price cap (Set its price cap), or it was
-  tested only on an earlier key, so it needs a test on the new key (Test all
-  models), else that it is no longer usable (Choose another). Its calls go to
-  its saved fallback while that is usable, and the row says it runs on its
-  fallback; with no usable fallback the task has no model and its calls are
-  refused with a
+- a saved choice holds while the provider offers its main model to the user
+  (the model list has it and nothing blocks it). One that needs credit or
+  failed when used keeps its place, marked so with Add credits or See why:
+  each call tries it first and falls to the fallback when it fails, so it
+  answers again once credit is added or the provider takes it back, with no
+  click. Once the provider no longer offers it, no proposal or one tap
+  replaces the choice by itself. The row marks it "Not offered" and says why
+  (`tasks.ts` `NotUsable`): it is no longer on OpenRouter's list (Choose
+  another), the account's settings leave it out (a link to them), it needs a
+  price cap (Set its price cap), it lists no tool use (Choose another), else
+  that it is no longer offered (Choose another). Its calls go to its saved
+  fallback while that is offered, and the row says it runs on its fallback;
+  with no fallback the task has no model and its calls are refused with a
   plain reason, never sent to a model the user did not choose for the task
-  (`readTaskRoutes` `stopped`, the one rule `routeTask` calls by and the
-  Providers page's note under a failed result follows). A saved fallback no
-  longer usable is shown the same way (`fallbackGone`), while the main model
-  runs alone;
-- a strength with no usable model says so in each of its rows, with a link to
-  Providers and models showing that strength's models not tested yet
-  (`?strength=<tier>&show=pending#test`, read by the Providers script), or
-  all of them once every one has been tested, or Connect OpenRouter
-  (`picker-data.ts` `readToTest`, counting the rows the strip counts as Not
-  tested yet, by `rowState`);
-- each task is proposed the cheapest usable model of its strength and, as
+  (`readTaskRoutes` `stopped`, the one rule `routeTask` calls by). A saved
+  fallback no longer offered is shown the same way (`fallbackGone`), while
+  the main model runs alone;
+- a strength with no Ready model says so in each of its rows: with Add
+  credits where its paid models need credit, else a link to Providers and
+  models showing that strength's models (`?strength=<tier>#test`, read by the
+  Providers script), or Connect OpenRouter (`picker-data.ts` `readToReady`,
+  counting the rows the strip counts as Needs credit, by `rowState`);
+- each task is proposed the cheapest Ready model of its strength and, as
   its fallback, the next cheapest of that strength, another model (on
   OpenRouter today, so another OpenRouter model), never the main one and
   never one of another strength. **Accept all with one tap**, beside the line
@@ -227,23 +220,22 @@ rows stay as they are, still to save.
 - a free model is never proposed, as main or fallback: a task uses it only
   once the user chooses it in its list or with **Use my free models for N
   tasks** (`useFreeModels`), the one tap the page offers, and explains, for
-  the tasks with no model and no proposal (a $0 account's passed models are
+  the tasks with no model and no proposal (a $0 account's Ready models are
   all free). It picks by the proposal's own rule among the free models of
   each task's strength, so a free model, Smallest by its $0 price, takes the
   Smallest tasks only, and saves them as the user's choice (`set_how`
   `changed`).
 
 `callTask` sends a task's call through `callModel` with its main model and
-fallback: OpenRouter refusing or failing the main call (429, 408, 5xx, no
-reply) is answered once by the fallback, named in its ledger row. A spent
-budget or a missing key stops both, since they share the one provider.
-Until a proposal is accepted or a model chosen, a task has none, and
-`callTask` refuses it (`no_model`), saying to choose a model for it on Model
-for each task; so does a task whose saved main model and fallback are both no
-longer usable, saying to test its model again or choose another, or, where
-the main model was tested only on an earlier key, that it needs a test on the
-new key, with Test all models on Models › Setup › Providers and models. Every query is scoped to the
-signed-in user.
+fallback: OpenRouter refusing or failing the main call (any refusal of the
+call, or no reply) is answered once by the fallback, named in its ledger
+row, and the main model's row on Providers reads Failed when used (`ready.ts`
+`recordUse`). A spent budget or a missing key stops both, since they share
+the one provider. Until a proposal is accepted or a model chosen, a task has
+none, and `callTask` refuses it (`no_model`), saying to choose a model for it
+on Model for each task; so does a task whose saved main model and fallback
+the provider both no longer offers, saying to choose another. Every query is
+scoped to the signed-in user.
 
 # Models › Usage (design-v3 10.1)
 

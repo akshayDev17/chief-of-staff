@@ -3,17 +3,18 @@
 //
 //   readBudget(db, userId, provider) -> Budget | undefined
 //   setBudget(db, userId, provider, usd, how, now)
-//   readSuggestionBasis(db, userId) -> SuggestionBasis | undefined
+//   readSuggestionBasis(db, plugins, userId) -> SuggestionBasis | undefined
 //   suggest(basis, applicationsADay) -> Suggestion
 //
 // The budget is required: with none set, no model can be called except a
-// model's test call and Test all models (proxy.ts, `no_budget`). There is no
+// model's test call (proxy.ts, `no_budget`). There is no
 // default, no daily budget and no per-model budget. The user sets it by
 // accepting the suggestion or typing their own value, and may change it any
 // time.
 
 import { readPriceCaps } from "../models/price-caps";
-import { readUsableModels, type UsableModel } from "../models/usable";
+import { proposeRoute, readTaskRoutes, TASKS, type Offered } from "../models/tasks";
+import type { PluginRegistry } from "./plugin";
 import { currentSnapshot, readCurrentCatalog, readSnapshotRows } from "../prices/store";
 
 export interface Budget {
@@ -92,10 +93,11 @@ export interface PricedModel {
 }
 
 export interface SuggestionBasis {
-  // Which models it was chosen among: the usable models the user's tasks use
-  // (their saved choices, main and fallback), or, before any task uses one,
-  // every usable model.
-  from: "tasks" | "usable";
+  // Which models it was chosen among: the models the user's tasks use (their
+  // saved choices, main and fallback, that the provider still offers), or,
+  // before any task uses one, the Ready models each task is proposed (or,
+  // where none is, the free ones the free tap would give it).
+  from: "tasks" | "proposed";
   model: PricedModel;
   // What one application costs at the design's tokens, in USD.
   perApplicationUsd: number;
@@ -122,32 +124,31 @@ export const suggest = (basis: SuggestionBasis, applicationsADay: number): Sugge
   monthlyUsd: monthlyFor(basis.perApplicationUsd, applicationsADay),
 });
 
-// The models the suggestion may be worked from: the user's usable models on
-// OpenRouter (models/usable.ts readUsableModels, the one rule for what a task
-// can use) that their tasks' saved choices use, main or fallback; else every
-// usable model. Empty before any model has passed its test.
-export async function suggestionCandidates(db: D1Database, userId: string): Promise<{ from: SuggestionBasis["from"]; models: UsableModel[] }> {
-  const usable = (await readUsableModels(db, userId)).filter((m) => m.provider === "openrouter");
-  const { results: routes } = await db
-    .prepare("SELECT main_provider, main_model, fallback_provider, fallback_model FROM task_routes WHERE user_id = ?")
-    .bind(userId)
-    .all<{ main_provider: string; main_model: string; fallback_provider: string | null; fallback_model: string | null }>();
-  const used = new Set(
-    routes.flatMap((r) => [
-      r.main_provider === "openrouter" ? r.main_model : undefined,
-      r.fallback_provider === "openrouter" ? (r.fallback_model ?? undefined) : undefined,
-    ]).filter((m): m is string => Boolean(m)),
-  );
-  const inUse = usable.filter((m) => used.has(m.model));
-  return inUse.length ? { from: "tasks", models: inUse } : { from: "usable", models: usable };
+// The models the suggestion may be worked from, on OpenRouter: the ones the
+// user's tasks' saved choices use, main or fallback, that the provider still
+// offers (models/tasks.ts readTaskRoutes, the one rule for what a task
+// runs on); else the Ready models each task is proposed, or the free ones
+// the free tap would give it where nothing is proposed. Empty before any
+// model is Ready.
+export async function suggestionCandidates(db: D1Database, plugins: PluginRegistry, userId: string): Promise<{ from: SuggestionBasis["from"]; models: Offered[] }> {
+  const { offered, routes } = await readTaskRoutes(db, plugins, userId);
+  const onOpenRouter = (ms: Array<Offered | undefined>): Offered[] =>
+    ms.filter((m): m is Offered => m?.provider === "openrouter").filter((m, i, all) => all.findIndex((x) => x.model === m.model) === i);
+  const inUse = onOpenRouter(routes.flatMap((r) => [r.current?.main, r.current?.fallback, r.stopped?.fallback]));
+  if (inUse.length) return { from: "tasks", models: inUse };
+  const proposed = onOpenRouter(TASKS.flatMap((t) => {
+    const route = proposeRoute(t, offered) ?? proposeRoute(t, offered, true);
+    return route ? [route.main, route.fallback] : [];
+  }));
+  return { from: "proposed", models: proposed };
 }
 
 // The suggestion's basis: the dearest of the candidates for one application,
 // ties by name. Undefined when there is no candidate, or none has a price.
 // Prices come from one read of the current price rows; a router's from the
 // user's cap.
-export async function readSuggestionBasis(db: D1Database, userId: string): Promise<SuggestionBasis | undefined> {
-  const { from, models } = await suggestionCandidates(db, userId);
+export async function readSuggestionBasis(db: D1Database, plugins: PluginRegistry, userId: string): Promise<SuggestionBasis | undefined> {
+  const { from, models } = await suggestionCandidates(db, plugins, userId);
   if (!models.length) return undefined;
   const snapshot = await currentSnapshot(db);
   const [rows, catalog, caps] = await Promise.all([
@@ -156,7 +157,7 @@ export async function readSuggestionBasis(db: D1Database, userId: string): Promi
     readPriceCaps(db, userId, "openrouter"),
   ]);
   const listed = new Map((catalog?.models ?? []).map((m) => [m.id, m]));
-  const standard = (m: UsableModel, kind: "input" | "output") =>
+  const standard = (m: Offered, kind: "input" | "output") =>
     rows
       .filter((r) => r.provider === m.provider && r.model === m.model && r.tokenKind === kind && !r.longPrompt && !r.batch && (r.region === m.location || r.deployment === m.location))
       .sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];

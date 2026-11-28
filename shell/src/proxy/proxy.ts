@@ -7,8 +7,8 @@
 // Before sending a call to a provider the core refuses it when:
 // - no plug-in serves the provider (`no_plugin`);
 // - the plug-in cannot call the model, or not at its location
-//   (`not_callable`, with the plug-in's reason): a model that passed its test
-//   but the provider's list now drops;
+//   (`not_callable`, with the plug-in's reason): a model a task chose that
+//   the provider's list now drops;
 // - the model has no input or output list price at that location (`no_price`):
 //   the budget stop needs a real price; a router (priced by the model it picks
 //   for each call) is priced at the user's price cap instead, and refused
@@ -22,12 +22,15 @@
 //   connection gave no credential (`credential_failed`).
 //
 // One fallback, another model: when the provider refuses or fails the main
-// model's call (429, 408 or 5xx, or no reply; see plugin.ts), the task's
-// fallback runs once, under all the same checks. A fallback on another
-// provider also answers a spent budget or a failed credential at the main
-// model's provider; with one provider (OpenRouter today) those stop the
-// fallback too, which shares the budget and the key. Any other outcome is
-// returned as it is.
+// model's call (any refusal of the call itself, or no reply), the task's
+// fallback runs once, under all the same checks (the owner, 2026-11-28: when a
+// task's real call fails, it falls to the task's fallback model). Only a key
+// removed on the provider's side stops a fallback on the same provider, which
+// shares the key. A fallback on another provider also answers a spent budget
+// or a failed credential at the main model's provider; with one provider
+// (OpenRouter today) those stop the fallback too, which shares the budget and
+// the key. Any other outcome is returned as it is; one the fallback answered
+// carries the main model's own as `fellBackFrom`, so the task can mark it.
 //
 // Every call sent to a provider writes one ledger row, answered or not. Its
 // cost is the cost the provider's reply reports (OpenRouter's `usage.cost`),
@@ -61,7 +64,7 @@ import { readBudget } from "./budgets";
 import { readConnection } from "./connections";
 import { monthSpend, nextMonthStart, writeLedgerRow } from "./ledger";
 import { recordGrantRefused } from "../providers/revoked";
-import { fallbackAnswers, ProviderRefusal, type Failure, type ModelRequest, type PluginRegistry, type Usage } from "./plugin";
+import { ProviderRefusal, type Failure, type ModelRequest, type PluginRegistry, type Usage } from "./plugin";
 
 export interface ModelChoice {
   provider: Provider;
@@ -305,35 +308,40 @@ async function attempt(
 }
 
 // Why the main model's outcome hands the call to the fallback, or undefined
-// when it does not: the provider refusing or failing (no reply at all counts
-// as failing), and, for a fallback on another provider only, a spent budget
-// or a failed credential at the main model's provider.
-export const handOver = (o: ProxyOutcome, fallbackElsewhere: boolean): "refused" | "budget_spent" | undefined => {
+// when it does not: the provider refusing or failing the call (no reply at
+// all counts as failing), but a key removed on the provider's side for a
+// fallback on the same provider (`keyRemoved`); and, for a fallback on
+// another provider only, a spent budget or a failed credential at the main
+// model's provider.
+export const handOver = (o: ProxyOutcome, fallbackElsewhere: boolean, keyRemoved = false): "refused" | "budget_spent" | undefined => {
   if (o.kind === "refused" && fallbackElsewhere) return o.reason === "budget_spent" ? "budget_spent" : o.reason === "credential_failed" ? "refused" : undefined;
-  if (o.kind === "provider_error") return o.status === 0 || fallbackAnswers(o.status) ? "refused" : undefined;
+  if (o.kind === "provider_error") return keyRemoved && !fallbackElsewhere ? undefined : "refused";
   return undefined;
 };
+
+// A call's outcome; when the fallback answered it, the main model's own.
+export type CallOutcome = ProxyOutcome & { fellBackFrom?: ProxyOutcome };
 
 export async function callModel(
   db: D1Database,
   plugins: PluginRegistry,
   call: ModelCall,
   now: () => Date = () => new Date(),
-): Promise<ProxyOutcome> {
+): Promise<CallOutcome> {
   if (call.fallback && call.fallback.provider === call.main.provider && call.fallback.model === call.main.model) {
     throw new Error("a task's fallback must be another model");
   }
   const main = await attempt(db, plugins, call, call.main, undefined, now);
-  const reason = call.fallback ? handOver(main, call.fallback.provider !== call.main.provider) : undefined;
+  const keyRemoved = main.kind === "provider_error" && main.failure !== undefined && plugins[main.provider]?.connect.classify(main.failure, undefined).reason === "not_set_up";
+  const reason = call.fallback ? handOver(main, call.fallback.provider !== call.main.provider, keyRemoved) : undefined;
   if (!reason || !call.fallback) return main;
-  return attempt(db, plugins, call, call.fallback, reason, now);
+  return { ...(await attempt(db, plugins, call, call.fallback, reason, now)), fellBackFrom: main };
 }
 
 // A model's test call (Test on its row, src/models/test-model.ts): one call on `choice`, with
 // every check above except that no budget need be set yet (budgets come after
 // providers on the setup checklist); a budget set and spent still stops it.
 // Its ledger row's task is `test_call`, and it has no fallback.
-// Test all models' calls are the same, under their own task name.
 export async function sendTestCall(db: D1Database, plugins: PluginRegistry, userId: string, choice: ModelChoice, now: () => Date, task = TEST_TASK): Promise<ProxyOutcome> {
   return attempt(db, plugins, { userId, task, main: choice }, choice, undefined, now, true);
 }

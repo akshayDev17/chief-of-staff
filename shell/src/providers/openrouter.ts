@@ -405,7 +405,7 @@ export function openrouterPlugin(env: OpenRouterEnv, secrets: SecretStore, catal
         steps: [
           "Tap <strong>Connect OpenRouter</strong>.",
           "Sign in on OpenRouter and tap <strong>Authorize</strong>.",
-          "Test models below. Tasks use the ones that pass.",
+          "Tasks use the Ready models below. No test needed.",
         ],
         about: [
           "OpenRouter gives the app a key for your own account.",

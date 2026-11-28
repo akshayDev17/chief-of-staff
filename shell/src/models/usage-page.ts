@@ -23,8 +23,8 @@
 // The order is fixed: no sort control, so nothing on the page changes the
 // address.
 //
-// Per model grows with every model tried (a Test all models run adds
-// hundreds), so it scrolls inside its own box, about ten rows tall, its
+// Per model grows with every model tried (the former Test all models runs
+// added hundreds), so it scrolls inside its own box, about ten rows tall, its
 // column header and its "This month" foot pinned to the box's top and
 // bottom. Over ten rows, a search sits above it: any part of a model's name,
 // maker or ID, with a live count and a Clear when nothing matches; beside it,
@@ -64,7 +64,6 @@ import { TEST_TASK } from "../proxy/proxy";
 import { MAKER_CHIPS_HTML, MAKER_FILTER_CSS, MAKER_FILTER_HTML, MAKER_FILTER_JS, makerKey, makerRowAttrs, nameMakers } from "./maker-filter";
 import { modelsSubtabs } from "./setup-tabs";
 import { taskById } from "./tasks";
-import { TEST_ALL_TASK } from "./test-all";
 import { readMonthUsage, type MonthUsage, type UsageLine } from "./usage";
 
 // A line with the name the page shows for it.
@@ -82,8 +81,10 @@ const byName = (a: NamedLine, b: NamedLine) => a.name.localeCompare(b.name, "en"
 const sortDearestFirst = (lines: NamedLine[]): NamedLine[] => [...lines].sort((a, b) => b.costUsd - a.costUsd || byName(a, b));
 
 // The test calls are tasks of their own in the ledger; every other task is
-// named as Model for each task names it.
-const TASK_NAMES: Record<string, string> = { [TEST_TASK]: "Model tests", [TEST_ALL_TASK]: "Test all models" };
+// named as Model for each task names it. `test_all_models` is the task of
+// the former Test all models' calls (removed 2026-11-28), still in this
+// month's ledger.
+const TASK_NAMES: Record<string, string> = { [TEST_TASK]: "Model tests", test_all_models: "Test all models" };
 export const taskName = (id: string): string => TASK_NAMES[id] ?? taskById(id)?.label ?? id;
 
 // `own`: the provider the lines are from, named as it names itself.

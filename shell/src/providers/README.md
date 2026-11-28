@@ -112,7 +112,7 @@ https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
 | 404 | that model ID doesn't exist here |
 | 429 "free-models-per-day" or "-per-min" | busy: OpenRouter's free-model limits (20 a minute; 50 a day under 10 credits bought, 1,000 from 10, https://openrouter.ai/docs/api-reference/limits, read 2026-11-27) |
 | 408, 429, 502, 503 | busy or out of quota, not a setup fault |
-| other | OpenRouter refused the test call, in its own words |
+| other | OpenRouter refused the call, in its own words |
 
 Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
 (read 2026-11-27).
@@ -124,33 +124,33 @@ Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
   app). No model call is made. The page opens with the model table in view
   and its search field focused, once: a flash cookie carries the landing, so
   a refresh focuses nothing.
-- The model table lists OpenRouter's live list (the app holds no model ID of
-  its own) with Test on every row, Test all models and Retest failed beside
-  it, and the routers' price caps (`src/models/README.md`). There is no Add:
-  a model whose latest test passed is usable for tasks. A refusal that says
-  nothing about the model (not connected, budget spent, no credential, no
-  credit, busy) is no verdict: it shows on the row, from the run or carried
-  in the view for a single Test, and changes nothing about the model's use.
-  Under a failed verdict, each task whose main model it was says that it runs
-  on its fallback, named, or that it reads “Choose a model” now.
+- The model table lists OpenRouter's live list with tool use (the app holds
+  no model ID of its own), each row Ready, Needs credit, Failed when used or
+  Needs a step by the one rule (`src/models/ready.ts`), with an optional Test
+  on every row and the routers' price caps (`src/models/README.md`). There is
+  no Add and no Test all: a model is Ready for tasks with no test when the
+  account's own list has it, nothing blocks it, and it is free or the account
+  has credit. A Test's refusal that says nothing about the model (not
+  connected, budget spent, no credential, no credit, busy) records nothing:
+  it shows in the result carried in the view. Under a failed call, each task
+  whose main model it is says which fallback it falls to, named, or that it
+  has none.
 - **Nothing reloads the page or changes its address** (the owner,
-  2026-11-28). The page's script sends every form (Test, Check again, the
-  price cap, Refresh, Test all, Retest failed, Disconnect) and every view link
-  (a confirm, the cap editor, Cancel) in place, with `Accept:
+  2026-11-28). The page's script sends every form (Test, Try again, Check
+  again, the price cap, Refresh, Disconnect) and every view link (the
+  Disconnect confirm, the cap editor, Cancel) in place, with `Accept:
   application/json`. The answer is the page's `<main>` for the resulting view
   (`models-table.ts` `View`: a result under a row, a notice, an open confirm
   or cap editor, all of them addresses), and the script swaps in only the
   parts that changed (`data-part`). A request that cannot change the provider
-  card (a test, a poll) sends it as "keep yours" and does not read the account
-  again. Search, the Maker filter and the strip only show and hide rows. While
-  a Test all models run goes on, the script asks for the same view every 8
-  seconds. Without the script, every form posts and redirects to its view
+  card (a test, Check again) sends it as "keep yours" and does not read the
+  account again. Search, the Maker filter and the strip only show and hide
+  rows. Without the script, every form posts and redirects to its view
   (post-redirect-get), with any problem in a flash cookie shown once.
 - **Exactly one solid blue button per state**, the next step: Connect
   OpenRouter when not connected; Refresh model list while the list predates
-  the current rules; Test all N models; Next: budgets after a run on the
-  current list; Run the test or Use this cap while their confirm is open;
-  none while a run goes on. Everything else is outlined.
+  the current rules; Use this cap while the cap editor is open; else Next:
+  budgets. Everything else is outlined.
 - A test call that gets a 401 records the connection as `revoked` (removed on
   OpenRouter's side), for T49's urgent alert, and the page offers Connect
   OpenRouter again.
@@ -163,6 +163,11 @@ it spends in (`workspace_id`), the key's own limit and what is left of it, and
 what the key has spent (`usage`, `usage_monthly`), with the free-model
 requests left today (https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key.md,
 read 2026-11-27). An account that never bought credits gets **Add credits**.
+This read comes first on each visit, and its credit figure (credit bought,
+and the key's limit not used up) is kept on the connection (`has_credit`,
+migration 0014) for the Ready rule: credit added on OpenRouter makes its
+paid models Ready on the next visit, with no click. A Connect with another
+key empties the figure until its account is read.
 OpenRouter's authorize page lets the user pick the workspace the key is made
 in (`workspace_id` preselects one, `required_workspace_id` locks it; the app
 sends neither) and change its limit

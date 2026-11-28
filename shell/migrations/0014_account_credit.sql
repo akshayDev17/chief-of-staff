@@ -1,0 +1,11 @@
+-- A model is Ready without a test (the owner, 2026-11-28: "why would i as a
+-- user wanna waste my money on testing models i dont wish to test"): on the
+-- account's own list, listing tool use, and free or the account has credit
+-- left (src/models/ready.ts). The credit figure is the account line's own,
+-- read live with the user's key on every visit to Providers and Model for
+-- each task (OpenRouter's GET /api/v1/key: credits bought at all, and the
+-- key's limit left where it has one), and kept here so the rule reads the
+-- same figure everywhere: 1 has credit left, 0 has none, NULL not read yet
+-- on this key. A Connect with another key empties it (src/proxy/connections.ts).
+-- Expand only: one new column, nothing changed or removed.
+ALTER TABLE provider_connections ADD COLUMN has_credit INTEGER CHECK (has_credit IN (0, 1));

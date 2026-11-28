@@ -43,9 +43,9 @@
 // descriptions say; a test call on one was refused with 402 on an account
 // with no credit, 2026-11-27). Only models that can be tested get price rows.
 //
-// Free: `isTrulyFreeTextModel`, the one rule every screen uses (the test
-// pick, Test all models, the model list and its labels, the proposals and the
-// estimate). A model is free only when it gives only text and every price
+// Free: `isTrulyFreeTextModel`, the one rule every screen uses (the model
+// list and its labels, the Ready rule, the proposals and the budget
+// suggestion). A model is free only when it gives only text and every price
 // OpenRouter lists for it is 0: the pricing object's fields are `prompt`,
 // `completion`, `request`, `image`, `image_output`, `audio`, `audio_output`,
 // `input_audio_cache`, `web_search`, `internal_reasoning`,
@@ -56,9 +56,10 @@
 // field not in that list counts too: anything but a 0 there is paid.
 //
 // The list is OpenRouter's public list: the same for every account, and read
-// with no key. Whether a model answers for one user's account (their
-// credits, their OpenRouter privacy and provider settings) shows only when
-// it is tested (Choose, or Test all models).
+// with no key. What one user's account allows (their OpenRouter privacy and
+// provider settings) is its own list, read with their key
+// (models/account-list.ts); whether it has credit, the account line
+// (models/ready.ts).
 //
 // Each model's rows: `prompt` is input, `completion` output,
 // `input_cache_read` cached input, `input_cache_write` a cache write,
@@ -101,8 +102,7 @@ export interface OpenRouterModel {
 // The rules parseModels applies, raised whenever they change. A catalog
 // stored under older rules (with no version before 2) stays in use by every
 // screen until the daily refresh or Refresh model list reads OpenRouter's
-// list again; meanwhile queued Test all models tests wait
-// (models/test-all.ts). 2: free by isTrulyFreeTextModel, and a model that
+// list again. 2: free by isTrulyFreeTextModel, and a model that
 // also gives audio, images or video is blocked (2026-11-27). 3: `~` aliases,
 // `:batch` variants and routers no cap can bound dropped, a router OpenRouter
 // publishes that takes request parameters listed as a router, and the

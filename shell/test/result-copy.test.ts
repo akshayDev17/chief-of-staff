@@ -4,7 +4,8 @@
 // to read a book in 30seconds?"). Each refusal's result is rendered, and its
 // visible line counted outside <details>; so is each failed row's line.
 import { describe, expect, it } from "vitest";
-import { listOfferRow, type ShownLatest } from "./result-copy-helpers";
+import { listOfferRow } from "./result-copy-helpers";
+import type { TableRow } from "../src/models/ready";
 import { refusalFix, refusalText, type Refused, type TestRefusal } from "../src/models/test-model";
 import { parseModels } from "../src/prices/openrouter";
 import { esc } from "../src/prices/page";
@@ -23,16 +24,17 @@ const REASONS: TestRefusal[] = [
 ];
 const ROW = listOfferRow("openai/gpt-6-luna");
 
-const rows = (model: string, shown: Map<string, ShownLatest>, view: ModelsTableInput["view"]) =>
-  modelParts({
-    plugin, viewer: "owner", rows: [listOfferRow(model)], plan: { models: [], estimateUsd: 0 }, retest: { models: [], estimateUsd: 0, credit: [], creditEstimateUsd: 0, skipped: 0 },
-    shown, usedBy: new Map(), view, now: NOW,
-  }).rows;
-const failed = (o: Refused): Map<string, ShownLatest> =>
-  new Map([[o.model, { state: "failed", testedAt: NOW.toISOString(), result: { reason: o.reason, text: refusalText(o, plugin), fix: refusalFix(o, plugin), ...(o.reply ? { reply: o.reply } : {}) } }]]);
+const rows = (model: string, extra: Partial<TableRow>, view: ModelsTableInput["view"]) =>
+  modelParts({ plugin, viewer: "owner", rows: [listOfferRow(model, extra)], usedBy: new Map(), view, now: NOW }).rows;
+// The row of a model whose latest call failed with `o`.
+const failed = (o: Refused): Partial<TableRow> => ({
+  state: "failed",
+  latest: { model: o.model, state: "failed", testedAt: NOW.toISOString(), result: { reason: o.reason, text: refusalText(o, plugin), fix: refusalFix(o, plugin), ...(o.reply ? { reply: o.reply } : {}) } },
+});
 
 const visible = (html: string): string => html.replace(/<details[\s\S]*?<\/details>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-const words = (text: string): number => text.split(" ").filter(Boolean).length;
+// The "·" between a row's parts is no word.
+const words = (text: string): number => text.split(" ").filter((w) => w && w !== "·").length;
 
 describe("a result under a model's row", () => {
   it("leads with a line of 12 words or fewer for every refusal, and keeps the reason in Details", () => {
@@ -49,7 +51,7 @@ describe("a result under a model's row", () => {
   });
 
   it("moves why the app can't call a model into Details", () => {
-    const html = rows(BLOCKED, new Map(), { results: [{ model: BLOCKED, reason: "cannot_call" }] });
+    const html = rows(BLOCKED, {}, { results: [{ model: BLOCKED, reason: "cannot_call" }] });
     const box = html.slice(html.indexOf('<div class="result'));
     expect(visible(box)).not.toContain(plugin.connect.notCallableReason(BLOCKED)!);
     expect(box).toContain(esc(plugin.connect.notCallableReason(BLOCKED)!));
@@ -63,7 +65,7 @@ describe("a result under a model's row", () => {
   it("shows each failed row's line in 12 words or fewer, with its Details collapsed", () => {
     for (const reason of REASONS) {
       const html = rows(ROW.model, failed({ kind: "refused", model: ROW.model, reason }), {});
-      const line = html.match(/<span class="meta why">([^<]*) · <button type="button" class="link" data-det=/)![1]!;
+      const line = visible(html.match(/<span class="meta why">([\s\S]*?) · <button type="button" class="link" data-det=/)![1]!);
       expect(words(line), `${reason}: ${line}`).toBeLessThanOrEqual(12);
       expect(html).toMatch(/<div class="det" id="det-[^"]+" data-det-panel hidden>/);
     }
