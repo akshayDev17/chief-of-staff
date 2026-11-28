@@ -115,6 +115,10 @@ describe("the lines", () => {
     expect(ladderStep(0.011)).toBe(0.01);
     expect(ladderStep(0.0123)).toBe(0.015);
     expect(ladderStep(87)).toBe(100);
+    // By ratio, not by dollar distance: $0.39 is ×1.28 from $0.50 and ×1.30
+    // from $0.30; $3.90 is ×1.28 from $5 and ×1.30 from $3.
+    expect(ladderStep(0.39)).toBe(0.5);
+    expect(ladderStep(3.9)).toBe(5);
   });
 
   it("sit at the 33 1/3rd and the 90th percentile, rounded, with the month they hold for", () => {
@@ -282,14 +286,19 @@ describe("Refresh model list's strength", () => {
     expect(after.get(FLASH)!.readAt).toBe("2026-11-27T10:00:00.000Z");
   });
 
-  it("keeps a model's last host figure when its list cannot be read while its headline holds, else takes the headline", async () => {
-    const before = await figuresNow();
-    // The daily refresh reads Test Sonnet's list again and fails: it keeps its figure.
-    await daily("2026-11-28T06:00:00Z", { ...HOSTS, [SONNET]: 503 });
-    expect((await figuresNow()).get(SONNET)).toEqual(before.get(SONNET));
-    // Its headline moves and the list still fails: the new headline.
-    await button("2026-11-28T10:00:00Z", { ...HOSTS, [SONNET]: 503 }, { models: () => Response.json(withHeadline(SONNET, "0.000004", "0.00002")) });
-    expect((await figuresNow()).get(SONNET)).toMatchObject({ basis: "unread", usd: blend(4, 20) });
+  it("gives a model its headline price when its list cannot be read, never an earlier snapshot's host figure", async () => {
+    // Its hosts ($4/$20) sit above its headline ($2/$10).
+    await daily("2026-11-28T06:00:00Z", { ...HOSTS, [SONNET]: [apiHost(4, 20)] });
+    expect((await figuresNow()).get(SONNET)).toMatchObject({ basis: "hosts", usd: blend(4, 20) });
+    // The next daily refresh reads its list again and fails: its headline, read now.
+    await daily("2026-11-29T06:00:00Z", { ...HOSTS, [SONNET]: 503 });
+    const failed = (await figuresNow()).get(SONNET)!;
+    expect(failed).toMatchObject({ basis: "unread", hosts: 0, usd: blend(2, 10), readAt: "2026-11-29T06:00:00.000Z" });
+    expect(failed.input).toBeUndefined();
+    // Refresh model list reads it again, as last not read, and it fails once more: its headline still.
+    const fetcher = await button("2026-11-29T10:00:00Z", { ...HOSTS, [SONNET]: 503 });
+    expect(endpointReads(fetcher)).toContain(SONNET);
+    expect((await figuresNow()).get(SONNET)).toMatchObject({ basis: "unread", usd: blend(2, 10), readAt: "2026-11-29T10:00:00.000Z" });
   });
 });
 

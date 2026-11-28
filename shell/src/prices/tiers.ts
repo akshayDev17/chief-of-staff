@@ -93,8 +93,10 @@ export function percentile(xs: readonly number[], p: number): number {
 // it, so $0.10, $0.15, $0.20, $0.30, $0.50, $0.75, $1, $1.50, $2, ....
 const STEPS_PER_DECADE: readonly number[] = [1, 1.5, 2, 3, 5, 7.5];
 
-// The ladder's step nearest to `usd`, by ratio: a line a screen can state,
-// which also holds while its percentile drifts a little either way.
+// The ladder's step nearest to `usd` by ratio (the smallest |log(usd / step)|,
+// rule B90's definition), not by dollar distance: $0.39 rounds to $0.50 and
+// $3.90 to $5. A line a screen can state, which also holds while its
+// percentile drifts a little either way.
 export function ladderStep(usd: number): number {
   const decade = Math.floor(Math.log10(usd));
   const steps = [decade - 1, decade, decade + 1].flatMap((k) => STEPS_PER_DECADE.map((s) => Number((s * 10 ** k).toPrecision(12))));

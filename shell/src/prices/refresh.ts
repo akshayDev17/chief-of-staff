@@ -21,8 +21,7 @@
 // 2026-11-28). Refresh model list, which the user waits on, reads only the
 // models that are new, whose headline price changed or whose hosts were last
 // not read; every other model keeps its last figure. A list that cannot be
-// read keeps the model's last figure from hosts while its headline holds,
-// and is otherwise its headline price. The daily refresh also works out the
+// read gives the model its headline price. The daily refresh also works out the
 // month's lines, once, at the month's first good read; a refresh before any
 // month has lines works them out then, and none ever replaces a month's.
 
@@ -79,24 +78,21 @@ async function figuresFor(
 ): Promise<StoredFigure[]> {
   const readAt = input.now.toISOString();
   const targets = tieredModels(rows, catalog);
-  const headlineHolds = (t: (typeof targets)[number]) => {
-    const b = before.get(strengthKey(t));
-    return b !== undefined && b.input === t.headline.input && b.output === t.headline.output;
-  };
-  const toRead = targets.filter((t) => {
-    if (t.free) return false;
-    if (input.daily) return true;
+  const kept = (t: (typeof targets)[number]): StoredFigure | undefined => {
+    if (input.daily) return undefined;
     const p = previous.get(strengthKey(t));
-    return !p || p.basis === "unread" || !headlineHolds(t);
-  });
+    const b = before.get(strengthKey(t));
+    const holds = b !== undefined && b.input === t.headline.input && b.output === t.headline.output;
+    return p && p.basis !== "unread" && holds ? p : undefined;
+  };
+  const toRead = targets.filter((t) => !t.free && !kept(t));
   const hosts = await readAllHosts(input.fetcher, toRead.map((t) => t.model), input.hostRetryPauseMs);
   return targets.map((t) => {
     if (t.free) return headlineFigure(t, readAt);
+    const k = kept(t);
+    if (k) return k;
     const read = hosts.get(t.model);
-    if (read) return { provider: t.provider, model: t.model, free: false, ...figureOf(read, t.headline, readAt) };
-    const p = previous.get(strengthKey(t));
-    if (p && p.basis !== "unread" && headlineHolds(t)) return p;
-    return headlineFigure(t, readAt);
+    return read ? { provider: t.provider, model: t.model, free: false, ...figureOf(read, t.headline, readAt) } : headlineFigure(t, readAt);
   });
 }
 
