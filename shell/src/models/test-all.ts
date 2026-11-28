@@ -8,9 +8,10 @@
 //   startTestAll(db, plugins, userId, provider, now)                 queues one test per model
 //   runQueuedTests(db, plugins, now)                                 the every-minute cron, a few at a time
 //   readTestAll(db, userId, provider) -> TestAllRun | undefined      the latest run and its results
-//   planRetest / startRetest                                         Retest failed: the Doesn't work models again, in the same run
+//   planRetest / startRetest                                         Retest failed: the Doesn't work models again, in the same run,
+//                                                                    and the Needs credit ones when asked
 //   shownTests(run, latest) -> Map<model, ShownTest>                  what each model's row shows, and its verdict
-//   rowState(blocked, shown) / failedModels(rows, shown)             the strip's one rule, and its Doesn't work models
+//   rowState(blocked, shown) / modelsIn(rows, shown, state)          the strip's one rule, and the models in one of its cells
 //
 // Each test is the model's own test call (models/test-model.ts testModel)
 // through the proxy, which prices it and writes its ledger row under the task
@@ -33,13 +34,18 @@
 // is the sum of the run's ledger rows: the cost OpenRouter reported for each call.
 //
 // Retest failed reruns exactly the models the strip counts as Doesn't work
-// (failedModels: the latest test, on the current key, failed, and the model
+// (modelsIn "fails": the latest test, on the current key, failed, and the model
 // can still be tested), in the latest finished run (their rows go back to
 // queued, or join it, and the run reopens), so the results keep the models
 // that passed in the full run. A refusal that says nothing about the model
 // (busy, no credit) is no failure: its row reads Works or Not tested yet, and
-// Test on the row or Test all tests it again. A run made on an older model
-// list (catalog version) offers no Retest failed.
+// Test on the row or Test all tests it again. One exception: a run's Needs
+// credit answer on the current key, for a model with no pass on that key, is
+// a tested result of its own, the strip's Needs credit; the model stays out of
+// the usable set and out of Doesn't work, and Retest failed tests those models
+// again too when asked (once credit may have been added), with their own
+// estimate. A run made on an older model list (catalog version) offers no
+// Retest failed.
 //
 // A test made before the provider's current connection ran on an earlier key
 // (models/usable.ts onEarlierKey): the run's result shows on no row, and the
@@ -326,46 +332,65 @@ export async function readTestAll(db: D1Database, userId: string, provider: Prov
   };
 }
 
-// Retest failed: the models the strip counts as Doesn't work (failedModels),
-// their estimate, and how many of the latest run's failed models are no
-// longer on the model list. `wait` says why it cannot start now, if it cannot.
+// Retest failed: the models the strip counts as Doesn't work (`models`) and
+// as Needs credit (`credit`), each with its estimate, and how many of the
+// latest run's failed models are no longer on the model list. `wait` says why
+// it cannot start now, if it cannot.
 export interface RetestPlan {
   models: TestAllPlan["models"];
   estimateUsd: number;
+  credit: TestAllPlan["models"];
+  creditEstimateUsd: number;
   skipped: number;
   wait?: string;
 }
 
-export const NOTHING_FAILED = "No model's latest test failed.";
+export const NOTHING_FAILED = "No model's latest test failed or needed credit.";
+
+const sumEstimates = (models: TestAllPlan["models"]): number => models.reduce((sum, m) => sum + m.estimateUsd, 0);
 
 export async function planRetest(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, offers?: OfferRow[]): Promise<RetestPlan> {
   const plugin = plugins[provider];
-  if (!plugin) return { models: [], estimateUsd: 0, skipped: 0, wait: "That provider is not offered." };
+  if (!plugin) return { models: [], estimateUsd: 0, credit: [], creditEstimateUsd: 0, skipped: 0, wait: "That provider is not offered." };
   const run = await readTestAll(db, userId, provider);
   const latest = await readLatestTests(db, userId, provider);
   offers ??= await listOffer(db, plugins, userId, provider);
-  const failed = new Set(failedModels(offers, shownTests(run, latest)));
+  const shown = shownTests(run, latest);
+  const failed = new Set(modelsIn(offers, shown, "fails"));
+  const needCredit = new Set(modelsIn(offers, shown, "credit"));
   const listed = new Set(offers.map((r) => r.model));
   const skipped = (run?.tests ?? []).filter((t) => {
     const l = latest.get(t.model);
     return l?.state === "failed" && !l.earlierKey && !listed.has(t.model);
   }).length;
-  const models = estimateTests(offers.filter((r) => failed.has(r.model)), plugin, await measuredTestCosts(db, userId, provider));
-  const plan = { models, estimateUsd: models.reduce((sum, m) => sum + m.estimateUsd, 0), skipped };
+  const measured = await measuredTestCosts(db, userId, provider);
+  const models = estimateTests(offers.filter((r) => failed.has(r.model)), plugin, measured);
+  const credit = estimateTests(offers.filter((r) => needCredit.has(r.model)), plugin, measured);
+  const plan = { models, estimateUsd: sumEstimates(models), credit, creditEstimateUsd: sumEstimates(credit), skipped };
   let wait: string | undefined;
   if (!run) wait = "Run Test all first.";
   else if (!run.finishedAt) wait = "Waits for the run to finish.";
   else if (!isCurrentRun(run) || !isCurrentCatalog(await readCurrentCatalog(db))) wait = "The last run used the old model list.";
-  else if (!models.length) wait = skipped ? "None of the failures is on the model list now." : NOTHING_FAILED;
+  else if (!models.length && !credit.length) wait = skipped ? "None of the failures is on the model list now." : NOTHING_FAILED;
   return wait ? { ...plan, wait } : plan;
 }
 
-// Queues the Doesn't work models in the latest run: their rows go back to
-// queued, or join the run (a model that failed on its own row's Test), and
-// the run reopens for the cron.
-export async function startRetest(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, now: Date): Promise<{ problem: string } | { count: number; skipped: number }> {
-  const plan = await planRetest(db, plugins, userId, provider);
-  if (plan.wait) return { problem: plan.wait };
+// Queues the Doesn't work models in the latest run, and the Needs credit ones
+// too with `withCredit`: their rows go back to queued, or join the run (a
+// model that failed on its own row's Test), and the run reopens for the cron.
+export async function startRetest(
+  db: D1Database,
+  plugins: PluginRegistry,
+  userId: string,
+  provider: Provider,
+  now: Date,
+  withCredit = false,
+): Promise<{ problem: string } | { count: number; skipped: number }> {
+  const found = await planRetest(db, plugins, userId, provider);
+  if (found.wait) return { problem: found.wait };
+  const picked = withCredit ? [...found.models, ...found.credit] : found.models;
+  if (!picked.length) return { problem: "No model's latest test failed." };
+  const plan = { models: picked, estimateUsd: sumEstimates(picked), skipped: found.skipped };
   const run = (await latestRun(db, userId, provider))!;
   try {
     await db.batch([
@@ -424,20 +449,23 @@ export function shownTests(run: TestAllRun | undefined, latest: Map<string, Late
   return out;
 }
 
-export type RowState = "works" | "fails" | "pending" | "blocked";
+export type RowState = "works" | "credit" | "fails" | "pending" | "blocked";
 
-// The one rule for a row's place in the strip (Works, Doesn't work, Not
-// tested yet) and its filter: the model's latest test on the current key.
-// A blocked row (its account leaves it out, a router has no cap, the app
-// can't call it, it has no price) is in none.
+// The one rule for a row's place in the strip (Works, Needs credit, Doesn't
+// work, Not tested yet) and its filter: the model's latest test on the
+// current key. A run's Needs credit answer on the current key, with no pass
+// on that key, is Needs credit; any other refusal that says nothing about
+// the model leaves the row as its verdict says. A blocked row (its account
+// leaves it out, a router has no cap, the app can't call it, it has no
+// price) is in none.
 export function rowState(blocked: boolean, s: ShownTest | undefined): RowState {
   if (blocked) return "blocked";
   if (!s || s.state === "testing" || s.state === "earlier") return "pending";
-  if (s.notVerdict) return s.verdict === "passed" ? "works" : "pending";
+  if (s.notVerdict) return s.verdict === "passed" ? "works" : s.result.reason === "no_credits" ? "credit" : "pending";
   return s.state === "passed" ? "works" : "fails";
 }
 
-// The models among `rows` the strip counts as Doesn't work, which Retest
-// failed tests again.
-export const failedModels = (rows: OfferRow[], shown: Map<string, ShownTest>): string[] =>
-  rows.filter((r) => rowState(Boolean(blockKind(r)), shown.get(r.model)) === "fails").map((r) => r.model);
+// The models among `rows` in one of the strip's cells: "fails" are the ones
+// Retest failed tests again, "credit" the ones it may add.
+export const modelsIn = (rows: OfferRow[], shown: Map<string, ShownTest>, state: RowState): string[] =>
+  rows.filter((r) => rowState(Boolean(blockKind(r)), shown.get(r.model)) === state).map((r) => r.model);

@@ -2,7 +2,7 @@
 // or changes its address (the owner, 2026-11-28):
 //
 // - Search, the Maker filter (models/maker-filter.ts: its find box and chips)
-//   and the strip's Works / Doesn't work / Not tested yet cells only show and
+//   and the strip's Works / Needs credit / Doesn't work / Not tested yet cells only show and
 //   hide rows: no request. The strip and its bar count the rows search, the
 //   Maker filter and a strength show (each row's data-state, its rowState),
 //   the end label then reading "N shown", and a line under Test all
@@ -19,7 +19,7 @@
 // - Back from the provider's consent page (main is marked data-land), the
 //   search field takes focus once.
 // - An address with strength=<Smallest|Middle|Strongest> (and show=<works|
-//   fails|pending>) opens the table showing only that strength's models (in
+//   credit|fails|pending>) opens the table showing only that strength's models (in
 //   that state), as Model for each task links a strength with no usable model;
 //   the count line names it, and its Show all shows every model again.
 // Focus, the table's scroll position, typed cap values and the open details
@@ -35,7 +35,8 @@ export const PAGE_SCRIPT = String.raw`
   if (!main || !window.fetch || !window.history) return;
   var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, timer: 0, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
-  var NOUN = { works: "that work", fails: "that don't work", pending: "not tested yet" };
+  var NOUN = { works: "that work", credit: "that need credit", fails: "that don't work", pending: "not tested yet" };
+  var TONE = { works: "good", credit: "warn", fails: "bad" };
   var asked = new URLSearchParams(location.search);
   S.tier = ["Smallest", "Middle", "Strongest"].indexOf(asked.get("strength")) !== -1 ? asked.get("strength") : null;
   if (S.tier && NOUN[asked.get("show")]) S.filter = asked.get("show");
@@ -62,27 +63,31 @@ export const PAGE_SCRIPT = String.raw`
   function matches(li, t) { return inView(li, t) && (!S.filter || li.getAttribute("data-state") === S.filter); }
   // The strip, its bar and its end label, from the rows in view.
   function recount(all, t) {
-    var c = { works: 0, fails: 0, pending: 0 };
+    var c = { works: 0, credit: 0, fails: 0, pending: 0 };
     each(all, function (li) {
       if (!inView(li, t)) return;
       var st = li.getAttribute("data-state");
       if (c.hasOwnProperty(st)) c[st]++;
     });
-    var total = c.works + c.fails + c.pending, narrowed = !!(S.tier || t.length || makers.chosen().length);
+    var total = c.works + c.credit + c.fails + c.pending, narrowed = !!(S.tier || t.length || makers.chosen().length);
     function pct(n) { return (total ? (n / total) * 100 : 0).toFixed(3); }
-    each(["works", "fails", "pending"], function (k) {
+    each(["works", "credit", "fails", "pending"], function (k) {
       var v = main.querySelector('.cell[data-filter="' + k + '"] .v');
       if (!v) return;
       v.textContent = String(c[k]);
-      if (k !== "pending") v.classList.toggle(k === "works" ? "good" : "bad", c[k] > 0);
+      if (TONE[k]) v.classList.toggle(TONE[k], c[k] > 0);
     });
     var bar = main.querySelector(".bar");
     if (bar) {
-      bar.setAttribute("aria-label", (c.works + c.fails) + (narrowed ? " tested of " + total + " shown" : " of " + total + " tested") + ": " + c.works + " work, " + c.fails + " don't");
-      var w = bar.querySelector("i.w"), f = bar.querySelector("i.f");
-      if (w) w.setAttribute("style", "width:" + pct(c.works) + "%");
-      if (f) f.setAttribute("style", "width:" + pct(c.fails) + "%");
+      // The same words as models-table.ts barLabel.
+      bar.setAttribute("aria-label", (c.works + c.credit + c.fails) + (narrowed ? " tested of " + total + " shown" : " of " + total + " tested") + ": " + c.works + " work, " + c.credit + " need credit, " + c.fails + " don't");
+      each([["w", "works"], ["c", "credit"], ["f", "fails"]], function (seg) {
+        var i = bar.querySelector("i." + seg[0]);
+        if (i) i.setAttribute("style", "width:" + pct(c[seg[1]]) + "%");
+      });
     }
+    var act = main.querySelector("[data-credit-act]");
+    if (act) act.hidden = !c.credit;
     var ends = main.querySelector("[data-ends]");
     if (ends) ends.textContent = narrowed ? total + " shown" : total + " models";
     each(main.querySelectorAll("[data-whole-list]"), function (p) { p.hidden = !narrowed; });

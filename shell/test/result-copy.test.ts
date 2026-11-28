@@ -25,7 +25,7 @@ const ROW = listOfferRow("openai/gpt-6-luna");
 
 const rows = (model: string, shown: Map<string, ShownLatest>, view: ModelsTableInput["view"]) =>
   modelParts({
-    plugin, viewer: "owner", rows: [listOfferRow(model)], plan: { models: [], estimateUsd: 0 }, retest: { models: [], estimateUsd: 0, skipped: 0 },
+    plugin, viewer: "owner", rows: [listOfferRow(model)], plan: { models: [], estimateUsd: 0 }, retest: { models: [], estimateUsd: 0, credit: [], creditEstimateUsd: 0, skipped: 0 },
     shown, usedBy: new Map(), view, now: NOW,
   }).rows;
 const failed = (o: Refused): Map<string, ShownLatest> =>

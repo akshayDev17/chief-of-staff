@@ -485,7 +485,7 @@ export async function handleProviders(
       return done(provider, {}, { ...("problem" in started ? { flash: { problem: started.problem } } : {}), focus: "ta", anchor: "#ta", keepCard: true });
     }
     case "retest": {
-      const started = await startRetest(db, plugins, userId, provider, now);
+      const started = await startRetest(db, plugins, userId, provider, now, field("credit") === "1");
       return done(provider, {}, { ...("problem" in started ? { flash: { problem: started.problem } } : {}), focus: "rt", anchor: "#ta", keepCard: true });
     }
     case "model-help": {

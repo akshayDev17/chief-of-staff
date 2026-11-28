@@ -864,4 +864,90 @@ describe("tests made on an earlier key", () => {
     expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num ">0<\/span>/);
     expect(await usable()).toEqual([]);
   });
+  // The owner's live state, 2026-11-28: a new key with no credit, Test all
+  // answered Needs credit on most models, which then read Not tested yet with
+  // "Passed on an earlier key".
+  const needsCreditRun = async () => {
+    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
+    await reconnect();
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    // test-luna and test-mini answer Needs credit; test-sonnet fails (a verdict).
+    plugin.replies.push(refused(402), refused(402), refused(400));
+    await runQueuedTests(env.DB, plugins(), NOW);
+  };
+  const cellOf = (strip: string, k: string) => Number(strip.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]);
+
+  it("draws Needs credit's Add credits hidden while no model on the list needs credit", async () => {
+    const credits = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
+    const withCredits = { ...plugin, connect: { ...plugin.connect, guide: { ...plugin.connect.guide, credits } } };
+    const { strip } = modelParts(await tableInput({ plugin: withCredits }));
+    expect(cellOf(strip, "credit")).toBe(0);
+    expect(strip).toContain('<a class="cell-act ext" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer" data-credit-act hidden>Add credits</a>');
+  });
+
+  it("counts a Needs credit answer on this key in its own cell, out of the usable set and Doesn't work, with Add credits", async () => {
+    await needsCreditRun();
+    const credits = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
+    const withCredits = { ...plugin, connect: { ...plugin.connect, guide: { ...plugin.connect.guide, credits } } };
+    const { rows, strip } = modelParts(await tableInput({ plugin: withCredits }));
+    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="credit"/);
+    expect(rows).toMatch(/data-id="test-mini"[^>]*data-state="credit"/);
+    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="fails"/);
+    // The current key has a result for them now: no earlier key's note.
+    expect(rows).not.toContain("on an earlier key");
+    expect(strip).toMatch(/data-filter="credit"[^>]*><span class="l">Needs credit<\/span><span class="v num warn">2<\/span><\/button><a class="cell-act ext" href="https:\/\/openrouter.ai\/settings\/credits" target="_blank" rel="noopener noreferrer" data-credit-act>Add credits<\/a><\/div>/);
+    expect([cellOf(strip, "works"), cellOf(strip, "credit"), cellOf(strip, "fails"), cellOf(strip, "pending")]).toEqual([0, 2, 1, 0]);
+    // One count source: each cell is the sum of its rows' data-state, and the cells add up to the end label.
+    const states = [...rows.matchAll(/data-state="(\w+)"/g)].map((m) => m[1]);
+    for (const k of ["works", "credit", "fails", "pending"]) expect(cellOf(strip, k)).toBe(states.filter((x) => x === k).length);
+    expect(strip).toContain(`<span data-ends>${states.filter((x) => x !== "blocked").length} models</span>`);
+    expect(strip).toContain('aria-label="3 of 3 tested: 0 work, 2 need credit, 1 don\'t"');
+    expect(strip).toMatch(/<i class="w" style="width:0.000%"><\/i><i class="c" style="width:66.667%"><\/i><i class="f" style="width:33.333%"><\/i>/);
+    expect(await usable()).toEqual([]);
+    // Model for each task counts them as tested too: nothing is left to test.
+    expect(await readToTest(env.DB, plugins(), userId)).toEqual({ provider: "openrouter", connected: true, untested: {} });
+  });
+
+  it("offers the Needs credit models in Retest failed's confirm, each set with its own estimate, and retests them only when asked", async () => {
+    await needsCreditRun();
+    const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
+    expect(plan.models.map((m) => m.model)).toEqual(["test-sonnet"]);
+    expect(plan.credit.map((m) => m.model)).toEqual(["test-luna", "test-mini"]);
+    expect(plan.creditEstimateUsd).toBeCloseTo(plan.credit.reduce((sum, m) => sum + m.estimateUsd, 0), 12);
+    const later = new Date("2026-11-27T10:15:00Z");
+    const { rail } = modelParts(await tableInput());
+    expect(rail).toContain('Retest failed <span class="num">(1)</span>');
+    const confirm = modelParts(await tableInput({ view: { confirm: "retest" }, step: "confirm" })).rail;
+    expect(confirm).toContain(`Retest the 1 that failed for about ${formatCost(plan.estimateUsd)}?`);
+    expect(confirm).toContain(`<label class="also"><input type="checkbox" name="credit" value="1" form="rt-run-form" data-k="rt-credit"><span>Also the <span class="num">2</span> that needed credit, about <span class="num">${formatCost(plan.creditEstimateUsd)}</span> more. Add credits first.</span></label>`);
+    expect(confirm).toContain('id="rt-run-form"');
+    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 1, skipped: 0 });
+    expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "failed"], ["test-mini", "failed"], ["test-sonnet", "queued"]]);
+    plugin.replies.push(refused(400));
+    await runQueuedTests(env.DB, plugins(), later);
+    // Credit added: the Needs credit ones too.
+    const after = new Date("2026-11-27T10:20:00Z");
+    expect(await startRetest(env.DB, plugins(), userId, "openrouter", after, true)).toEqual({ count: 3, skipped: 0 });
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-mini" }), refused(400));
+    await runQueuedTests(env.DB, plugins(), after);
+    expect(await usable()).toEqual(["test-luna", "test-mini"]);
+    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).credit).toEqual([]);
+  });
+
+  it("names Retest for the Needs credit models when nothing failed, and its confirm retests them alone", async () => {
+    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
+    await reconnect();
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    plugin.replies.push(refused(402), refused(402), refused(402));
+    await runQueuedTests(env.DB, plugins(), NOW);
+    const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
+    expect(plan).toMatchObject({ models: [], credit: [{ model: "test-luna" }, { model: "test-mini" }, { model: "test-sonnet" }] });
+    expect(plan.wait).toBeUndefined();
+    expect(modelParts(await tableInput()).rail).toContain('Retest needs credit <span class="num">(3)</span>');
+    const confirm = modelParts(await tableInput({ view: { confirm: "retest" }, step: "confirm" })).rail;
+    expect(confirm).toContain(`Retest the 3 that needed credit for about ${formatCost(plan.creditEstimateUsd)}?`);
+    expect(confirm).toContain('<input type="hidden" name="credit" value="1" form="rt-run-form">');
+    expect(await startRetest(env.DB, plugins(), userId, "openrouter", new Date("2026-11-27T10:15:00Z"))).toEqual({ problem: "No model's latest test failed." });
+    expect(await startRetest(env.DB, plugins(), userId, "openrouter", new Date("2026-11-27T10:15:00Z"), true)).toEqual({ count: 3, skipped: 0 });
+  });
 });

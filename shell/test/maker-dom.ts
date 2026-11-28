@@ -150,20 +150,23 @@ export function perModelBox(rows: ListRow[]) {
 }
 
 // Providers' model table for `rows`, its page script run on it at `href`,
-// with the strip (its cells' counts, the bar and its end label) and the
+// with the strip (its cells' counts, the bar and its end label, Needs
+// credit's Add credits link) and the
 // line under Test all that says it covers the whole list.
 export function providersTable(rows: ListRow[], href = "https://cos.example.com/chief-of-staff/models") {
   const main = node({ id: "screen" });
-  const cellV = Object.fromEntries((["works", "fails", "pending"] as const).map((k) => [k, node({ class: "v" }, main)]));
+  const cellV = Object.fromEntries((["works", "credit", "fails", "pending"] as const).map((k) => [k, node({ class: "v" }, main)]));
   for (const [k, v] of Object.entries(cellV)) main.q[`.cell[data-filter="${k}"] .v`] = v;
   const bar = node({ class: "bar" }, main);
   const barW = node({ class: "w" }, bar);
+  const barC = node({ class: "c" }, bar);
   const barF = node({ class: "f" }, bar);
-  Object.assign(bar.q, { "i.w": barW, "i.f": barF });
+  Object.assign(bar.q, { "i.w": barW, "i.c": barC, "i.f": barF });
   const ends = node({ "data-ends": "" }, main);
+  const act = node({ class: "cell-act ext", "data-credit-act": "" }, main);
   const whole = node({ class: "why", "data-whole-list": "", hidden: "" }, main);
-  const cells = (["works", "fails", "pending"] as const).map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
-  Object.assign(main.q, { ".bar": bar, "[data-ends]": ends });
+  const cells = (["works", "credit", "fails", "pending"] as const).map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
+  Object.assign(main.q, { ".bar": bar, "[data-ends]": ends, "[data-credit-act]": act });
   Object.assign(main.qa, { "[data-whole-list]": [whole], ".cell[data-filter]": cells });
   const q = node({ id: "pick-q", type: "search" }, main);
   const count = node({ id: "pick-count" }, main);
@@ -183,15 +186,19 @@ export function providersTable(rows: ListRow[], href = "https://cos.example.com/
   // widths and label, the end label, and whether the whole-list line shows.
   const strip = () => ({
     works: cellV.works!.textContent,
+    credit: cellV.credit!.textContent,
     fails: cellV.fails!.textContent,
     pending: cellV.pending!.textContent,
     good: cellV.works!.classList.contains("good"),
+    warn: cellV.credit!.classList.contains("warn"),
     bad: cellV.fails!.classList.contains("bad"),
-    bar: [barW.getAttribute("style"), barF.getAttribute("style")],
+    bar: [barW.getAttribute("style"), barC.getAttribute("style"), barF.getAttribute("style")],
     label: bar.getAttribute("aria-label"),
     ends: ends.textContent,
     wholeList: !whole.hidden,
   });
-  const press = (k: "works" | "fails" | "pending") => d.dispatch("click", cells.find((c) => c.getAttribute("data-filter") === k)!);
-  return { ...d, main, q, count, lis, added, type, shown, strip, press };
+  // Whether the Needs credit cell's Add credits link shows.
+  const addCredits = () => !act.hidden;
+  const press = (k: "works" | "credit" | "fails" | "pending") => d.dispatch("click", cells.find((c) => c.getAttribute("data-filter") === k)!);
+  return { ...d, main, q, count, lis, added, type, shown, strip, press, addCredits };
 }

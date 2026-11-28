@@ -34,7 +34,8 @@ out), and its row reads Not tested yet with a grey "Passed on an earlier
 key" (or "Failed on an earlier key") note, counted in no Works or Doesn't
 work cell. A run's results from an earlier key show on no row, and its line
 says "on an earlier key". Test on the row, or Test all, tests it on the
-current key. A task whose saved main model passed only on an earlier key
+current key. Once a run on the current key has a result for it (a verdict,
+or Needs credit), the note goes. A task whose saved main model passed only on an earlier key
 follows the rule below: it says the model needs a test on the new key, with
 a link to Test all models on Models › Setup › Providers and models, and runs
 on its usable fallback, else has no model and its calls are refused saying
@@ -60,8 +61,9 @@ a link to the account's settings on OpenRouter, then Check again.
 
 **One table**, nothing to type but the search. Search matches any part of a
 model's name, maker or ID. The Maker filter has its own find box and chips.
-The Works / Doesn't work / Not tested yet strip filters the table, over a bar
-of the true ratios; it counts the rows search, the Maker filter and a strength
+The Works / Needs credit / Doesn't work / Not tested yet strip filters the
+table, over a bar of the true ratios (Works + Needs credit + Doesn't work +
+Not tested yet = its total, filtered or not); it counts the rows search, the Maker filter and a strength
 show (each row's `rowState`), its end label then reading "N shown". An address with `strength=<Smallest|Middle|Strongest>`
 (and `show=pending`) opens the table showing that strength's models (not
 tested yet), as Model for each task links a strength with no usable model;
@@ -107,12 +109,18 @@ becomes the model's latest test. One run at a
 time per user (a unique index holds it when two starts race), and a new one
 at most every 10 minutes. **Retest failed (N)** reruns, in the latest run,
 exactly the models the strip counts as Doesn't work (`test-all.ts`
-`failedModels`, by the strip's one rule `rowState`), so N is always the
+`modelsIn`, by the strip's one rule `rowState`), so N is always the
 Doesn't work count with no filter on (a filter narrows the strip, never
 Retest failed or Test all, which say then that they cover the whole list): each one's row goes back to queued, or joins the run for
 a model that failed on its own row's Test. A refusal that says nothing about
 the model (busy, no credit) is no failure: its row reads Works or Not tested
-yet, and Test on the row or Test all tests it again. A run made
+yet, and Test on the row or Test all tests it again. One exception: a run's
+Needs credit answer on the current key, for a model with no pass on that key,
+is a result of its own, the strip's **Needs credit** cell (amber, with Add
+credits, OpenRouter's credits page): the model stays out of the usable set
+and out of Doesn't work. Retest failed's confirm offers those models too, as
+an unticked "Also the N that needed credit, about $X more", and the button
+reads **Retest needs credit (N)** when nothing failed. A run made
 on an older model list (`CATALOG_VERSION`) offers no Retest failed. The real
 total is the sum of the run's ledger rows: OpenRouter's reported cost.
 
@@ -206,7 +214,8 @@ rows stay as they are, still to save.
   Providers and models showing that strength's models not tested yet
   (`?strength=<tier>&show=pending#test`, read by the Providers script), or
   all of them once every one has been tested, or Connect OpenRouter
-  (`picker-data.ts` `readToTest`);
+  (`picker-data.ts` `readToTest`, counting the rows the strip counts as Not
+  tested yet, by `rowState`);
 - each task is proposed the cheapest usable model of its strength and, as
   its fallback, the next cheapest of that strength, another model (on
   OpenRouter today, so another OpenRouter model), never the main one and
