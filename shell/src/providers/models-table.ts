@@ -12,9 +12,10 @@
 // user's tasks can use (models/usable.ts); there is no Add (the owner,
 // 2026-11-27: "quite franky remove the add feature altogether"). Search
 // matches any part of a model's name, maker or ID; the Maker filter, its own
-// find box and its chips narrow the table; the Works / Doesn't work / Not
-// tested yet strip filters it too, over a bar of the true ratios, and counts
-// only the rows search, the Maker filter and a strength show. None of these sends a
+// find box and its chips narrow the table; the Works / Needs credit /
+// Doesn't work / Not tested yet strip filters it too, over a bar of the true
+// ratios, and counts only the rows search, the Maker filter and a strength
+// show. Needs credit carries Add credits, the provider's credits page. None of these sends a
 // request: the page's script shows and hides rows, and recounts the strip.
 //
 // A row that cannot be tested has one action of its own: a model the
@@ -22,7 +23,8 @@
 // the account's list; a router (priced per call by the model it picks) gets
 // "Set price cap" (models/price-caps.ts). The side pane runs Test all models,
 // with its estimate confirmed first, and Retest failed (N), whose results
-// stay in the same run.
+// stay in the same run; its confirm offers the Needs credit models too, with
+// their own estimate.
 //
 // Exactly one button is solid app blue in any state, and it is the next step
 // (the owner, 2026-11-28): Refresh model list while the list is stale, then
@@ -39,7 +41,7 @@ import { makerKey, makerRowAttrs, nameMakers } from "../models/maker-filter";
 import { strengthChip } from "../prices/tiers";
 import { DEFAULT_CAP } from "../models/price-caps";
 import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type OfferRow, type Refused, type TestRefusal } from "../models/test-model";
-import { failedModels, isCurrentRun, rowState, type RetestPlan, type RowState, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
+import { isCurrentRun, rowState, type RetestPlan, type RowState, type ShownTest, type TestAllPlan, type TestAllRun } from "../models/test-all";
 import type { TestRecord } from "../models/usable";
 import type { Link, ProviderPlugin } from "../proxy/plugin";
 
@@ -255,10 +257,12 @@ function askOn(first: TestRefusal | undefined, on: "lead" | "note", lead?: TestR
 // A failed verdict leads, as "Doesn't work", with a newer refusal as its
 // note; otherwise the refusal leads. An outcome tag (Needs credit, Busy,
 // Couldn't test) shows only on a model still usable: passed and not blocked.
-// While a run tests the row, only the user's own Test shows.
+// While a run tests the row, only the user's own Test shows. The earlier
+// key's note shows only on a row that reads Not tested yet: once the current
+// key has a result for the model (a verdict, or Needs credit), it goes.
 export function describeRow(f: RowFacts): RowView {
   const state = f.state;
-  const earlier = f.earlier && !f.testing && !f.blocked ? { earlier: f.earlier } : {};
+  const earlier = f.earlier && state === "pending" && !f.testing ? { earlier: f.earlier } : {};
   const failed = !f.testing && f.verdict?.state === "failed" ? f.verdict.result : undefined;
   const refusal = f.testing && f.refusal?.from === "run" ? undefined : f.refusal;
   if (failed) {
@@ -297,33 +301,36 @@ function rowFacts(r: OfferRow, input: ModelsTableInput): RowFacts {
 const running = (input: ModelsTableInput): boolean => Boolean(input.run && !input.run.finishedAt);
 const primaryIf = (input: ModelsTableInput, step: Step): string => (input.step === step ? "primary" : "outline");
 
-// The strip's counts, by rowState; Doesn't work is failedModels, the same
-// models Retest failed tests again. Each row carries its rowState as
+// The strip's counts, by rowState, the rule Retest failed's models
+// (test-all.ts modelsIn) follow too. Each row carries its rowState as
 // data-state, and the page's script sums those over the rows the search, the
 // Maker filter and a strength show (page-script.ts), so the strip counts the
 // view; these whole-list counts are what it shows unfiltered, and without
-// the script.
-function counts(input: ModelsTableInput): { w: number; f: number; p: number; t: number } {
-  let w = 0;
-  let p = 0;
-  for (const r of input.rows) {
-    const s = rowState(Boolean(blockKind(r)), input.shown.get(r.model));
-    if (s === "works") w++;
-    else if (s === "pending") p++;
-  }
-  const f = failedModels(input.rows, input.shown).length;
-  return { w, f, p, t: w + f + p };
+// the script. Works + Needs credit + Doesn't work + Not tested yet = the total.
+export function stripCounts(input: Pick<ModelsTableInput, "rows" | "shown">): { w: number; c: number; f: number; p: number; t: number } {
+  const n = { works: 0, credit: 0, fails: 0, pending: 0, blocked: 0 };
+  for (const r of input.rows) n[rowState(Boolean(blockKind(r)), input.shown.get(r.model))]++;
+  return { w: n.works, c: n.credit, f: n.fails, p: n.pending, t: n.works + n.credit + n.fails + n.pending };
 }
 
 // ---------- the strip: run counts that filter the table ----------
 
+// The words of the bar's label; the page's script writes the same words.
+export const barLabel = (c: { w: number; c: number; f: number; t: number }, narrowed = false): string =>
+  `${c.w + c.c + c.f}${narrowed ? ` tested of ${c.t} shown` : ` of ${c.t} tested`}: ${c.w} work, ${c.c} need credit, ${c.f} don't`;
+
 function stripPart(input: ModelsTableInput): string {
-  const c = counts(input);
+  const c = stripCounts(input);
   const cell = (key: RowState, label: string, v: number, cls: string) =>
     `<button type="button" class="cell" data-filter="${key}" data-k="cell-${key}" aria-pressed="false"><span class="l">${label}</span><span class="v num ${cls}">${v}</span></button>`;
+  // Needs credit carries its answer: the provider's credits page, while any
+  // model on the list needs credit.
+  const credits = input.plugin.connect.guide.credits;
+  const add = credits && c.c ? newTab(credits, "cell-act ext") : "";
+  const creditCell = `<div class="cellx">${cell("credit", "Needs credit", c.c, c.c ? "warn" : "")}${add}</div>`;
   const pct = (n: number) => (c.t ? (n / c.t) * 100 : 0).toFixed(3);
-  return `<div class="strip" role="group" aria-label="Show models">${cell("works", "Works", c.w, c.w ? "good" : "")}${cell("fails", "Doesn't work", c.f, c.f ? "bad" : "")}${cell("pending", "Not tested yet", c.p, "")}</div>
-<div class="bar" role="img" aria-label="${c.w + c.f} of ${c.t} tested: ${c.w} work, ${c.f} don't"><i class="w" style="width:${pct(c.w)}%"></i><i class="f" style="width:${pct(c.f)}%"></i></div>
+  return `<div class="strip" role="group" aria-label="Show models">${cell("works", "Works", c.w, c.w ? "good" : "")}${creditCell}${cell("fails", "Doesn't work", c.f, c.f ? "bad" : "")}${cell("pending", "Not tested yet", c.p, "")}</div>
+<div class="bar" role="img" aria-label="${barLabel(c)}"><i class="w" style="width:${pct(c.w)}%"></i><i class="c" style="width:${pct(c.c)}%"></i><i class="f" style="width:${pct(c.f)}%"></i></div>
 <div class="ends num"><span>0</span><span data-ends>${c.t} models</span></div>`;
 }
 
@@ -558,11 +565,31 @@ function refreshButton(input: ModelsTableInput, cls: string): string {
   return `<form method="post" action="${action(input.plugin.provider, "refresh")}" data-fetch><button type="submit" class="btn wide ${cls}" data-k="refresh-ta" data-busy="Reading ${short}'s list…">Refresh model list</button></form>`;
 }
 
-function confirmBox(input: ModelsTableInput, question: string, extra: string, verb: string, label: string, k: string): string {
+// `fields`: inputs sent with the form (they name it by its id, `${k}-form`).
+function confirmBox(input: ModelsTableInput, question: string, extra: string, verb: string, label: string, k: string, fields = ""): string {
   const p = input.plugin.provider;
-  return `<div class="confirm" role="alertdialog" aria-labelledby="ta-q"><p id="ta-q"><strong>${esc(question)}</strong></p>
+  return `<div class="confirm" role="alertdialog" aria-labelledby="ta-q"><p id="ta-q"><strong>${esc(question)}</strong></p>${fields}
 <p class="why">Billed to your ${esc(input.plugin.connect.guide.name)} account.${extra ? ` ${esc(extra)}` : ""}</p>
-<div class="acts"><form method="post" action="${action(p, verb)}" data-fetch class="inline"><button type="submit" class="btn ${primaryIf(input, "confirm")} small" data-k="${k}" data-autofocus>${esc(label)}</button></form><a class="link" href="${esc(viewHref(p, {}, "#ta"))}" data-view data-k="${k}-cancel">Cancel</a></div></div>`;
+<div class="acts"><form method="post" action="${action(p, verb)}" data-fetch class="inline" id="${k}-form"><button type="submit" class="btn ${primaryIf(input, "confirm")} small" data-k="${k}" data-autofocus>${esc(label)}</button></form><a class="link" href="${esc(viewHref(p, {}, "#ta"))}" data-view data-k="${k}-cancel">Cancel</a></div></div>`;
+}
+
+// Retest failed's confirm: the Doesn't work models, with the Needs credit
+// ones offered beside them (unticked: they need credit again until credit is
+// added), each with its own estimate; the Needs credit ones alone when
+// nothing failed.
+function retestConfirm(input: ModelsTableInput): string {
+  const { retest } = input;
+  const f = retest.models.length;
+  const c = retest.credit.length;
+  const skips = retest.skipped ? `Skips ${retest.skipped} no longer on the model list.` : "";
+  if (!f) {
+    const only = `<input type="hidden" name="credit" value="1" form="rt-run-form">`;
+    return confirmBox(input, `Retest the ${c} that needed credit for about ${formatCost(retest.creditEstimateUsd)}?`, `They need credit again until it is added. ${skips}`.trim(), "retest", "Run the retest", "rt-run", only);
+  }
+  const also = c
+    ? `<label class="also"><input type="checkbox" name="credit" value="1" form="rt-run-form" data-k="rt-credit"><span>Also the <span class="num">${c}</span> that needed credit, about <span class="num">${formatCost(retest.creditEstimateUsd)}</span> more. Add credits first.</span></label>`
+    : "";
+  return confirmBox(input, `Retest the ${f} that failed for about ${formatCost(retest.estimateUsd)}?`, skips, "retest", "Run the retest", "rt-run", also);
 }
 
 function railPart(input: ModelsTableInput): string {
@@ -578,7 +605,7 @@ function railPart(input: ModelsTableInput): string {
   } else if (run && retesting) {
     const left = run.tests.filter((t) => t.state === "queued" || t.state === "running").length;
     const n = run.retestCount ?? left;
-    line = `Retesting… <span class="num">${n - left}</span> of <span class="num">${n}</span> that failed · spent <span class="num">${formatCost(run.realCostUsd)}</span>`;
+    line = `Retesting… <span class="num">${n - left}</span> of <span class="num">${n}</span> · spent <span class="num">${formatCost(run.realCostUsd)}</span>`;
   } else if (run) {
     const again = run.retestedAt ? ` · retested ${run.retestCount ?? 0} at ${esc(stamp(run.retestedAt, input.now))}` : "";
     const key = run.earlierKey ? " on an earlier key" : "";
@@ -591,14 +618,7 @@ function railPart(input: ModelsTableInput): string {
   if (view.confirm === "test-all" && !plan.wait) {
     act = confirmBox(input, `Test all ${plan.models.length} models for about ${formatCost(plan.estimateUsd)}?`, "", "test-all", "Run the test", "ta-run");
   } else if (view.confirm === "retest" && !retest.wait) {
-    act = confirmBox(
-      input,
-      `Retest the ${retest.models.length} that failed for about ${formatCost(retest.estimateUsd)}?`,
-      retest.skipped ? `Skips ${retest.skipped} no longer on the model list.` : "",
-      "retest",
-      "Run the retest",
-      "rt-run",
-    );
+    act = retestConfirm(input);
   } else {
     let why = "";
     const taOn = !plan.wait && !isRunning;
@@ -606,16 +626,21 @@ function railPart(input: ModelsTableInput): string {
     if (isRunning && !retesting && run) taLabel = `Testing… ${run.done} of ${run.modelCount}`;
     if (!current) why = stale ? "" : `Waiting for a fresh model list.${refreshButton(input, primaryIf(input, "refresh"))}`;
     else if (isRunning && !retesting) why = "You can leave and come back. This page updates by itself.";
-    else if (retesting) why = "Retesting the ones that failed.";
+    else if (retesting) why = "Retesting. You can leave and come back.";
     else if (plan.wait) why = esc(plan.wait);
     else why = `About ${formatCost(plan.estimateUsd)}, billed to your ${esc(plugin.connect.guide.name)} account.`;
     const ta = taOn
       ? `<a class="btn ${primaryIf(input, "test-all")}" href="${esc(viewHref(p, { confirm: "test-all" }, "#ta"))}" data-view data-k="ta">${esc(taLabel)}</a>`
       : `<button type="button" class="btn outline" disabled data-k="ta">${esc(taLabel)}</button>`;
-    const rtN = retest.models.length && !retesting ? ` <span class="num">(${retest.models.length})</span>` : "";
+    // Named for the Doesn't work models while there are any, else for the
+    // Needs credit ones its confirm retests alone.
+    const creditOnly = !retest.models.length && retest.credit.length > 0;
+    const rtCount = creditOnly ? retest.credit.length : retest.models.length;
+    const rtName = creditOnly ? "Retest needs credit" : "Retest failed";
+    const rtN = rtCount && !retesting ? ` <span class="num">(${rtCount})</span>` : "";
     const rt = retest.wait
-      ? `<button type="button" class="btn outline" disabled data-k="rt"><span>Retest failed${rtN}</span></button>`
-      : `<a class="btn outline" href="${esc(viewHref(p, { confirm: "retest" }, "#ta"))}" data-view data-k="rt"><span>Retest failed${rtN}</span></a>`;
+      ? `<button type="button" class="btn outline" disabled data-k="rt"><span>${rtName}${rtN}</span></button>`
+      : `<a class="btn outline" href="${esc(viewHref(p, { confirm: "retest" }, "#ta"))}" data-view data-k="rt"><span>${rtName}${rtN}</span></a>`;
     const rtWhy = retest.wait && !stale && !isRunning ? `<p class="why">Retest failed · ${esc(retest.wait)}</p>` : !retest.wait && retest.skipped ? `<p class="why">Retest failed skips ${retest.skipped} no longer on the model list.</p>` : "";
     // Shown by the page's script while search, the Maker filter or a
     // strength narrows the table, whose strip then counts only those rows.
