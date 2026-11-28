@@ -142,7 +142,7 @@ function providerCard(state: PageState): string {
     return `<h3>${esc(g.name)} <span class="pill">Not connected</span></h3><div class="lines">${lines}</div><div class="acts">${connect}${help}</div>${view.disconnected ? "" : about}`;
   }
   if (!state.connected) {
-    return `<h3>${esc(g.name)} <span class="pill warn">${esc(removedText(plugin))}</span></h3><div class="lines"><p>${CONNECT_AGAIN} to get a new key.</p></div><div class="acts">${connect}${help}</div>`;
+    return `<h3>${esc(g.name)} <span class="pill warn">${esc(removedText(g.short))}</span></h3><div class="lines"><p>${CONNECT_AGAIN} to get a new key.</p></div><div class="acts">${connect}${help}</div>`;
   }
   const a = state.account;
   const account = a === "unread" || !a ? `<p><strong>Account:</strong> could not be read just now.</p>` : `<p><strong>Account:</strong> ${esc(accountFacts(a))}</p>`;

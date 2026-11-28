@@ -246,6 +246,15 @@ describe("Try it", () => {
     expect(chatModels()).toEqual([main.model]);
   });
 
+  it("keeps the model's own line under a busy refusal, its name and reason both shown", async () => {
+    expect(await changeTasks(env.DB, await plugins(), userId, [{ task: "match", main: modelKey(main), fallback: "" }], NOW)).toBeUndefined();
+    chat = () => Response.json({ error: { code: 429, message: "Rate limited" } }, { status: 429 });
+    expect(await tryIt()).toMatchObject({ kind: "refused", reason: "Busy or out of quota, not a setup fault.", failed: [{ role: "main", model: main.model, reason: "Busy or out of quota, not a setup fault." }] });
+    const tried = await tryHtml();
+    expect(tried).toContain(`<ul class="tr-fails"><li>Model ${main.name ?? main.model}: Busy or out of quota, not a setup fault.</li></ul>`);
+    expect(tried).not.toContain("btn small primary");
+  });
+
   it("says a connection never set up is not connected, with its own Connect, and sends nothing", async () => {
     await env.DB.prepare("DELETE FROM provider_connections WHERE user_id = ?").bind(userId).run();
     expect(await tryIt()).toMatchObject({ kind: "refused", reason: "OpenRouter is not connected.", action: { label: "Connect OpenRouter", href: "/chief-of-staff/models/setup/providers" }, failed: [] });

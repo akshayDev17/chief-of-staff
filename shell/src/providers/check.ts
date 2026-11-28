@@ -91,7 +91,7 @@ export const isConnected = (connection: unknown, check: Check | undefined): bool
 
 // The words for a connection whose key was removed on the provider's side
 // (a real call's 401, recorded by revoked.ts), on Providers and on Try it.
-export const removedText = (plugin: ProviderPlugin): string => `Removed on ${plugin.connect.guide.short}'s side`;
+export const removedText = (short: string): string => `Removed on ${short}'s side`;
 export const CONNECT_AGAIN = "Connect again";
 
 // The plain sentence for a reason: the first line of a test call's result.

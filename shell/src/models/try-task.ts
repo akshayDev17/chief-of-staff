@@ -183,7 +183,8 @@ export async function tryTask(db: D1Database, plugins: PluginRegistry, userId: s
     // same and offer the same Connect.
     const plugin = plugins[outcome.provider];
     if (plugin && last.reason === reasonText("not_set_up", plugin) && (await readCheck(db, userId, outcome.provider))?.state === "revoked") {
-      return { kind: "refused", task, reason: `${removedText(plugin)}.`, action: { label: CONNECT_AGAIN, href: PROVIDERS_PATH }, failed: failed.map((f) => (f.provider === outcome.provider ? { ...f, reason: `${removedText(plugin)}.` } : f)) };
+      const removed = `${removedText(plugin.connect.guide.short)}.`;
+      return { kind: "refused", task, reason: removed, action: { label: CONNECT_AGAIN, href: PROVIDERS_PATH }, failed: failed.map((f) => (f.provider === outcome.provider ? { ...f, reason: removed } : f)) };
     }
     return { kind: "refused", task, reason: last.reason, failed };
   }
