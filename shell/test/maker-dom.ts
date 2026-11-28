@@ -150,7 +150,8 @@ export function perModelBox(rows: ListRow[]) {
 }
 
 // Providers' model table for `rows`, its page script run on it at `href`,
-// with the strip (its cells' counts, the bar and its end label) and the
+// with the strip (its cells' counts, the bar and its end label, Needs
+// credit's Add credits link) and the
 // line under Test all that says it covers the whole list.
 export function providersTable(rows: ListRow[], href = "https://cos.example.com/chief-of-staff/models") {
   const main = node({ id: "screen" });
@@ -162,9 +163,10 @@ export function providersTable(rows: ListRow[], href = "https://cos.example.com/
   const barF = node({ class: "f" }, bar);
   Object.assign(bar.q, { "i.w": barW, "i.c": barC, "i.f": barF });
   const ends = node({ "data-ends": "" }, main);
+  const act = node({ class: "cell-act ext", "data-credit-act": "" }, main);
   const whole = node({ class: "why", "data-whole-list": "", hidden: "" }, main);
   const cells = (["works", "credit", "fails", "pending"] as const).map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
-  Object.assign(main.q, { ".bar": bar, "[data-ends]": ends });
+  Object.assign(main.q, { ".bar": bar, "[data-ends]": ends, "[data-credit-act]": act });
   Object.assign(main.qa, { "[data-whole-list]": [whole], ".cell[data-filter]": cells });
   const q = node({ id: "pick-q", type: "search" }, main);
   const count = node({ id: "pick-count" }, main);
@@ -195,6 +197,8 @@ export function providersTable(rows: ListRow[], href = "https://cos.example.com/
     ends: ends.textContent,
     wholeList: !whole.hidden,
   });
+  // Whether the Needs credit cell's Add credits link shows.
+  const addCredits = () => !act.hidden;
   const press = (k: "works" | "credit" | "fails" | "pending") => d.dispatch("click", cells.find((c) => c.getAttribute("data-filter") === k)!);
-  return { ...d, main, q, count, lis, added, type, shown, strip, press };
+  return { ...d, main, q, count, lis, added, type, shown, strip, press, addCredits };
 }

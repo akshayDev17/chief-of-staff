@@ -354,6 +354,24 @@ describe("on Providers, the Works / Needs credit / Doesn't work / Not tested yet
     expect(p.sent).toEqual([]);
   });
 
+  it("hides Needs credit's Add credits while a search or the makers leave none that needs credit, and shows it again when cleared", () => {
+    const p = providersTable(STATED);
+    expect(p.addCredits()).toBe(true);
+    p.type("claude");
+    expect(p.strip()).toMatchObject({ credit: "0" });
+    expect(p.addCredits()).toBe(false);
+    p.type("");
+    expect(p.addCredits()).toBe(true);
+    p.dispatch("click", p.toggle);
+    p.tick("Anthropic");
+    expect(p.strip()).toMatchObject({ credit: "0" });
+    expect(p.addCredits()).toBe(false);
+    p.clearMakers();
+    expect(p.strip()).toEqual(whole);
+    expect(p.addCredits()).toBe(true);
+    expect(p.sent).toEqual([]);
+  });
+
   it("counts a strength's rows when the address asks for one", () => {
     const p = providersTable(STATED, "https://cos.example.com/chief-of-staff/models?strength=Smallest");
     expect(p.strip()).toMatchObject({ works: "1", credit: "1", fails: "1", pending: "0", ends: "3 shown", wholeList: true });

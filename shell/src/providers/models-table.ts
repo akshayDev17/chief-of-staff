@@ -323,10 +323,10 @@ function stripPart(input: ModelsTableInput): string {
   const c = stripCounts(input);
   const cell = (key: RowState, label: string, v: number, cls: string) =>
     `<button type="button" class="cell" data-filter="${key}" data-k="cell-${key}" aria-pressed="false"><span class="l">${label}</span><span class="v num ${cls}">${v}</span></button>`;
-  // Needs credit carries its answer: the provider's credits page, while any
-  // model on the list needs credit.
+  // Needs credit carries its answer: the provider's credits page, shown while
+  // any model in view needs credit (the page's script follows the view).
   const credits = input.plugin.connect.guide.credits;
-  const add = credits && c.c ? newTab(credits, "cell-act ext") : "";
+  const add = credits ? `<a class="cell-act ext" href="${esc(credits.href)}" target="_blank" rel="noopener noreferrer" data-credit-act${c.c ? "" : " hidden"}>${esc(credits.label)}</a>` : "";
   const creditCell = `<div class="cellx">${cell("credit", "Needs credit", c.c, c.c ? "warn" : "")}${add}</div>`;
   const pct = (n: number) => (c.t ? (n / c.t) * 100 : 0).toFixed(3);
   return `<div class="strip" role="group" aria-label="Show models">${cell("works", "Works", c.w, c.w ? "good" : "")}${creditCell}${cell("fails", "Doesn't work", c.f, c.f ? "bad" : "")}${cell("pending", "Not tested yet", c.p, "")}</div>

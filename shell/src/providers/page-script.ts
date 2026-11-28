@@ -86,6 +86,8 @@ export const PAGE_SCRIPT = String.raw`
         if (i) i.setAttribute("style", "width:" + pct(c[seg[1]]) + "%");
       });
     }
+    var act = main.querySelector("[data-credit-act]");
+    if (act) act.hidden = !c.credit;
     var ends = main.querySelector("[data-ends]");
     if (ends) ends.textContent = narrowed ? total + " shown" : total + " models";
     each(main.querySelectorAll("[data-whole-list]"), function (p) { p.hidden = !narrowed; });

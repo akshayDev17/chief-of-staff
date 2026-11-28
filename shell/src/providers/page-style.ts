@@ -134,7 +134,7 @@ ${MAKER_FILTER_CSS}
 /* Needs credit: the cell, with Add credits on its own line under the value
    (the row's other cells grow with it). */
 .cellx { position: relative; display: grid; }
-.cellx .cell:has(+ .cell-act) { padding-bottom: 31px; }
+.cellx .cell:has(+ .cell-act:not([hidden])) { padding-bottom: 31px; }
 .cell-act { position: absolute; left: 12px; bottom: 11px; font-size: var(--fs-small); line-height: 18px; text-decoration: none; }
 .cell-act:hover { text-decoration: underline; }
 .cell .l { font-size: var(--fs-small); color: var(--muted); line-height: 18px; white-space: nowrap; }

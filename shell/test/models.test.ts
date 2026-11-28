@@ -877,6 +877,14 @@ describe("tests made on an earlier key", () => {
   };
   const cellOf = (strip: string, k: string) => Number(strip.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]);
 
+  it("draws Needs credit's Add credits hidden while no model on the list needs credit", async () => {
+    const credits = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
+    const withCredits = { ...plugin, connect: { ...plugin.connect, guide: { ...plugin.connect.guide, credits } } };
+    const { strip } = modelParts(await tableInput({ plugin: withCredits }));
+    expect(cellOf(strip, "credit")).toBe(0);
+    expect(strip).toContain('<a class="cell-act ext" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer" data-credit-act hidden>Add credits</a>');
+  });
+
   it("counts a Needs credit answer on this key in its own cell, out of the usable set and Doesn't work, with Add credits", async () => {
     await needsCreditRun();
     const credits = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
@@ -887,7 +895,7 @@ describe("tests made on an earlier key", () => {
     expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="fails"/);
     // The current key has a result for them now: no earlier key's note.
     expect(rows).not.toContain("on an earlier key");
-    expect(strip).toMatch(/data-filter="credit"[^>]*><span class="l">Needs credit<\/span><span class="v num warn">2<\/span><\/button><a class="cell-act ext" href="https:\/\/openrouter.ai\/settings\/credits" target="_blank" rel="noopener noreferrer">Add credits<\/a><\/div>/);
+    expect(strip).toMatch(/data-filter="credit"[^>]*><span class="l">Needs credit<\/span><span class="v num warn">2<\/span><\/button><a class="cell-act ext" href="https:\/\/openrouter.ai\/settings\/credits" target="_blank" rel="noopener noreferrer" data-credit-act>Add credits<\/a><\/div>/);
     expect([cellOf(strip, "works"), cellOf(strip, "credit"), cellOf(strip, "fails"), cellOf(strip, "pending")]).toEqual([0, 2, 1, 0]);
     // One count source: each cell is the sum of its rows' data-state, and the cells add up to the end label.
     const states = [...rows.matchAll(/data-state="(\w+)"/g)].map((m) => m[1]);
