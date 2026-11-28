@@ -118,8 +118,9 @@ call to the router carries OpenRouter's `provider.max_price` at the cap, with
 the fees per request, image and audio unit at "0". It also carries the
 auto-router plugin's `excluded_models`: every listed model whose pricing has
 a per-search or per-request fee, since `max_price` has no field for search
-fees. A refusal under the cap (no model fits, say) shows OpenRouter's own
-words.
+fees. OpenRouter's answer that no model fits the account's settings or the
+cap has its own reason and actions (`src/providers/README.md`, the 404 row);
+any other refusal under the cap shows OpenRouter's own words.
 
 **Test all models is gone** (the owner, 2026-11-28: "what if i dont wish to
 test all after having credits"), with Retest failed and the every-minute
