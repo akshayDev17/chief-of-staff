@@ -619,7 +619,7 @@ function railPart(input: ModelsTableInput): string {
     const rtWhy = retest.wait && !stale && !isRunning ? `<p class="why">Retest failed · ${esc(retest.wait)}</p>` : !retest.wait && retest.skipped ? `<p class="why">Retest failed skips ${retest.skipped} no longer on the model list.</p>` : "";
     // Shown by the page's script while search, the Maker filter or a
     // strength narrows the table, whose strip then counts only those rows.
-    const whole = '<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the matching models.</p>';
+    const whole = '<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the models shown.</p>';
     act = `<div class="two">${ta}${rt}</div>${why ? `<div class="why">${why}</div>` : ""}${rtWhy}${whole}`;
   }
   return `<h3 id="ta">Test all</h3><p class="runline">${line}</p>${staleBox}<div class="ta-act">${act}</div>`;

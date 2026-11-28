@@ -299,7 +299,7 @@ describe("on Providers, the Works / Doesn't work / Not tested yet strip", () => 
     const p = providersTable(STATED);
     p.dispatch("click", p.toggle);
     p.tick("OpenAI");
-    expect(p.strip()).toEqual({ works: "2", fails: "0", pending: "0", good: true, bad: false, bar: ["width:100.000%", "width:0.000%"], label: "2 of 2 tested among the 3 matching: 2 work, 0 don't", ends: "2 of 3 matching", wholeList: true });
+    expect(p.strip()).toEqual({ works: "2", fails: "0", pending: "0", good: true, bad: false, bar: ["width:100.000%", "width:0.000%"], label: "2 tested of 2 shown: 2 work, 0 don't", ends: "2 shown", wholeList: true });
     p.clearMakers();
     expect(p.strip()).toEqual(whole);
     expect(p.sent).toEqual([]);
@@ -308,15 +308,15 @@ describe("on Providers, the Works / Doesn't work / Not tested yet strip", () => 
   it("counts only the rows the search shows, and both the search and the makers together", () => {
     const p = providersTable(STATED);
     p.type("claude");
-    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 of 3 matching", wholeList: true });
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown", wholeList: true });
     p.type("gpt-4o");
-    expect(p.strip()).toMatchObject({ works: "2", fails: "0", pending: "0", ends: "2 of 2 matching" });
+    expect(p.strip()).toMatchObject({ works: "2", fails: "0", pending: "0", ends: "2 shown" });
     p.dispatch("click", p.toggle);
     p.tick("Anthropic");
     expect(p.shown()).toEqual([]);
-    expect(p.strip()).toMatchObject({ works: "0", fails: "0", pending: "0", bar: ["width:0.000%", "width:0.000%"], ends: "0 of 0 matching", wholeList: true });
+    expect(p.strip()).toMatchObject({ works: "0", fails: "0", pending: "0", bar: ["width:0.000%", "width:0.000%"], ends: "0 shown", wholeList: true });
     p.type("");
-    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 of 3 matching" });
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown" });
     p.clearMakers();
     expect(p.strip()).toEqual(whole);
     expect(p.sent).toEqual([]);
@@ -327,7 +327,7 @@ describe("on Providers, the Works / Doesn't work / Not tested yet strip", () => 
     p.type("claude");
     p.press("fails");
     expect(p.shown()).toEqual([1]);
-    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 of 3 matching" });
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown" });
     p.type("");
     p.press("fails");
     expect(p.shown()).toEqual([0, 1, 2, 3, 4, 5]);
@@ -336,6 +336,6 @@ describe("on Providers, the Works / Doesn't work / Not tested yet strip", () => 
 
   it("counts a strength's rows when the address asks for one", () => {
     const p = providersTable(STATED, "https://cos.example.com/chief-of-staff/models?strength=Smallest");
-    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "0", ends: "2 of 2 matching", wholeList: true });
+    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "0", ends: "2 shown", wholeList: true });
   });
 });

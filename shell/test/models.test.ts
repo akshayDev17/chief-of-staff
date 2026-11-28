@@ -329,7 +329,7 @@ describe("Test all models", () => {
       expect(strip).toMatch(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">${states.filter((s) => s === k).length}</span>`));
     }
     expect(strip).toContain(`<span data-ends>${states.filter((s) => s !== "blocked").length} models</span>`);
-    expect(rail).toContain('<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the matching models.</p>');
+    expect(rail).toContain('<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the models shown.</p>');
     expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 2, skipped: 0 });
     const reopened = (await readTestAll(env.DB, userId, "openrouter"))!;
     expect(reopened.finishedAt).toBeUndefined();

@@ -62,7 +62,7 @@ a link to the account's settings on OpenRouter, then Check again.
 model's name, maker or ID. The Maker filter has its own find box and chips.
 The Works / Doesn't work / Not tested yet strip filters the table, over a bar
 of the true ratios; it counts the rows search, the Maker filter and a strength
-show (each row's `rowState`), its end label then reading "N of M matching". An address with `strength=<Smallest|Middle|Strongest>`
+show (each row's `rowState`), its end label then reading "N shown". An address with `strength=<Smallest|Middle|Strongest>`
 (and `show=pending`) opens the table showing that strength's models (not
 tested yet), as Model for each task links a strength with no usable model;
 the count line names it, with Show all. None of these sends a request. Each row shows the model's

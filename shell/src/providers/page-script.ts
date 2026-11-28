@@ -5,7 +5,7 @@
 //   and the strip's Works / Doesn't work / Not tested yet cells only show and
 //   hide rows: no request. The strip and its bar count the rows search, the
 //   Maker filter and a strength show (each row's data-state, its rowState),
-//   the end label then reading "N of M matching", and a line under Test all
+//   the end label then reading "N shown", and a line under Test all
 //   says Test all and Retest failed still cover the whole list. A strip cell
 //   filters within that view and leaves the counts as they are.
 // - Every form marked data-fetch (Test, Refresh, Check again, the price cap,
@@ -62,10 +62,9 @@ export const PAGE_SCRIPT = String.raw`
   function matches(li, t) { return inView(li, t) && (!S.filter || li.getAttribute("data-state") === S.filter); }
   // The strip, its bar and its end label, from the rows in view.
   function recount(all, t) {
-    var c = { works: 0, fails: 0, pending: 0 }, seen = 0;
+    var c = { works: 0, fails: 0, pending: 0 };
     each(all, function (li) {
       if (!inView(li, t)) return;
-      seen++;
       var st = li.getAttribute("data-state");
       if (c.hasOwnProperty(st)) c[st]++;
     });
@@ -79,13 +78,13 @@ export const PAGE_SCRIPT = String.raw`
     });
     var bar = main.querySelector(".bar");
     if (bar) {
-      bar.setAttribute("aria-label", (c.works + c.fails) + " of " + total + " tested" + (narrowed ? " among the " + seen + " matching" : "") + ": " + c.works + " work, " + c.fails + " don't");
+      bar.setAttribute("aria-label", (c.works + c.fails) + (narrowed ? " tested of " + total + " shown" : " of " + total + " tested") + ": " + c.works + " work, " + c.fails + " don't");
       var w = bar.querySelector("i.w"), f = bar.querySelector("i.f");
       if (w) w.setAttribute("style", "width:" + pct(c.works) + "%");
       if (f) f.setAttribute("style", "width:" + pct(c.fails) + "%");
     }
     var ends = main.querySelector("[data-ends]");
-    if (ends) ends.textContent = narrowed ? total + " of " + seen + " matching" : total + " models";
+    if (ends) ends.textContent = narrowed ? total + " shown" : total + " models";
     each(main.querySelectorAll("[data-whole-list]"), function (p) { p.hidden = !narrowed; });
   }
   function mark(text, t) {
