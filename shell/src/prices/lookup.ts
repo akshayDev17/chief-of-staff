@@ -10,12 +10,13 @@
 //
 //   lookupTier(db, { provider, model }) -> "Smallest" | "Middle" | "Strongest" | undefined
 //
-// The model's one tier at that provider, for the model list (T17), the per-task
-// picker (T18) and the usage ledger (T12); see tiers.ts for the price it
-// comes from.
+// The model's one tier at that provider, as the model list (T17), the
+// per-task picker (T18) and the usage ledger (T12) show it: strength.ts reads
+// it, by the rule in tiers.ts.
 
-import { currentSnapshot, readModelRows, readRow } from "./store";
-import { modelTier, type Tier } from "./tiers";
+import { readModelStrength } from "./strength";
+import { currentSnapshot, readRow } from "./store";
+import type { Tier } from "./tiers";
 import type { Provider, SourceId, TokenKind } from "./types";
 
 export interface PriceQuery {
@@ -49,7 +50,5 @@ export async function lookupPrice(db: D1Database, q: PriceQuery): Promise<PriceA
 }
 
 export async function lookupTier(db: D1Database, q: { provider: Provider; model: string }): Promise<Tier | undefined> {
-  const snapshot = await currentSnapshot(db);
-  if (!snapshot) return undefined;
-  return modelTier(q.provider, await readModelRows(db, snapshot.id, q));
+  return (await readModelStrength(db, q)).tier;
 }

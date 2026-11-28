@@ -3,7 +3,8 @@
 
 import type { OpenRouterCatalog } from "./openrouter";
 import { ROLL_BACK_REFUSED, ROLL_BACK_STATEMENTS } from "./rollback";
-import type { PriceRow, SourceResult } from "./types";
+import type { Basis, Figure, Lines } from "./tiers";
+import type { PriceRow, Provider, SourceResult } from "./types";
 
 export interface Snapshot {
   id: number;
@@ -40,12 +41,30 @@ export async function listSnapshots(db: D1Database): Promise<Snapshot[]> {
   return results.map(toSnapshot);
 }
 
+// A model's figure as stored beside a snapshot (src/prices/tiers.ts); `free`:
+// a free model's, at 0, which the lines do not count.
+export interface StoredFigure extends Figure {
+  provider: Provider;
+  model: string;
+  free: boolean;
+}
+
 // The header, its rows, OpenRouter's model list read with them
-// (src/prices/openrouter.ts) and the pruning go in one batch, which D1 runs as
-// one transaction: a write that fails leaves the previous snapshot current.
+// (src/prices/openrouter.ts), each model's figure, the month's lines when
+// this refresh works them out, and the pruning go in one batch, which D1
+// runs as one transaction: a write that fails leaves the previous snapshot
+// current, and no lines point at a snapshot that was not stored.
 export async function writeSnapshot(
   db: D1Database,
-  s: { takenAt: string; status: "good" | "partial"; results: SourceResult[]; rows: PriceRow[]; catalog?: OpenRouterCatalog },
+  s: {
+    takenAt: string;
+    status: "good" | "partial";
+    results: SourceResult[];
+    rows: PriceRow[];
+    catalog?: OpenRouterCatalog;
+    figures?: StoredFigure[];
+    lines?: Lines;
+  },
 ): Promise<number> {
   const header = db
     .prepare("INSERT INTO price_snapshots (taken_at, status, results) VALUES (?, ?, ?) RETURNING id")
@@ -72,6 +91,32 @@ export async function writeSnapshot(
         .bind(s.catalog.readAt, JSON.stringify(s.catalog)),
     );
   }
+  const figure = db.prepare(
+    `INSERT INTO model_price_figures (snapshot_id, provider, model, usd_per_mtok, basis, free, hosts, input_min, input_max,
+       output_min, output_max, read_at)
+     SELECT (SELECT max(id) FROM price_snapshots), j.value ->> 0, j.value ->> 1, j.value ->> 2, j.value ->> 3, j.value ->> 4,
+       j.value ->> 5, j.value ->> 6, j.value ->> 7, j.value ->> 8, j.value ->> 9, j.value ->> 10
+     FROM json_each(?1) AS j`,
+  );
+  const figures = s.figures ?? [];
+  for (let i = 0; i < figures.length; i += ROWS_PER_INSERT) {
+    const chunk = figures.slice(i, i + ROWS_PER_INSERT).map((f) => [
+      f.provider, f.model, f.usd, f.basis, f.free ? 1 : 0, f.hosts, f.input?.min ?? null, f.input?.max ?? null,
+      f.output?.min ?? null, f.output?.max ?? null, f.readAt,
+    ]);
+    statements.push(figure.bind(JSON.stringify(chunk)));
+  }
+  if (s.lines) {
+    const l = s.lines;
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO strength_lines (month, lower_usd, upper_usd, lower_raw, upper_raw, models, snapshot_id, computed_at)
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, max(id), ?7 FROM price_snapshots WHERE true ON CONFLICT (month) DO NOTHING`,
+        )
+        .bind(l.month, l.lower, l.upper, l.lowerRaw, l.upperRaw, l.models, l.computedAt),
+    );
+  }
   // Older snapshots beyond the kept number go, with their rows and lists. The
   // tables the previous Worker wrote (price_rows, bedrock_catalogs) are
   // pruned with them too, until a later release drops those tables.
@@ -79,6 +124,7 @@ export async function writeSnapshot(
     db.prepare(`DELETE FROM ${table} WHERE snapshot_id <= (SELECT max(id) FROM price_snapshots) - ?`).bind(SNAPSHOTS_KEPT);
   statements.push(
     prune("model_price_rows"),
+    prune("model_price_figures"),
     prune("openrouter_catalogs"),
     prune("price_rows"),
     prune("bedrock_catalogs"),
@@ -100,6 +146,51 @@ const toRow = (r: RowRecord): PriceRow => ({
   longPrompt: r.long_prompt === 1, batch: r.batch === 1, usdPerMTok: r.usd_per_mtok, source: r.source,
   dateRead: r.date_read, stale: r.stale === 1, disagreement: r.disagreement === 1,
 });
+
+type FigureRecord = {
+  provider: Provider; model: string; usd_per_mtok: number; basis: Basis; free: number; hosts: number;
+  input_min: number | null; input_max: number | null; output_min: number | null; output_max: number | null; read_at: string;
+};
+const toFigure = (r: FigureRecord): StoredFigure => ({
+  provider: r.provider, model: r.model, usd: r.usd_per_mtok, basis: r.basis, free: r.free === 1, hosts: r.hosts,
+  ...(r.input_min !== null && r.input_max !== null ? { input: { min: r.input_min, max: r.input_max } } : {}),
+  ...(r.output_min !== null && r.output_max !== null ? { output: { min: r.output_min, max: r.output_max } } : {}),
+  readAt: r.read_at,
+});
+
+// Every model's figure stored beside a snapshot; none for a snapshot the
+// previous Worker wrote.
+export async function readFigures(db: D1Database, snapshotId: number): Promise<StoredFigure[]> {
+  const { results } = await db.prepare("SELECT * FROM model_price_figures WHERE snapshot_id = ?").bind(snapshotId).all<FigureRecord>();
+  return results.map(toFigure);
+}
+
+// One model's figure beside a snapshot, and whether the snapshot has any.
+export async function readFigure(
+  db: D1Database,
+  snapshotId: number,
+  key: { provider: string; model: string },
+): Promise<{ figure?: StoredFigure; any: boolean }> {
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM model_price_figures WHERE snapshot_id = ?1 AND provider = ?2 AND model = ?3
+       UNION ALL SELECT * FROM (SELECT * FROM model_price_figures WHERE snapshot_id = ?1 LIMIT 1)`,
+    )
+    .bind(snapshotId, key.provider, key.model)
+    .all<FigureRecord>();
+  const figure = results.find((r) => r.provider === key.provider && r.model === key.model);
+  return { ...(figure ? { figure: toFigure(figure) } : {}), any: results.length > 0 };
+}
+
+type LinesRecord = { month: string; lower_usd: number; upper_usd: number; lower_raw: number; upper_raw: number; models: number; computed_at: string };
+
+// The newest month's lines, if any month has them.
+export async function readLatestLines(db: D1Database): Promise<Lines | undefined> {
+  const r = await db.prepare("SELECT * FROM strength_lines ORDER BY month DESC LIMIT 1").first<LinesRecord>();
+  return r
+    ? { month: r.month, lower: r.lower_usd, upper: r.upper_usd, lowerRaw: r.lower_raw, upperRaw: r.upper_raw, models: r.models, computedAt: r.computed_at }
+    : undefined;
+}
 
 // OpenRouter's model list stored with a snapshot, if one was.
 export async function readStoredCatalog(db: D1Database, snapshotId: number): Promise<OpenRouterCatalog | undefined> {

@@ -74,7 +74,8 @@
 // prices, so a call priced from the table (when OpenRouter's reply reports no
 // cost, src/proxy/proxy.ts) never counts less than OpenRouter can charge.
 
-import { OPENROUTER_MODELS_URL } from "./sources";
+import { OPENROUTER_MODELS_URL, openRouterEndpointsUrl } from "./sources";
+import type { Host } from "./tiers";
 import type { PriceRow, SourceRead, TokenKind } from "./types";
 
 export interface OpenRouterModel {
@@ -335,4 +336,72 @@ export async function readOpenRouter(fetcher: typeof fetch, now: Date): Promise<
   } catch (error) {
     return { read: { source: "openrouter-models", ok: false, error: error instanceof Error ? error.message : String(error) } };
   }
+}
+
+// One model's hosts, from OpenRouter's endpoints list (`GET
+// /api/v1/models/<id>/endpoints`, no key): `data.endpoints`, each host with
+// its own `pricing` (the models API's fields, priced by the same standard
+// rule, modelPrices), `service_tier` (null at standard speed; `flex`,
+// `priority` and `ultrafast` otherwise), `supported_parameters` and `status`
+// (0 when up; -2 and -5 seen). All 412 tool-use text models answered it on
+// 2026-11-28 (data/cos-models-tier-ranges/report.md). A host with no input or
+// output price is left out.
+export function parseHosts(body: unknown): Host[] {
+  const list = (body as { data?: { endpoints?: unknown } } | null)?.data?.endpoints;
+  if (!Array.isArray(list)) throw new Error("the endpoints API answered without an `endpoints` list");
+  return list.flatMap((e): Host[] => {
+    if (!e || typeof e !== "object") return [];
+    const h = e as { pricing?: unknown; service_tier?: unknown; supported_parameters?: unknown; status?: unknown };
+    const pricing = h.pricing && typeof h.pricing === "object" ? (h.pricing as Record<string, unknown>) : {};
+    const { standard } = modelPrices(pricing);
+    if (standard.input === undefined || standard.output === undefined) return [];
+    return [{
+      input: standard.input,
+      output: standard.output,
+      standard: h.service_tier === null || h.service_tier === undefined || h.service_tier === "",
+      tools: Array.isArray(h.supported_parameters) && h.supported_parameters.includes("tools"),
+      up: h.status === undefined || h.status === 0,
+    }];
+  });
+}
+
+// One model's hosts, or undefined when its endpoints list could not be read:
+// a busy answer (429 or 5xx) or no answer is tried once more after `pauseMs`.
+export async function readHosts(fetcher: typeof fetch, model: string, pauseMs = 1000): Promise<Host[] | undefined> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let retry = true;
+    try {
+      const response = await fetcher(openRouterEndpointsUrl(model), { headers: { accept: "application/json" } });
+      if (response.ok) return parseHosts(await response.json());
+      await response.body?.cancel();
+      retry = response.status === 429 || response.status >= 500;
+    } catch (error) {
+      // A malformed list is no answer worth asking again for.
+      if (error instanceof Error && error.message.startsWith("the endpoints API")) return undefined;
+    }
+    if (!retry) return undefined;
+    if (attempt === 0 && pauseMs > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs));
+  }
+  return undefined;
+}
+
+// How many endpoints lists are read at once: a Worker keeps at most six
+// connections waiting for answers (https://developers.cloudflare.com/workers/platform/limits/,
+// "Simultaneous open connections", read 2026-11-28).
+export const HOST_READS_AT_ONCE = 6;
+
+// The hosts of each of `models`, read HOST_READS_AT_ONCE at a time; a model
+// whose list could not be read is absent.
+export async function readAllHosts(fetcher: typeof fetch, models: readonly string[], pauseMs = 1000): Promise<Map<string, Host[]>> {
+  const out = new Map<string, Host[]>();
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < models.length) {
+      const model = models[next++]!;
+      const hosts = await readHosts(fetcher, model, pauseMs);
+      if (hosts) out.set(model, hosts);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(HOST_READS_AT_ONCE, models.length) }, worker));
+  return out;
 }

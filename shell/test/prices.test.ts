@@ -4,11 +4,14 @@ import { blockedReason, everyPriceZero, isTrulyFreeTextModel, modelPrices, parse
 import { displayRows, renderPriceTablePage } from "../src/prices/page";
 import { mergeRows, refreshPrices } from "../src/prices/refresh";
 import { currentSnapshot, readCurrentCatalog, readSnapshotRows, recentAlerts, rollBackLatestSnapshot } from "../src/prices/store";
-import { modelTier, tierFromInputPrice } from "../src/prices/tiers";
+import { readStrength } from "../src/prices/strength";
 import { fakeFetch, MODELS } from "./fake-sources";
 import { row } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T06:00:00Z");
+// The fixture's models a figure tiers from their hosts: priced, with tool use,
+// neither free nor a router.
+const TIERED_PAID = ["anthropic/claude-haiku-5.5", "anthropic/claude-sonnet-5.5", "deepseek/deepseek-v4.1-flash-1017", "mistralai/mistral-nemo", "openai/gpt-6-luna"];
 const LATER = new Date("2026-11-28T06:00:00Z");
 
 describe("OpenRouter's model list as the price table", () => {
@@ -131,9 +134,12 @@ describe("the daily refresh", () => {
   it("stores a snapshot with OpenRouter's rows and model list, and nothing else", async () => {
     const fetcher = fakeFetch();
     const { snapshotId, results } = await refreshPrices({ db: env.DB, fetcher, now: NOW });
-    expect(fetcher.sent.map((s) => s.url)).toEqual(["https://openrouter.ai/api/v1/models"]);
-    // No key is sent to read the public list.
-    expect(fetcher.sent[0]!.headers.authorization).toBeUndefined();
+    // The models list, then the endpoints list of each priced model with tool
+    // use that is neither free nor a router, for its strength.
+    expect(fetcher.sent[0]!.url).toBe("https://openrouter.ai/api/v1/models");
+    expect(fetcher.sent.slice(1).map((s) => s.url).sort()).toEqual(TIERED_PAID.map((m) => `https://openrouter.ai/api/v1/models/${m}/endpoints`));
+    // No key is sent to read the public lists.
+    expect(fetcher.sent.every((s) => s.headers.authorization === undefined)).toBe(true);
     expect(results).toEqual([expect.objectContaining({ source: "openrouter-models", ok: true, unmapped: 4 })]);
     expect((await currentSnapshot(env.DB))!.id).toBe(snapshotId);
     expect((await readSnapshotRows(env.DB, snapshotId)).every((r) => r.provider === "openrouter" && r.region === "global")).toBe(true);
@@ -168,18 +174,7 @@ describe("the daily refresh", () => {
   });
 });
 
-describe("tiers and merging", () => {
-  it("draws the bands at $0.50 and $2.50", () => {
-    expect(tierFromInputPrice(0.4999)).toBe("Smallest");
-    expect(tierFromInputPrice(0.5)).toBe("Middle");
-    expect(tierFromInputPrice(2.5)).toBe("Strongest");
-  });
-
-  it("takes a model's tier from its standard input price, never a long-prompt one", () => {
-    expect(modelTier("openrouter", [row("m", "input", 0.1), row("m", "input", 0.6, true), row("m", "output", 9)])).toBe("Smallest");
-    expect(modelTier("openrouter", [row("m", "output", 9)])).toBeUndefined();
-  });
-
+describe("merging", () => {
   it("keeps the higher of two prices for one row, flagged", () => {
     const { rows, disagreements } = mergeRows([row("m", "input", 1), row("m", "input", 2)]);
     expect(rows).toEqual([expect.objectContaining({ usdPerMTok: 2, disagreement: true })]);
@@ -192,7 +187,7 @@ describe("Admin · Price table", () => {
     await refreshPrices({ db: env.DB, fetcher: fakeFetch(), now: NOW });
     const snapshot = (await currentSnapshot(env.DB))!;
     const rows = await readSnapshotRows(env.DB, snapshot.id);
-    const html = renderPriceTablePage({ snapshot, rows, alerts: await recentAlerts(env.DB), sort: { column: "provider", dir: "asc" } });
+    const html = renderPriceTablePage({ snapshot, rows, alerts: await recentAlerts(env.DB), sort: { column: "provider", dir: "asc" }, strength: await readStrength(env.DB, snapshot) });
     expect(html).toContain("OpenRouter models API: ok");
     expect(html).toContain("openai/gpt-6-luna");
     expect(html).toContain("openrouter.ai</a>, read 2026-11-27");

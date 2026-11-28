@@ -91,8 +91,11 @@ reading "N shown". An address with `strength=<Smallest|Middle|Strongest>`
 strength's models (in that state), as Model for each task links a strength
 with no Ready model; the count line names it, with Show all. None of these
 sends a request. Each row shows the model's name and maker, its input and
-output list price per million tokens, its strength from the input price
-(Smallest, Middle, Strongest), a Free label on a free model and "Other fees"
+output list price per million tokens (each side's range where its standard
+tool hosts' prices differ), its strength (Smallest, Middle, Strongest) from
+its typical price, input and output blended 10:1 at its middle host, against
+the month's two lines (`prices/tiers.ts`; the sentence under the table states
+them), a Free label on a free model and "Other fees"
 on one at $0 a token that is not free, Needs credit or Failed when used
 where it is so, and **Test**. Test is optional: it runs the model's own test
 call once through the proxy (`sendTestCall`, task `test_call`), capped at 16
@@ -155,8 +158,8 @@ so that they get added in the "Models for each task"?"): a Ready model whose
 strength chip (`prices/tiers.ts` `strengthChip`, the chip
 its Providers row shows: its tier, or "Other fees" for a model at $0 a token
 that is not free) is the task's tier (`tasks.ts` `offeredFor`), the cheapest
-first. Each reads as its row does: name, ID, and price per million input and
-output tokens, or Free. The models are grouped under their provider, so
+first by the typical price its strength comes from. Each reads as its row
+does: name, ID, and price per million input and output tokens, or Free. The models are grouped under their provider, so
 choosing one chooses the provider and the model (the owner, 2026-11-27: "for
 each kind of task : choose the provider and the model"); the provider list
 has one entry today, OpenRouter, and another provider's Ready models join

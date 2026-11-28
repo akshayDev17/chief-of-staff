@@ -1,8 +1,9 @@
 // A fetch that answers OpenRouter's addresses with no network: its public
 // model list from the saved 2026-11-27 entries in fixtures/, the per-account
 // list, the PKCE code exchange, the current key's figures and Chat
-// Completions, each overridable. Every request it saw is kept, so a test can
-// check what was sent.
+// Completions, each overridable; a model's endpoints list answers 404 (its
+// figure is then its headline price) unless overridden. Every request it saw
+// is kept, so a test can check what was sent.
 import models from "./fixtures/openrouter-models.json";
 
 export interface Sent {
@@ -12,7 +13,7 @@ export interface Sent {
   body: unknown;
 }
 
-export type Overrides = Partial<Record<"models" | "userModels" | "keys" | "chat" | "currentKey", (sent: Sent) => Response | Promise<Response>>>;
+export type Overrides = Partial<Record<"models" | "userModels" | "keys" | "chat" | "currentKey" | "endpoints", (sent: Sent) => Response | Promise<Response>>>;
 
 // GET /api/v1/key's reply for the issued key: its figures this month, on an
 // account that has bought credits.
@@ -48,6 +49,7 @@ export function fakeFetch(overrides: Overrides = {}): typeof fetch & { sent: Sen
     sent.push(s);
     const url = new URL(request.url);
     if (url.href === "https://openrouter.ai/api/v1/models") return overrides.models ? overrides.models(s) : json(models);
+    if (/^\/api\/v1\/models\/.+\/endpoints$/.test(url.pathname)) return overrides.endpoints ? overrides.endpoints(s) : new Response("not found", { status: 404 });
     if (url.pathname === "/api/v1/models/user") {
       if (overrides.userModels) return overrides.userModels(s);
       if (s.headers.authorization !== `Bearer ${ISSUED_KEY}`) return json({ error: { code: 401, message: "User not found." } }, 401);

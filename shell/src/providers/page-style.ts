@@ -175,6 +175,7 @@ ${MAKER_FILTER_CSS}
 .meta.left .link { white-space: nowrap; }
 .meta.why .fw { color: var(--negative); } /* Failed when used: the one red word on the row */
 .price { grid-column: 2; grid-row: 1; text-align: right; font-size: 14px; white-space: nowrap; }
+.price.range .sep { color: var(--muted); }
 .tier { grid-column: 2; grid-row: 2; text-align: right; font-size: var(--fs-small); line-height: 18px; color: var(--muted); white-space: nowrap; }
 .capcell { grid-row: 1 / span 2; align-self: center; }
 .capbtn { gap: 6px; padding: 0 10px; }
@@ -191,6 +192,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .empty p { flex: 1 1 220px; }
 .list-foot { padding: 10px 16px 14px; border-top: 1px solid var(--rule); font-size: var(--fs-small); color: var(--muted); }
 details > summary { cursor: pointer; color: var(--accent); width: fit-content; font-size: var(--fs-small); }
+.strength-note { margin-bottom: 8px; max-width: 72ch; }
 .list-foot ul { margin-top: 8px; padding-left: 18px; list-style: disc; display: grid; gap: 4px; }
 
 .result { padding: 12px 14px; border-radius: var(--radius-card); background: var(--raised); border: 1px solid var(--border); font-size: 14px; display: grid; gap: 8px; }
@@ -244,6 +246,8 @@ details > summary { cursor: pointer; color: var(--accent); width: fit-content; f
   .row .tier { display: none; }
   .acts-row { grid-column: 2; grid-row: 2; gap: 4px; }
   .price.capcell { grid-row: 1; }
+  .price.range { display: grid; }
+  .price.range .sep { display: none; }
   .tbtn { width: 32px; min-height: 32px; padding: 0; }
   .tbtn .lbl { display: none; }
   .tbtn .ico { display: inline-flex; }

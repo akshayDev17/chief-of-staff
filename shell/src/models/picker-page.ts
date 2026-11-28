@@ -65,10 +65,11 @@
 // page comes back with the result under the row.
 
 import { esc } from "../prices/page";
-import type { Tier } from "../prices/tiers";
+import { readLinesInForce } from "../prices/strength";
+import { strengthSentence, type Lines, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
 import { PROVIDERS_PATH, TASK_MODELS_PATH, USAGE_PATH } from "../paths";
-import { ICON, rowAnchor, usd, viewQuery } from "../providers/models-table";
+import { ICON, priceText, rowAnchor, viewQuery } from "../providers/models-table";
 import { removedText } from "../providers/check";
 import { PAGE_STYLE } from "../providers/page-style";
 import type { Viewer } from "../providers/page";
@@ -128,6 +129,8 @@ export interface PickerPageInput {
   // The provider's name for a model no longer offered, where its list has one.
   nameOf?: (m: { provider: Provider; model: string }) => string | undefined;
   toReady?: ToReady;
+  // The strength lines in force (prices/tiers.ts), for How it works.
+  lines?: Lines;
   problem?: string;
   said?: string;
   // A Try it's result, shown under its task's row.
@@ -143,7 +146,7 @@ function modelView(m: Offered | Ref, input: PickerPageInput, tag = ""): string {
   const price = o?.free
     ? `<span class="pill free" title="${esc(FREE_NOTE)}">Free</span>`
     : o?.inputUsd !== undefined && o.outputUsd !== undefined
-      ? `<span class="ov-pr num">${usd(o.inputUsd)} / ${usd(o.outputUsd)}</span>`
+      ? `<span class="ov-pr num">${priceText({ input: o.inputUsd, output: o.outputUsd })}</span>`
       : "";
   const tool = input.noToolUse(m) ? `<span class="ov-x">no tool use</span>` : "";
   return `<span class="ov"><span class="ov-l1"><span class="ov-nm">${esc(name)}</span>${price}</span><span class="ov-l2"><span class="ov-id">${esc(m.model)}</span>${tool}${tag}</span></span>`;
@@ -153,7 +156,7 @@ function modelView(m: Offered | Ref, input: PickerPageInput, tag = ""): string {
 function optionText(m: Offered | Ref, input: PickerPageInput, note = ""): string {
   const o = "inputUsd" in m || "free" in m ? (m as Offered) : undefined;
   const name = o?.name ?? input.nameOf?.(m) ?? m.model;
-  const price = o?.free ? FREE_NOTE : o?.inputUsd !== undefined && o.outputUsd !== undefined ? `${usd(o.inputUsd)} / ${usd(o.outputUsd)} per M tokens` : "";
+  const price = o?.free ? FREE_NOTE : o?.inputUsd !== undefined && o.outputUsd !== undefined ? `${priceText({ input: o.inputUsd, output: o.outputUsd })} per M tokens` : "";
   return [name, m.model, price, input.noToolUse(m) ? "no tool use" : "", note].filter(Boolean).join(" · ");
 }
 
@@ -486,7 +489,7 @@ ${rows}
 <div class="tasks-foot"><details><summary>How it works</summary><ul>
 <li>Each list holds your Ready models of the task's strength, the cheapest first. No test needed.</li>
 <li>When the main model fails a call, its fallback answers it, and the model's row on Providers and models says why.</li>
-<li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50.</li>
+<li>${esc(strengthSentence(input.lines, input.providerName(PROVIDERS[0]!)))}</li>
 <li>A free model is never proposed. Choose it in its list${free ? ", or with the one tap" : ""}.</li>
 <li>Try it sends one short made-up prompt to the task's saved model, its fallback if that fails. It costs a real call, counts toward your budget and never changes your choice.</li>
 ${terms}
@@ -681,8 +684,8 @@ export async function handleTaskModels(
     const credits = (p: Provider) => plugins[p]?.connect.guide.credits;
     // Only a strength with fewer than two Ready models links to what makes more Ready.
     const short = TASKS.some((t) => offeredFor(t, offered).length < 2);
-    const [nameOf, toReady] = await Promise.all([readModelNames(db), short ? readToReady(db, plugins, userId) : undefined]);
-    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, credits, nameOf, toReady, ...flash };
+    const [nameOf, toReady, lines] = await Promise.all([readModelNames(db), short ? readToReady(db, plugins, userId) : undefined, readLinesInForce(db)]);
+    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, credits, nameOf, toReady, ...(lines ? { lines } : {}), ...flash };
   };
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
   // After an action: in place, the page's <main> with what it said; without

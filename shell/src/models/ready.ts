@@ -35,6 +35,7 @@
 import { readConnection, readHasCredit, saveHasCredit } from "../proxy/connections";
 import type { AccountInfo, PlainReason, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 import type { ProxyOutcome } from "../proxy/proxy";
+import type { Lines } from "../prices/tiers";
 import { PROVIDERS, type Provider } from "../prices/types";
 import { latestTestWrite, readLatestTests, type LatestTest } from "./latest-tests";
 import { blockKind, listOffer, testRecord, type OfferRow, type Refused } from "./test-model";
@@ -62,6 +63,8 @@ export interface Table {
   rows: TableRow[];
   // The account has credit left, by its last live read.
   credit: boolean;
+  // The strength lines the rows' tiers go by (prices/tiers.ts).
+  lines?: Lines;
 }
 
 // Has the account credit left, by the account line's figures.
@@ -96,13 +99,13 @@ export async function readAccountLive(db: D1Database, plugin: ProviderPlugin, us
 export async function readTable(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<Table> {
   const plugin = plugins[provider];
   if (!plugin) return { rows: [], credit: false };
-  const [offers, latest, credit] = await Promise.all([listOffer(db, plugins, userId, provider), readLatestTests(db, userId, provider), readCredit(db, plugin, userId)]);
+  const [{ rows: offers, lines }, latest, credit] = await Promise.all([listOffer(db, plugins, userId, provider), readLatestTests(db, userId, provider), readCredit(db, plugin, userId)]);
   const rows = offers.map((r): TableRow => {
     const l = latest.get(r.model);
     const current = l && !l.earlierKey ? l : undefined;
     return { ...r, provider, state: rowState(r, credit), ...(current ? { latest: current } : {}) };
   });
-  return { rows, credit };
+  return { rows, credit, ...(lines ? { lines } : {}) };
 }
 
 // The table's rows at every provider a plug-in serves, in provider order.

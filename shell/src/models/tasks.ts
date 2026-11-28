@@ -98,7 +98,9 @@ export const taskById = (id: string): Task | undefined => TASKS.find((t) => t.id
 // One of the models the provider offers the user, as its row on Providers
 // shows it: the provider's name for it, its strength chip (`tier`; none and
 // `otherFees` for a model at $0 a token that is not free), its list price per
-// million input and output tokens (a router's is its cap), whether it is free
+// million input and output tokens (a router's is its cap), the typical price
+// its strength comes from
+// (prices/tiers.ts; `typicalUsd`), whether it is free
 // (prices/openrouter.ts isTrulyFreeTextModel), and its row's state
 // (models/ready.ts rowState): only a Ready one is offered to a task. `router`:
 // priced per call by the model it picks, so its price is the user's cap, a
@@ -113,6 +115,7 @@ export interface Offered {
   otherFees?: boolean;
   inputUsd?: number;
   outputUsd?: number;
+  typicalUsd?: number;
   free?: boolean;
   router?: true;
 }
@@ -167,6 +170,7 @@ const offeredOf = (r: TableRow): Offered => {
     ...(r.name ? { name: r.name } : {}),
     ...(chip === "Other fees" ? { otherFees: true } : chip ? { tier: chip } : {}),
     ...(r.price ? { inputUsd: r.price.input, outputUsd: r.price.output } : {}),
+    ...(r.typicalUsd !== undefined ? { typicalUsd: r.typicalUsd } : {}),
     free: r.free,
     ...(r.router ? { router: true as const } : {}),
   };
@@ -193,11 +197,19 @@ export async function readOffered(db: D1Database, plugins: PluginRegistry, userI
 }
 
 // The models `task` offers, among `models`: the Ready ones of its strength,
-// the cheapest first (by input, then output price), ties by name.
+// the cheapest first by the typical price their strength comes from (a free
+// model's is 0), then by input and output price, ties by ID.
 export function offeredFor(task: Task, models: Offered[]): Offered[] {
+  const typical = (m: Offered) => (m.free ? 0 : (m.typicalUsd ?? Infinity));
   return models
     .filter((m) => m.state === "ready" && ofStrength(task, m))
-    .sort((a, b) => (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) || (a.outputUsd ?? Infinity) - (b.outputUsd ?? Infinity) || modelKey(a).localeCompare(modelKey(b)));
+    .sort(
+      (a, b) =>
+        typical(a) - typical(b) ||
+        (a.inputUsd ?? Infinity) - (b.inputUsd ?? Infinity) ||
+        (a.outputUsd ?? Infinity) - (b.outputUsd ?? Infinity) ||
+        modelKey(a).localeCompare(modelKey(b)),
+    );
 }
 
 // The cheapest model of the task's strength among `models`; never a router

@@ -11,7 +11,8 @@
 
 import { SOURCES } from "./sources";
 import type { Snapshot } from "./store";
-import { modelTiers, tierKey } from "./tiers";
+import { strengthTier, type Strength } from "./strength";
+import { strengthSentence } from "./tiers";
 import type { PriceRow, Provider } from "./types";
 
 export type SortColumn = "provider" | "model" | "input" | "output";
@@ -154,6 +155,8 @@ export interface PageInput {
   rows: PriceRow[];
   alerts: Array<{ createdAt: string; kind: string; detail: string }>;
   sort: { column: SortColumn; dir: SortDir };
+  // The current snapshot's strength figures and lines (strength.ts).
+  strength: Strength;
 }
 
 function refreshBanner(snapshot: Snapshot | undefined): string {
@@ -171,10 +174,9 @@ function refreshBanner(snapshot: Snapshot | undefined): string {
 
 export function renderPriceTablePage(input: PageInput): string {
   const rows = sortRows(displayRows(input.rows), input.sort.column, input.sort.dir);
-  const tiers = modelTiers(input.rows);
   const body = rows
     .map((r) => {
-      const tier = tiers.get(tierKey(r.provider, r.model)) ?? "–";
+      const tier = strengthTier(input.strength, r) ?? "–";
       const source = r.sources.map((s) => esc(SOURCES[s as keyof typeof SOURCES]?.label ?? s)).join("; ");
       const flags = [
         r.stale ? `<span class="pill warn">refresh failed: last good price kept</span>` : "",
@@ -186,7 +188,7 @@ export function renderPriceTablePage(input: PageInput): string {
 <td data-l="Input / M">${r.input === undefined ? `<span class="pill warn">no price yet</span>` : usd(r.input)}</td>
 <td data-l="Output / M">${usd(r.output)}</td>
 <td data-l="Cached, cache write, long prompt, batch / M">${extras(r)}</td>
-<td data-l="Strength (from the input price)">${tier}</td>
+<td data-l="Strength">${tier}</td>
 <td data-l="Source">${source}</td>
 <td data-l="Date read">${nbDate(r.dateRead)} ${flags}</td>
 </tr>`;
@@ -225,14 +227,14 @@ ${header("Model", "model", input.sort)}
 ${header("Input / M", "input", input.sort)}
 ${header("Output / M", "output", input.sort)}
 <th>Cached, cache write, long prompt, batch / M</th>
-<th>Strength (from the input price)</th>
+<th>Strength</th>
 <th>Source</th>
 <th>Date read</th>
 </tr></thead>
 <tbody>
 ${body || `<tr><td colspan="8">No prices yet.</td></tr>`}
 </tbody></table></div>
-<p class="small muted">Prices are OpenRouter's list prices in USD per million tokens, from its models API. OpenRouter routes each call itself, so every row is global. Where OpenRouter prices a model higher above a prompt length or at some times of day, the long-prompt column and the standard columns show the dearest of those prices: a call is costed from this table only when OpenRouter's reply reports no cost, and then never below what OpenRouter can charge. Each model's strength comes from its standard input price: Smallest under $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up; nobody sets it by hand.</p>
+<p class="small muted">Prices are OpenRouter's list prices in USD per million tokens, from its models API. OpenRouter routes each call itself, so every row is global. Where OpenRouter prices a model higher above a prompt length or at some times of day, the long-prompt column and the standard columns show the dearest of those prices: a call is costed from this table only when OpenRouter's reply reports no cost, and then never below what OpenRouter can charge. ${esc(strengthSentence(input.strength.lines, "OpenRouter"))}</p>
 ${alerts}
 <section class="card"><h2>Rate limits, beside the table</h2>
 <p class="small">${esc(RATE_LIMITS.limits)} <a href="${esc(RATE_LIMITS.page)}">${esc(new URL(RATE_LIMITS.page).hostname)}</a>, read ${esc(RATE_LIMITS.read)}.</p></section>

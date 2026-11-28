@@ -56,7 +56,8 @@
 import { AppNotConfigured } from "../app-config";
 import type { PriceAnswer } from "../prices/lookup";
 import { currentSnapshot, readModelRows } from "../prices/store";
-import { modelTier, tierFromInputPrice, type Tier } from "../prices/tiers";
+import { readModelStrength } from "../prices/strength";
+import type { Tier } from "../prices/tiers";
 import { addAlertOncePerDay } from "../prices/store";
 import { readPriceCap } from "../models/price-caps";
 import type { Provider, TokenKind } from "../prices/types";
@@ -159,8 +160,8 @@ export function costOf(usage: Usage, short: Prices, long: Prices): Cost {
 }
 
 // The model's list prices at its location, at the short- and long-prompt
-// rows, and its tier, from one read of its rows in the current snapshot. Each
-// kind is the dearest row the table has for it there.
+// rows, from one read of its rows in the current snapshot, and its tier
+// (prices/strength.ts). Each kind is the dearest row the table has for it there.
 export async function modelPrices(db: D1Database, { provider, model, location }: Pick<ModelChoice, "provider" | "model" | "location">): Promise<{ short: Prices; long: Prices; tier?: Tier }> {
   const snapshot = await currentSnapshot(db);
   const rows = snapshot ? await readModelRows(db, snapshot.id, { provider, model }) : [];
@@ -173,7 +174,8 @@ export async function modelPrices(db: D1Database, { provider, model, location }:
     }
     return out;
   };
-  return { short: pick(false), long: pick(true), tier: modelTier(provider, rows) };
+  const { tier } = await readModelStrength(db, { provider, model });
+  return { short: pick(false), long: pick(true), ...(tier ? { tier } : {}) };
 }
 
 const RESUMES = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", timeZone: "UTC" });
@@ -212,7 +214,7 @@ async function attempt(
     const at = (usdPerMTok: number) => ({ usdPerMTok, source: plugin.priceSource[0]!, dateRead: (cap.setAt ?? "").slice(0, 10), stale: false });
     prices = { input: at(cap.input), output: at(cap.output) };
     longPrices = {};
-    tier = tierFromInputPrice(cap.input);
+    tier = (await readModelStrength(db, { provider, model, cap })).tier;
     maxPrice = { inputUsdPerMTok: cap.input, outputUsdPerMTok: cap.output };
   }
   if (!prices.input || !prices.output) return refuse("no_price", `${model} has no list price at ${PROVIDER_NAMES[provider]} (${location}) yet`);

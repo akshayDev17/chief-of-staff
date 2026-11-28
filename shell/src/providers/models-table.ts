@@ -39,7 +39,7 @@ import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { esc } from "../prices/page";
 import type { Dropped } from "../prices/openrouter";
 import { makerKey, makerRowAttrs, nameMakers } from "../models/maker-filter";
-import { strengthChip } from "../prices/tiers";
+import { strengthChip, strengthSentence, type Lines, type Range } from "../prices/tiers";
 import { DEFAULT_CAP } from "../models/price-caps";
 import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type Refused, type TestRefusal } from "../models/test-model";
 import type { RowState, TableRow } from "../models/ready";
@@ -143,6 +143,8 @@ export interface ModelsTableInput {
   step?: Step;
   // A problem from the last request, shown above the table.
   problem?: { text: string; details?: string };
+  // The strength lines the rows' chips go by (prices/tiers.ts).
+  lines?: Lines;
   now: Date;
 }
 
@@ -160,6 +162,15 @@ export const usd = (n: number): string => {
   const [whole, frac = ""] = String(Number(n.toPrecision(12))).split(".");
   return `$${whole}.${frac.padEnd(2, "0")}`;
 };
+
+// A model's price per million tokens as its row shows it: input / output,
+// or, where its standard tool hosts differ in price (prices/tiers.ts), each
+// side's range ("$0.07–$1.20 in · $1.40–$4.40 out").
+export function priceText(p: { input: number; output: number }, ranges?: { input: Range; output: Range }): string {
+  if (!ranges) return `${usd(p.input)} / ${usd(p.output)}`;
+  const span = (r: Range) => (r.min === r.max ? usd(r.min) : `${usd(r.min)}–${usd(r.max)}`);
+  return `${span(ranges.input)} in · ${span(ranges.output)} out`;
+}
 
 export const formatCost = (n: number): string => {
   if (n === 0) return "$0";
@@ -348,7 +359,10 @@ function priceHtml(r: TableRow, input: ModelsTableInput): string {
   }
   if (r.cap) return `<span class="price num" title="Price cap">≤ ${usd(r.cap.input)} / ${usd(r.cap.output)}</span>`;
   if (!r.price) return '<span class="price dash" aria-label="no price">–</span>';
-  return `<span class="price num">${usd(r.price.input)} / ${usd(r.price.output)}</span>`;
+  if (!r.ranges) return `<span class="price num">${priceText(r.price)}</span>`;
+  // Each side on its own line on a phone (page-style.ts).
+  const [inText, outText] = priceText(r.price, r.ranges).split(" · ");
+  return `<span class="price num range" title="Its hosts' prices differ"><span>${inText}</span><span class="sep"> · </span><span>${outText}</span></span>`;
 }
 
 // The row's strength chip (prices/tiers.ts strengthChip), none for a router
@@ -544,14 +558,14 @@ function footPart(input: ModelsTableInput): string {
   const free = terms && input.rows.some((r) => r.free)
     ? `<li>Free models work without credit. ${esc(terms.text)} ${terms.links.map((l) => newTab(l, "ext")).join(" · ")}</li>`
     : "";
-  return `<details><summary>About this list</summary><ul>
+  return `<p class="strength-note">${esc(strengthSentence(input.lines, input.plugin.connect.guide.short))}</p>
+<details><summary>About this list</summary><ul>
 ${dropped}
 <li>Ready needs no test: your ${short} account's own list has the model, nothing blocks it, and it is free or your account has credit. Tasks choose among the Ready models.</li>
 <li>Credit is the account line's: credit bought, and the key's limit not used up. Add credits on ${short} and its paid models are Ready on your next visit.</li>
 <li>Test is optional: one call, to see a model answer now. A failed call, a task's own or a test's, marks its row until a later call works, and the model stays Ready; Try again tests it once.</li>
 <li>A model your ${short} settings leave out links those settings; Check again reads your account's list.</li>
 <li>A router priced per call by the model it picks takes a price cap, which gives it a price the budget stop can use: ${short} then picks only models at or under the cap, and none with a fee per search or per request.</li>
-<li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50, Strongest above.</li>
 <li>Free: gives only text and costs $0 on every price ${short} lists.</li>
 ${free}
 </ul></details>`;

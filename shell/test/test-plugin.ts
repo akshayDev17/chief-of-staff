@@ -7,6 +7,7 @@ import { ConnectProblem, ProviderRefusal, type AccountInfo, type ConnectionField
 import { vaultSecrets, type SecretStore } from "../src/providers/secrets";
 import { writeSnapshot } from "../src/prices/store";
 import { CATALOG_VERSION, type OpenRouterCatalog } from "../src/prices/openrouter";
+import type { Lines } from "../src/prices/tiers";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
 import { latestTestWrite } from "../src/models/latest-tests";
@@ -124,12 +125,22 @@ export const TEST_CATALOG: OpenRouterCatalog = {
   ],
 };
 
+// The month's strength lines (prices/tiers.ts) as a refresh stores them,
+// drawn so Test Luna ($0.14 typical: input and output blended 10:1) and Test
+// Mini ($0.32) are Smallest, a model at $1/$4 or $2/$8 ($1.27, $2.55) Middle
+// and Test Sonnet ($4.09) Strongest; a snapshot written with no lines of its
+// own keeps these.
+export const TEST_LINES: Lines = {
+  lower: 0.5, upper: 3, lowerRaw: 0.5, upperRaw: 3, models: 3, month: "2026-11", computedAt: "2026-11-27T06:00:00.000Z",
+};
+
 export const seedPrices = () =>
   writeSnapshot(env.DB, {
     takenAt: "2026-11-27T06:00:00Z",
     status: "good",
     results: [],
     catalog: TEST_CATALOG,
+    lines: TEST_LINES,
     rows: [
       row("test-sonnet", "input", 3),
       row("test-sonnet", "cached_input", 0.3),

@@ -52,8 +52,24 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   price yet"; the proxy reads a model's rows once per call
   (`modelPrices`, `src/proxy/proxy.ts`). `lookupTier(db, { provider, model })`
   returns the model's one tier.
-- **Tiers** come from the standard input price (`src/prices/tiers.ts`):
-  Smallest under $0.50, Middle $0.50 to under $2.50, Strongest $2.50 and up.
+- **Strength** (the tier, `src/prices/tiers.ts`, rule B90 of
+  `data/cos-models-tier-ranges/report.md`): each model's typical price is its
+  input and output price blended 10:1 at the median of its standard-speed
+  hosts that take tools and are up, from its endpoints list
+  (`GET /api/v1/models/<id>/endpoints`, no key). Two lines, the 33⅓rd and the
+  90th percentile of that price over every priced tool-use model that is
+  neither free nor a router, rounded to the ladder $0.10, $0.15, $0.20,
+  $0.30, $0.50, $0.75, $1, $1.50, ..., make Smallest, Middle and Strongest. A
+  free model is Smallest; a router's figure is the same blend of its cap. The
+  figures are stored beside each snapshot (`model_price_figures`,
+  `migrations/0016_add_strength_figures.sql`) and each month's lines in
+  `strength_lines`, worked out at the month's first daily refresh (or the
+  first refresh of all). Every reader goes through `src/prices/strength.ts`;
+  a snapshot with no figures takes its headline prices until a refresh.
+- **Host reads.** The daily refresh reads every tiered model's endpoints list,
+  six at a time; Refresh model list reads only the new ones, those whose
+  headline price changed and those last not read. A list that cannot be read
+  gives the model its headline price.
 - **Admin · Price table** is at `GET /chief-of-staff/admin/price-table`, owner
   only, behind the Cloudflare Access check (`src/access.ts`, T15). Beside the
   table, OpenRouter's rate limits as its limits page states them (no default

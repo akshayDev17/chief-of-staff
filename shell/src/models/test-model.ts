@@ -19,8 +19,9 @@
 // tool use among its supported parameters (a task's agent calls tools, so a
 // model without them is never choosable and never listed), read with the
 // price table (src/prices/openrouter.ts). Each row carries the model's
-// list price, the source and date read, and its tier from that price
-// (tiers.ts). A model the plug-in cannot call shows why and cannot be tested;
+// list price, the source and date read, its hosts' price ranges where they
+// differ, and its tier from its stored typical price and the month's lines
+// (prices/strength.ts; a router's from its cap). A model the plug-in cannot call shows why and cannot be tested;
 // one with no input and output price shows "no price yet" and cannot be
 // tested, because the budget stop needs a real price; the proxy refuses a
 // call to either. A router is priced at the user's price cap
@@ -35,8 +36,9 @@
 // reply naming another model than the one picked fails the test with a
 // plain reason.
 
-import { readCurrentCatalog, currentSnapshot, readSnapshotRows } from "../prices/store";
-import { modelTier, tierFromInputPrice, type Tier } from "../prices/tiers";
+import { readStoredCatalog, currentSnapshot, readSnapshotRows } from "../prices/store";
+import { readStrength, strengthKey, strengthTier } from "../prices/strength";
+import { capFigure, type Lines, type Range, type Tier } from "../prices/tiers";
 import type { PriceRow, Provider, SourceId } from "../prices/types";
 import { reasonText } from "../providers/check";
 import { readConnection } from "../proxy/connections";
@@ -53,7 +55,13 @@ export interface OfferRow {
   location: string;
   // `request`: the provider's fee per call, in USD per million calls, when it lists one.
   price?: { input: number; output: number; request?: number; source: SourceId; dateRead: string; stale: boolean };
+  // Its strength (prices/tiers.ts) and the typical price per million tokens
+  // it comes from: input and output blended 10:1 at its middle host, or a
+  // router's cap blended so.
   tier?: Tier;
+  typicalUsd?: number;
+  // Its standard tool hosts' input and output prices, where they differ.
+  ranges?: { input: Range; output: Range };
   // Free by the one rule (prices/openrouter.ts isTrulyFreeTextModel), from
   // the provider's model list.
   free: boolean;
@@ -124,10 +132,10 @@ export type TestOutcome = { kind: "passed"; model: string; test: TestResult } | 
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-// The price and tier of each model at its location, from one read of the
-// current snapshot: the dearest standard row of each kind there, so the
-// shown price is never below what the provider can charge.
-function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price" | "tier"> {
+// The price of each model at its location, from one read of the current
+// snapshot: the dearest standard row of each kind there, so the shown price
+// is never below what the provider can charge.
+function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price"> {
   const at = rows.filter((r) => !r.longPrompt && !r.batch && (r.region === location || r.deployment === location));
   const dearest = (kind: PriceRow["tokenKind"]) => at.filter((r) => r.tokenKind === kind).sort((a, b) => b.usdPerMTok - a.usdPerMTok)[0];
   const input = dearest("input");
@@ -144,37 +152,40 @@ function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price" | "
       dateRead: input.dateRead < output.dateRead ? input.dateRead : output.dateRead,
       stale: input.stale || output.stale,
     },
-    tier: modelTier(input.provider, rows),
   };
 }
 
 // Every model the provider's own list names and every model the price table
-// prices there, by ID, but those the provider lists with no tool use.
-export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<OfferRow[]> {
+// prices there, by ID, but those the provider lists with no tool use; and
+// the strength lines in force (prices/strength.ts).
+export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<{ rows: OfferRow[]; lines?: Lines }> {
   const plugin = plugins[provider];
-  if (!plugin) return [];
+  if (!plugin) return { rows: [] };
   const snapshot = await currentSnapshot(db);
-  const rows = snapshot ? (await readSnapshotRows(db, snapshot.id)).filter((r) => r.provider === provider) : [];
+  const allRows = snapshot ? await readSnapshotRows(db, snapshot.id) : [];
+  const catalog = snapshot ? await readStoredCatalog(db, snapshot.id) : undefined;
+  const strength = await readStrength(db, snapshot, { rows: allRows, ...(catalog ? { catalog } : {}) });
+  const rows = allRows.filter((r) => r.provider === provider);
   const rowsByModel = new Map<string, PriceRow[]>();
   for (const r of rows) rowsByModel.set(r.model, [...(rowsByModel.get(r.model) ?? []), r]);
-  const catalog = await readCurrentCatalog(db);
   const names = new Map((catalog?.models ?? []).map((m) => [m.id, m.name]));
   const free = new Set((catalog?.models ?? []).filter((m) => m.free).map((m) => m.id));
   const account = await readAccountList(db, userId, provider);
   const caps = await readPriceCaps(db, userId, provider);
   const ids = [...new Set([...names.keys(), ...rowsByModel.keys()])].filter((model) => plugin.connect.noToolUse?.(model) === undefined).sort(byText);
-  return ids.map((model) => {
+  const offers = ids.map((model) => {
     const location = plugin.connect.locations(model)[0] ?? "global";
     const name = names.get(model);
     const router = plugin.connect.isRouter?.(model) === true;
     const cap = router ? caps.get(model) : undefined;
     // A router's price is its cap: what the budget stop prices its calls at.
-    const priced: Pick<OfferRow, "price" | "tier"> = cap
-      ? {
-          price: { input: cap.input, output: cap.output, source: plugin.priceSource[0]!, dateRead: (cap.setAt ?? "").slice(0, 10), stale: false },
-          tier: tierFromInputPrice(cap.input),
-        }
+    const priced: Pick<OfferRow, "price"> = cap
+      ? { price: { input: cap.input, output: cap.output, source: plugin.priceSource[0]!, dateRead: (cap.setAt ?? "").slice(0, 10), stale: false } }
       : priceOf(rowsByModel.get(model) ?? [], location);
+    const tier = strengthTier(strength, { provider, model, ...(cap ? { cap } : {}) });
+    const figure = cap ? undefined : strength.figures.get(strengthKey({ provider, model }));
+    const typicalUsd = cap ? capFigure(cap) : figure && !figure.free ? figure.usd : undefined;
+    const differ = figure?.input && figure.output && (figure.input.min !== figure.input.max || figure.output.min !== figure.output.max);
     const isFree = free.has(model);
     const zeroTokens = priced.price?.input === 0 && priced.price.output === 0;
     return {
@@ -182,6 +193,9 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
       ...(name && name !== model ? { name } : {}),
       location,
       ...priced,
+      ...(tier ? { tier } : {}),
+      ...(typicalUsd !== undefined ? { typicalUsd } : {}),
+      ...(differ ? { ranges: { input: figure!.input!, output: figure!.output! } } : {}),
       free: isFree,
       callable: plugin.connect.canCall(model),
       router,
@@ -190,6 +204,7 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
       notes: [...(isFree ? [FREE_NOTE] : zeroTokens ? [NOT_FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
     };
   });
+  return { rows: offers, ...(strength.lines ? { lines: strength.lines } : {}) };
 }
 
 // A provider's model ID in one comparable form: lower case, with the
@@ -350,7 +365,7 @@ async function offerFor(
   const { userId, provider, model } = input;
   const plugin = plugins[provider];
   if (!plugin || !(await readConnection(db, userId, provider))) return { kind: "refused", model, reason: "not_connected" };
-  const offers = await listOffer(db, plugins, userId, provider);
+  const { rows: offers } = await listOffer(db, plugins, userId, provider);
   const offer = offers.find((r) => r.model === model);
   if (!offer) return { kind: "refused", model, reason: "not_offered" };
   switch (blockKind(offer)) {
