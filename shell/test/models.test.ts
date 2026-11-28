@@ -451,6 +451,28 @@ describe("the model for each task", () => {
     expect(routes.find((r) => r.task.id === "score")!.current).toBeUndefined();
   });
 
+  it("never proposes a router, at any cap, nor takes one with the one tap, and keeps it in the task's list to choose", async () => {
+    for (const cap of [0.01, 0.1, 1]) {
+      await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: cap, output: cap }, NOW);
+      const { offered, routes } = await readTaskRoutes(env.DB, plugins(), userId);
+      const auto = offered.find((x) => x.model === "openrouter/auto")!;
+      expect(auto).toMatchObject({ router: true, state: "ready" });
+      for (const r of routes) {
+        expect([r.proposal?.main.model, r.proposal?.fallback?.model]).not.toContain("openrouter/auto");
+        // Still the user's to choose, in the list of its strength.
+        if (auto.tier === r.task.tier) expect(listOf(await page(), "main", r.task.id)).toContain(or("openrouter/auto"));
+      }
+    }
+    await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 0.01, output: 0.01 }, NOW);
+    expect(offeredFor(taskById("match")!, (await readTaskRoutes(env.DB, plugins(), userId)).offered)[0]?.model).toBe("openrouter/auto");
+    await acceptProposals(env.DB, plugins(), userId, NOW);
+    const saved = await env.DB.prepare("SELECT main_model, fallback_model FROM task_routes WHERE user_id = ?").bind(userId).all<{ main_model: string; fallback_model: string | null }>();
+    expect(saved.results.length).toBeGreaterThan(0);
+    expect(saved.results.flatMap((r) => [r.main_model, r.fallback_model])).not.toContain("openrouter/auto");
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "match", main: or("openrouter/auto"), fallback: or("test-luna") }], NOW)).toBeUndefined();
+    expect(await routeTask(env.DB, plugins(), userId, "match")).toMatchObject({ main: { model: "openrouter/auto" }, fallback: { model: "test-luna" } });
+  });
+
   it("says why a saved model is no longer offered, by the same checks that decide it, with the action that fixes it", async () => {
     plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], noToolUse: ["test-tl"] });
     const route = (task: string, main: string, fallback = "test-mini") =>

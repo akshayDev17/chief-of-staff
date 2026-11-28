@@ -82,6 +82,7 @@ export type PlainReason =
   | "not_set_up" // the connection isn't set up yet, or was removed
   | "no_credits" // the provider account or this key is out of credits
   | "no_such_model" // that model ID doesn't exist here
+  | "no_fit" // no model the request could go to is allowed by the account's settings or under its price cap
   | "no_permission" // the provider refused this request (moderation, a guardrail, a data policy)
   | "busy" // busy or out of quota, not a setup fault
   | "app_not_configured" // the app's own side is not set up yet (the owner's one-time steps)

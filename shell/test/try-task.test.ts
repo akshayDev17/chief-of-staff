@@ -11,6 +11,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleTaskModels } from "../src/models/picker-page";
 import { readLatestTests } from "../src/models/latest-tests";
+import { testOne } from "../src/models/test-model";
 import { savePriceCap } from "../src/models/price-caps";
 import { changeTasks, modelKey, offeredFor, readTaskRoutes, taskById, TASKS, type Offered } from "../src/models/tasks";
 import { tryTask, TRY_MAX_TOKENS } from "../src/models/try-task";
@@ -149,6 +150,50 @@ describe("Try it", () => {
     expect(chatSent().map((s) => s.body)).toEqual([
       expect.objectContaining({ model: router, provider: expect.objectContaining({ max_price: { prompt: "0.3", completion: "1.2", request: "0", image: "0", audio: "0" } }) }),
     ]);
+  });
+
+  it("says no model fits the settings or the cap when OpenRouter's guardrails leave a capped router nowhere to go, with its settings and Change cap, on Try it and on its Providers row", async () => {
+    const p = await plugins();
+    const router = (await readCurrentCatalog(env.DB))!.models.find((m) => p.openrouter!.connect.isRouter?.(m.id))!.id;
+    await savePriceCap(env.DB, userId, "openrouter", router, { input: 0.01, output: 0.01 }, NOW);
+    await env.DB.prepare("UPDATE task_routes SET main_model = ? WHERE user_id = ? AND task = 'match'").bind(router, userId).run();
+    // OpenRouter's own answer to a router capped at $0.01 / $0.01 (2026-11-28).
+    const message =
+      "No jev-router pool model has an endpoint allowed by your guardrails (https://openrouter.ai/workspaces/default/guardrails), account provider and privacy settings (https://openrouter.ai/settings/privacy), or this request's provider preferences";
+    chat = (s) => ((s.body as { model: string }).model === router ? Response.json({ error: { code: 404, message } }, { status: 404 }) : chatReply({ model: (s.body as { model: string }).model }));
+    const settings = [
+      { label: "Allow in settings", href: "https://openrouter.ai/settings/privacy" },
+      { label: "Guardrails", href: "https://openrouter.ai/workspaces/default/guardrails" },
+    ];
+    const changeCap = { label: "Change cap", href: expect.stringContaining(`cap=${encodeURIComponent(router)}`) };
+    expect(await tryIt()).toMatchObject({
+      kind: "answered", role: "fallback", model: { model: fallback.model },
+      mainFailed: { model: router, reason: "No model fits your settings or this price cap.", marked: true, actions: [...settings, changeCap] },
+    });
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get(router)).toMatchObject({ state: "failed", result: { used: true, reason: "no_fit", text: "No model fits your settings or this price cap.", links: settings } });
+
+    // As shown under the task's row.
+    const res = await handleTaskModels(
+      new Request(`${ORIGIN}${TASK_MODELS_PATH}/try`, { method: "POST", headers: { origin: ORIGIN, accept: "application/json" }, body: new URLSearchParams([["task", "match"]]) }),
+      { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW },
+    );
+    const { tried } = (await res.json()) as { tried: string };
+    expect(tried).toContain("failed: No model fits your settings or this price cap. Marked Failed when used.<span class=\"tr-acts\">");
+    expect(tried).toContain('<a class="link ext" href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">Allow in settings</a> · <a class="link ext" href="https://openrouter.ai/workspaces/default/guardrails" target="_blank" rel="noopener noreferrer">Guardrails</a> · <a class="link" href="/chief-of-staff/models/setup/providers?');
+    expect(tried).not.toContain("doesn&#39;t exist");
+
+    // Its Providers row: Failed when used with this reason, and the same actions on the row.
+    const page = await (await handleProviders(new Request(`${ORIGIN}/chief-of-staff/models/setup/providers`), { db: env.DB, plugins: await plugins(), readPlugins: plugins, secrets: vaultSecrets(env.DB, ENV), userId, viewer: "owner", appOrigin: ORIGIN, now: NOW, fetcher })).text();
+    const row = page.split("\n").find((l) => l.includes(`data-id="${router}"`))!;
+    expect(row).toContain('<span class="meta why"><span class="fw">Failed when used</span> · No model fits your settings or this price cap. · <a class="link ext" href="https://openrouter.ai/settings/privacy"');
+    expect(row).toContain(">Guardrails</a> · ");
+    expect(row).toContain(">Change cap</a> · <button");
+    expect(row).not.toContain("doesn&#39;t exist");
+
+    // A Test of the router says the same, not "refused under your price cap".
+    fetcher.sent.length = 0;
+    expect(await testOne(env.DB, await plugins(), { userId, provider: "openrouter", model: router, now: NOW })).toMatchObject({ kind: "refused", reason: "no_fit", links: settings, reply: { status: 404, message } });
+    expect(chatModels()).toEqual([router]);
   });
 
   it("shows its result under the row in place, or on the page without the script, and never writes the task's saved choices", async () => {

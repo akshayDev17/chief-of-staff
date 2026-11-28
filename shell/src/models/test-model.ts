@@ -96,7 +96,7 @@ export type TestRefusal =
 
 // The refusals a friend can ask Admin about, by the sentence they saw.
 export const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<TestRefusal>([
-  "not_set_up", "no_credits", "no_such_model", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
+  "not_set_up", "no_credits", "no_such_model", "no_fit", "no_permission", "busy", "app_not_configured", "no_reply", "refused",
   "wrong_model", "budget_spent", "cannot_call", "no_price", "no_cap", "cap_refused",
 ]);
 
@@ -298,19 +298,18 @@ export async function testModel(
     };
   }
   const connection = await readConnection(db, userId, provider);
-  // A router called under the user's cap that OpenRouter refuses for the
-  // request itself (no model under the cap, a router's own limit): its own
-  // words, not a missing model.
-  if (outcome.failure?.step === "call" && plugin.connect.isRouter?.(model) && [400, 404, 422].includes(outcome.failure.status)) {
-    const { failure } = outcome;
-    return refuse("cap_refused", {
-      reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
-      fix: `${plugin.connect.guide.short}'s own words are above. Raise the price cap if no model fits under it, then test again.`,
-    });
-  }
   if (outcome.failure) {
     const { failure } = outcome;
     const plain = plugin.connect.classify(failure, connection);
+    // A router called under the user's cap that OpenRouter refuses for the
+    // request itself (a router's own limit): its own words, not a missing
+    // model. No model fitting the settings or the cap has its own reason.
+    if (failure.step === "call" && plugin.connect.isRouter?.(model) && [400, 404, 422].includes(failure.status) && plain.reason !== "no_fit") {
+      return refuse("cap_refused", {
+        reply: { status: failure.status, errorName: failure.errorName, message: failure.message },
+        fix: `${plugin.connect.guide.short}'s own words are above. Raise the price cap if no model fits under it, then test again.`,
+      });
+    }
     const credential = outcome.kind === "refused" && outcome.reason === "credential_failed";
     return refuse(plain.reason, {
       reply: failure.step === "call" ? { status: failure.status, errorName: failure.errorName, message: failure.message } : undefined,

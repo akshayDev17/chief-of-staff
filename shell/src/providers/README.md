@@ -109,7 +109,8 @@ https://openrouter.ai/docs/api-reference/overview; read 2026-11-27):
 | 402 | needs credit on OpenRouter, with Add credits first; on a free model, OpenRouter asked for credit even for it |
 | 403 | OpenRouter refused this request for your account (moderation, a guardrail, privacy settings) |
 | "No endpoints found matching your data policy" (any status) | refused for your account: your OpenRouter privacy settings leave no provider for it, often a free model's; with a link to them |
-| 404 | that model ID doesn't exist here |
+| 404 "allowed by your guardrails" or "request's provider preferences" | no model fits your settings or this price cap: OpenRouter's guardrails, provider and privacy settings, or a router's price cap leave it nowhere to go; Allow in settings (the privacy page), the guardrails page the answer names (only an openrouter.ai one), and Change cap on a router, on its row and under Try it. OpenRouter documents no error code or metadata for it, so its words decide |
+| other 404 | that model ID doesn't exist here |
 | 429 "free-models-per-day" or "-per-min" | busy: OpenRouter's free-model limits (20 a minute; 50 a day under 10 credits bought, 1,000 from 10, https://openrouter.ai/docs/api-reference/limits, read 2026-11-27) |
 | 408, 429, 502, 503 | busy or out of quota, not a setup fault |
 | other | OpenRouter refused the call, in its own words |

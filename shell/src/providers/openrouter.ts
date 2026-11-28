@@ -285,6 +285,21 @@ export const keyLinks = (connection: ConnectionFields | undefined): Link[] => [
 const KEY_LIMIT_FIX =
   "Raise this key's credit limit on OpenRouter, or give it a reset period (say monthly), on the key's page there. That limit is separate from the app's monthly budget.";
 
+// OpenRouter's 404 when no model the request could go to has an endpoint the
+// account's guardrails, its provider and privacy settings, or the request's
+// provider preferences (a router's price cap is one) allow, as it answered a
+// router capped at $0.01 / $0.01 on 2026-11-28: "No jev-router pool model has
+// an endpoint allowed by your guardrails
+// (https://openrouter.ai/workspaces/default/guardrails), account provider and
+// privacy settings (https://openrouter.ai/settings/privacy), or this
+// request's provider preferences". OpenRouter documents no error code or
+// metadata for it (its only structured field is the code, 404, the same as an
+// unknown model's: https://openrouter.ai/docs/api_reference/errors-and-debugging.md,
+// read 2026-11-28), so its stable words decide.
+const NO_FIT = /\ballowed by your guardrails\b|\brequest.{0,2}s provider preferences\b/i;
+// The guardrails page the answer names, only on openrouter.ai.
+const GUARDRAILS_URL = /https:\/\/openrouter\.ai\/[\w\-/]*guardrails\b/;
+
 export function classify(failure: Failure, connection?: ConnectionFields): { reason: PlainReason; fix: string; links: Link[] } {
   const again = "Tap Connect OpenRouter again to authorize a new key.";
   if (failure.step === "credential") return { reason: "not_set_up", fix: `The app holds no OpenRouter key for you. ${again}`, links: [] };
@@ -296,6 +311,14 @@ export function classify(failure: Failure, connection?: ConnectionFields): { rea
       reason: "no_permission",
       fix: `Your OpenRouter privacy settings leave no provider that serves this model. ${FREE_PRIVACY_TEXT} Change them on OpenRouter, then test again.`,
       links: [link("Privacy settings", SETTINGS_PRIVACY)],
+    };
+  }
+  if (failure.status === 404 && NO_FIT.test(failure.message)) {
+    const guardrails = GUARDRAILS_URL.exec(failure.message)?.[0];
+    return {
+      reason: "no_fit",
+      fix: "Allow more providers in your OpenRouter settings, or raise the price cap, then try again.",
+      links: [link("Allow in settings", SETTINGS_PRIVACY), ...(guardrails ? [link("Guardrails", guardrails)] : [])],
     };
   }
   // The free-model limits (OpenRouter's own words name them, as in

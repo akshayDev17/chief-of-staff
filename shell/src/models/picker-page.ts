@@ -346,6 +346,11 @@ const REPLY_SHOWN = 280;
 export function renderTried(o: TryOutcome, input: PickerPageInput): string {
   const nameOf = (m: { provider: Provider; model: string }) => input.offered.find((x) => modelKey(x) === modelKey(m))?.name ?? input.nameOf?.(m) ?? m.model;
   const marked = (f: TryFailure) => (f.marked ? " Marked Failed when used." : "");
+  // What answers a failure, on its own line: a provider's page opens in a new tab.
+  const acts = (f: TryFailure) =>
+    f.actions?.length
+      ? `<span class="tr-acts">${f.actions.map((a) => (/^https:/.test(a.href) ? `<a class="link ext" href="${esc(a.href)}" target="_blank" rel="noopener noreferrer">${esc(a.label)}</a>` : `<a class="link" href="${esc(a.href)}">${esc(a.label)}</a>`)).join(" · ")}</span>`
+      : "";
   // The provider's own words, collapsed.
   const replies = (fs: TryFailure[]) => {
     const said = fs.filter((f) => f.reply);
@@ -355,7 +360,7 @@ export function renderTried(o: TryOutcome, input: PickerPageInput): string {
     const both = o.failed.some((f) => f.role === "main") && o.failed.some((f) => f.role === "fallback");
     const head = both ? "Main model and fallback both failed." : o.reason;
     const role = (f: TryFailure) => (f.role === "fallback" ? "Fallback" : both ? "Main model" : "Model");
-    const failed = o.failed.length ? `<ul class="tr-fails">${o.failed.map((f) => `<li>${esc(role(f))} ${esc(nameOf(f))}: ${esc(f.reason)}${marked(f)}</li>`).join("")}</ul>` : "";
+    const failed = o.failed.length ? `<ul class="tr-fails">${o.failed.map((f) => `<li>${esc(role(f))} ${esc(nameOf(f))}: ${esc(f.reason)}${marked(f)}${acts(f)}</li>`).join("")}</ul>` : "";
     const action = o.action ? `<p class="acts"><a class="btn small" href="${esc(o.action.href)}">${esc(o.action.label)}</a></p>` : "";
     return `<div class="result bad tr" role="alert"><p class="v">${ICON.bad}<span><strong>Not answered.</strong> ${esc(head)}</span></p>${failed}${action}${replies(o.failed)}</div>`;
   }
@@ -366,7 +371,7 @@ export function renderTried(o: TryOutcome, input: PickerPageInput): string {
       ? `<p class="tr-reply">${esc(text)}</p>`
       : `<details class="tr-reply"><summary><span class="tr-start">${esc(text.slice(0, REPLY_SHOWN).trimEnd())}…</span><span class="tr-more">Show the whole reply</span></summary><p>${esc(text)}</p></details>`;
   const fell = o.mainFailed
-    ? `<p class="tr-fell">Main model ${esc(nameOf(o.mainFailed))} failed: ${esc(o.mainFailed.reason)}${marked(o.mainFailed)}</p>`
+    ? `<p class="tr-fell">Main model ${esc(nameOf(o.mainFailed))} failed: ${esc(o.mainFailed.reason)}${marked(o.mainFailed)}${acts(o.mainFailed)}</p>`
     : "";
   const fact = (k: string, v: string) => `<div><dt>${k}</dt><dd class="num">${v}</dd></div>`;
   const n = (x: number) => x.toLocaleString("en-US");
@@ -591,6 +596,7 @@ details.tr-reply p { margin: 0; color: inherit; font-size: 14px; }
 .tr-facts dt { font-size: 12px; color: var(--muted); }
 .tr-facts dd { margin: 0; font-size: 14px; }
 .tr-month { margin: 0; font-size: var(--fs-small); color: var(--muted); }
+.tr-acts { display: block; margin-top: 2px; }
 .tr-fails { margin: 0; padding-left: 18px; list-style: disc; display: grid; gap: 4px; font-size: var(--fs-small); }
 .tr-wait { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-small); color: var(--muted); }
 .next-row { gap: 10px; }

@@ -99,6 +99,8 @@ export function reasonText(reason: PlainReason | undefined, plugin: ProviderPlug
       return `Needs credit on ${name}.`;
     case "no_such_model":
       return "That model ID doesn't exist here.";
+    case "no_fit":
+      return "No model fits your settings or this price cap.";
     case "no_permission":
       return `${short} refused this request for your account.`;
     case "busy":

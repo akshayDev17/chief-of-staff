@@ -175,6 +175,24 @@ describe("the model list and plain reasons", () => {
     expect(daily.links.map((l) => l.href)).toContain("https://openrouter.ai/docs/api-reference/limits");
   });
 
+  it("says no model fits the settings or the price cap for OpenRouter's guardrails 404, with its settings pages, and keeps an unknown model's 404 as no such model", () => {
+    // OpenRouter's own answer to a router capped at $0.01 / $0.01 (2026-11-28).
+    const message =
+      "No jev-router pool model has an endpoint allowed by your guardrails (https://openrouter.ai/workspaces/default/guardrails), account provider and privacy settings (https://openrouter.ai/settings/privacy), or this request's provider preferences";
+    const fit = classify({ step: "call", status: 404, errorName: "HTTP 404", message });
+    expect(fit.reason).toBe("no_fit");
+    expect(fit.links).toEqual([
+      { label: "Allow in settings", href: "https://openrouter.ai/settings/privacy" },
+      { label: "Guardrails", href: "https://openrouter.ai/workspaces/default/guardrails" },
+    ]);
+    // Only an openrouter.ai guardrails page the answer names becomes a link.
+    const elsewhere = classify({ step: "call", status: 404, errorName: "HTTP 404", message: message.replace("https://openrouter.ai/workspaces/default/guardrails", "https://evil.example/guardrails") });
+    expect(elsewhere.reason).toBe("no_fit");
+    expect(elsewhere.links.map((l) => l.href)).toEqual(["https://openrouter.ai/settings/privacy"]);
+    expect(classify({ step: "call", status: 404, errorName: "not_found", message: "Model gone/model does not exist" }).reason).toBe("no_such_model");
+    expect(classify({ step: "call", status: 404, errorName: "HTTP 404", message: "No endpoints found for gone/model." }).reason).toBe("no_such_model");
+  });
+
   it("calls only what OpenRouter lists and the app can price, with notes", () => {
     expect(plugin.connect.canCall("openai/gpt-6-luna")).toBe(true);
     expect(plugin.connect.canCall("openrouter/auto")).toBe(true);
