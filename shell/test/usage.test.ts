@@ -6,7 +6,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { clearAccessKeyCache } from "../src/access";
-import { BOX_ROWS, findText, FIND_JS, handleUsage, nameModels, spendGap, taskName } from "../src/models/usage-page";
+import { BOX_ROWS, findText, handleUsage, nameModels, spendGap, taskName } from "../src/models/usage-page";
 import { readMonthUsage, summariseUsage } from "../src/models/usage";
 import { handleTaskModels } from "../src/models/picker-page";
 import { USAGE_PATH, BUDGETS_PATH, PROVIDERS_PATH, TASK_MODELS_PATH } from "../src/paths";
@@ -20,7 +20,7 @@ import { writeConnection } from "../src/proxy/connections";
 import { monthSpend, writeLedgerRow, type LedgerRow } from "../src/proxy/ledger";
 import { ENV, generateKey, serveCerts, signToken } from "./access-fixture";
 import { fakeFetch, ISSUED_KEY, keyReply } from "./fake-sources";
-import { element, runScript, type Sent } from "./script-dom";
+import { perModelBox } from "./maker-dom";
 import live from "./fixtures/usage-gap-live.json";
 import { seedPrices, TEST_CATALOG, testPlugin, testSecrets, userFor } from "./test-plugin";
 
@@ -55,7 +55,7 @@ async function seedMonth() {
 }
 
 const page = async (fetcher = fakeFetch({ currentKey: () => keyReply({ usage_monthly: 1.5 }) })) => {
-  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), fetcher });
+  const response = await handleUsage({ db: env.DB, userId, now: NOW, secrets: testSecrets(), plugins: { openrouter: testPlugin() }, fetcher });
   return { html: await response.text(), fetcher, response };
 };
 
@@ -67,7 +67,7 @@ const connect = async () => {
 // The rows of one table, in order, by their names.
 const rowNames = (html: string, table: "models" | "tasks") => {
   const t = html.match(new RegExp(`<table class="usage" id="by-${table}"[\\s\\S]*?</table>`))![0];
-  return [...t.matchAll(/<tr(?: data-find-text="[^"]*")?>\n<td><span class="u-name">([^<]*)<\/span>/g)].map((m) => m[1]);
+  return [...t.matchAll(/<tr(?: data-[^>]*)?>\n<td><span class="u-name">([^<]*)<\/span>/g)].map((m) => m[1]);
 };
 
 describe("the month's usage, from the ledger", () => {
@@ -212,7 +212,7 @@ describe("Per model's scroll box and search", () => {
     expect(models).toContain('placeholder="Search name, maker or ID"');
     expect(models).toContain('<p class="count" data-count aria-live="polite">12 models</p>');
     expect(models).toContain('<tr class="empty" data-no-match hidden>');
-    expect(models).toContain('<th scope="row">This month');
+    expect(models).toContain('<th scope="row"><span data-foot-label>This month</span>');
     // Still dearest first, and no sort control or form anywhere.
     expect(rowNames(html, "models")[0]).toBe("Maker 2: Model 11");
     expect(html.slice(html.indexOf("<body>"), html.indexOf("<script>"))).not.toMatch(/<form|class="th-sort|aria-sort/);
@@ -233,26 +233,8 @@ describe("Per model's scroll box and search", () => {
       .toBe("meta: llama 3.1 8b meta-llama/llama-3.1-8b meta llama");
   });
 
-  // A stand-in page for the search script: the search, the rows, the no-match row.
-  function searchPage(texts: string[]) {
-    const input = element({ id: "find-models" });
-    const x = element({ class: "clear-x" });
-    const count = element();
-    const rows = texts.map((t) => Object.assign(element({ "data-find-text": t }), { hidden: false }));
-    const said = element();
-    const clear = element();
-    const none = Object.assign(element(), { querySelector: (q: string) => (q === "[data-said]" ? said : clear) });
-    const scroller = { scrollTop: 240 };
-    const table = { parentNode: scroller, querySelectorAll: () => rows, querySelector: () => none };
-    const find = Object.assign(element({ "data-find": "by-models", "data-noun": "models" }), {
-      querySelector: (q: string) => ({ input, "[data-count]": count, ".clear-x": x })[q],
-    });
-    const document = { querySelectorAll: (q: string) => (q === "[data-find]" ? [find] : []), getElementById: () => table };
-    const sent: Sent = [];
-    runScript(FIND_JS, document, `${ORIGIN}${USAGE_PATH}`, sent);
-    const type = (v: string) => { input.value = v; input.fire("input"); };
-    return { input, x, count, rows, said, clear, none, find, scroller, sent, type };
-  }
+  // Rows for the search script (test/maker-dom.ts), each from its find text.
+  const searchPage = (texts: string[]) => perModelBox(texts.map((text) => ({ text, maker: text.split(":")[0]!, makerName: text.split(":")[0]! })));
 
   it("filters the rows as you type, in the page: no request, no reload, the address unchanged", () => {
     const p = searchPage(["openai: gpt-4o openai/gpt-4o openai", "anthropic: claude anthropic/claude anthropic", "meta: llama 3 meta-llama/llama-3 meta llama"]);
@@ -260,31 +242,35 @@ describe("Per model's scroll box and search", () => {
     expect(p.count.textContent).toBe("3 models");
     expect(p.x.hidden).toBe(true);
     p.type("LLAMA");
-    expect(p.rows.map((r) => r.hidden)).toEqual([true, true, false]);
+    expect(p.trs.map((r) => r.hidden)).toEqual([true, true, false]);
     expect(p.count.textContent).toBe("1 of 3 models");
     expect(p.scroller.scrollTop).toBe(0);
     expect(p.x.hidden).toBe(false);
     p.type("open 4o");
-    expect(p.rows.map((r) => r.hidden)).toEqual([false, true, true]);
+    expect(p.trs.map((r) => r.hidden)).toEqual([false, true, true]);
     expect(p.none.hidden).toBe(true);
-    expect(p.input.fire("keydown", "Enter")).toBe(true);
+    expect(p.dispatch("keydown", p.input, "Enter").defaultPrevented).toBe(true);
     expect(p.sent).toEqual([]);
   });
 
   it("says when nothing matches, and Clear brings the whole list back", () => {
     const p = searchPage(["a: one a/one a", "b: two b/two b"]);
     p.type("zzz");
-    expect(p.rows.every((r) => r.hidden)).toBe(true);
+    expect(p.trs.every((r) => r.hidden)).toBe(true);
     expect(p.none.hidden).toBe(false);
     expect(p.said.textContent).toBe("zzz");
+    expect(p.fromMakers.hidden).toBe(true);
     expect(p.count.textContent).toBe("0 of 2 models");
-    p.clear.fire("click");
+    p.dispatch("click", p.clear);
     expect(p.input.value).toBe("");
-    expect(p.rows.some((r) => r.hidden)).toBe(false);
+    expect(p.trs.some((r) => r.hidden)).toBe(false);
     expect(p.none.hidden).toBe(true);
     expect(p.input.focused).toBe(1);
     p.type("two");
-    expect(p.input.fire("keydown", "Escape")).toBe(true);
+    expect(p.dispatch("keydown", p.input, "Escape").defaultPrevented).toBe(true);
+    expect(p.count.textContent).toBe("2 models");
+    p.type("two");
+    p.dispatch("click", p.x);
     expect(p.count.textContent).toBe("2 models");
     expect(p.sent).toEqual([]);
   });
@@ -401,7 +387,7 @@ describe("the owner's live month: no budget, every call on an earlier key", () =
   }
   const livePage = async () => {
     const fetcher = fakeFetch({ currentKey: () => keyReply(live.keyReply) });
-    const response = await handleUsage({ db: env.DB, userId, now: NOW_LIVE, secrets: testSecrets(), fetcher });
+    const response = await handleUsage({ db: env.DB, userId, now: NOW_LIVE, secrets: testSecrets(), plugins: { openrouter: testPlugin() }, fetcher });
     return { html: await response.text(), fetcher };
   };
 

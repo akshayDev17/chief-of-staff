@@ -14,8 +14,9 @@
 // GET /api/v1/key that Providers' account line reads.
 //
 // Each model is named as OpenRouter's live list names it, its ID beside it;
-// a model no longer in the list is shown by its ID. The app holds no list of
-// its own. A model that list marks free (prices/openrouter.ts
+// a model no longer in the list is shown by its ID. Its maker is named as on
+// Providers: OpenRouter's own models carry the plug-in's own name. The app
+// holds no list of its own. A model that list marks free (prices/openrouter.ts
 // isTrulyFreeTextModel) carries "free"; every other one is paid.
 //
 // Both tables list the dearest first, ties by name: where the money went.
@@ -26,9 +27,12 @@
 // hundreds), so it scrolls inside its own box, about ten rows tall, its
 // column header and its "This month" foot pinned to the box's top and
 // bottom. Over ten rows, a search sits above it: any part of a model's name,
-// maker or ID, with a live count and a Clear when nothing matches. It runs
-// in the page only: no request, no reload, the address unchanged. Without
-// scripts the search stays hidden and the box holds the whole list. Per task
+// maker or ID, with a live count and a Clear when nothing matches; beside it,
+// the Maker filter Providers has (maker-filter.ts), which narrows the rows
+// with the search. While either narrows the rows, the foot, still the
+// month's total, reads "All models this month". Both run in the page only:
+// no request, no reload, the address unchanged. Without scripts both stay
+// hidden and the box holds the whole list. Per task
 // is bounded by the app's tasks, about a dozen rows, so it stays a plain
 // table.
 //
@@ -55,8 +59,9 @@ import { BAR_CSS, BAR_JS, budgetText, money, readKeyFigure, renderBudgetBar, typ
 import { readBudget } from "../proxy/budgets";
 import { connectedAt, connectedProviders, readConnection } from "../proxy/connections";
 import { nextMonthStart } from "../proxy/ledger";
-import type { ConnectionFields } from "../proxy/plugin";
+import type { ConnectionFields, PluginRegistry } from "../proxy/plugin";
 import { TEST_TASK } from "../proxy/proxy";
+import { MAKER_CHIPS_HTML, MAKER_FILTER_CSS, MAKER_FILTER_HTML, MAKER_FILTER_JS, makerKey, makerRowAttrs, nameMakers } from "./maker-filter";
 import { modelsSubtabs } from "./setup-tabs";
 import { taskById } from "./tasks";
 import { TEST_ALL_TASK } from "./test-all";
@@ -65,9 +70,11 @@ import { readMonthUsage, type MonthUsage, type UsageLine } from "./usage";
 // A line with the name the page shows for it.
 export interface NamedLine extends UsageLine {
   name: string;
-  // Models only: the model is in OpenRouter's current list, and it is free there.
+  // Models only: the model is in OpenRouter's current list, and it is free
+  // there; its maker's name, as OpenRouter's model names give it.
   listed?: boolean;
   free?: boolean;
+  maker?: string;
 }
 
 const byName = (a: NamedLine, b: NamedLine) => a.name.localeCompare(b.name, "en", { numeric: true, sensitivity: "base" }) || a.key.localeCompare(b.key);
@@ -79,11 +86,13 @@ const sortDearestFirst = (lines: NamedLine[]): NamedLine[] => [...lines].sort((a
 const TASK_NAMES: Record<string, string> = { [TEST_TASK]: "Model tests", [TEST_ALL_TASK]: "Test all models" };
 export const taskName = (id: string): string => TASK_NAMES[id] ?? taskById(id)?.label ?? id;
 
-export function nameModels(lines: UsageLine[], catalog: OpenRouterCatalog | undefined): NamedLine[] {
+// `own`: the provider the lines are from, named as it names itself.
+export function nameModels(lines: UsageLine[], catalog: OpenRouterCatalog | undefined, own?: { key: string; name: string }): NamedLine[] {
   const listed = new Map((catalog?.models ?? []).map((m) => [m.id, m]));
+  const makers = nameMakers([...(catalog?.models ?? []), ...lines.map((l) => ({ id: l.key }))], own);
   return lines.map((l) => {
     const m = listed.get(l.key);
-    return { ...l, name: m?.name || l.key, listed: Boolean(m), free: Boolean(m?.free) };
+    return { ...l, name: m?.name || l.key, listed: Boolean(m), free: Boolean(m?.free), maker: makers.get(makerKey(l.key))! };
   });
 }
 
@@ -139,7 +148,7 @@ function row(l: NamedLine, table: "models" | "tasks"): string {
   const free = l.free ? ` <span class="pill free">free</span>` : "";
   const refused = l.refused ? `${count(l.refused)} refused` : "";
   const phone = [`${count(l.calls)} call${l.calls === 1 ? "" : "s"}`, `${count(l.inputTokens + l.outputTokens)} tokens`, refused].filter(Boolean).join(" · ");
-  const find = table === "models" ? ` data-find-text="${esc(findText(l))}"` : "";
+  const find = table === "models" ? ` data-find-text="${esc(findText(l))}"${makerRowAttrs(l.key, l.maker ?? makerKey(l.key))}` : "";
   return `<tr${find}>
 <td><span class="u-name">${esc(l.name)}</span>${free}${id}<span class="u-sub u-phone">${phone}</span></td>
 <td class="num wide">${count(l.calls)}${refused ? `<span class="u-sub">${refused}</span>` : ""}</td>
@@ -155,11 +164,14 @@ export const BOX_ROWS = 10;
 const SEARCH_ICON = `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>`;
 const CLEAR_ICON = `<svg viewBox="0 0 12 12" width="11" height="11" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>`;
 
-// The search above Per model, hidden until the page's script shows it.
+// The search and the Maker filter above Per model, hidden until the page's
+// script shows them.
 function modelSearch(n: number): string {
   return `<div class="find" data-find="by-models" data-noun="models" hidden>
-<div class="search" role="search"><label class="visually-hidden" for="find-models">Search models by name, maker or ID</label>${SEARCH_ICON}<input type="search" id="find-models" aria-controls="by-models" placeholder="Search name, maker or ID" autocomplete="off" spellcheck="false"><button type="button" class="clear-x" data-clear aria-label="Clear search" hidden>${CLEAR_ICON}</button></div>
+<div class="search" role="search"><label class="visually-hidden" for="find-models">Search models by name, maker or ID</label>${SEARCH_ICON}<input type="search" id="find-models" aria-controls="by-models" placeholder="Search name, maker or ID" autocomplete="off" spellcheck="false"><button type="button" class="clear-x" data-clear-q aria-label="Clear search" hidden>${CLEAR_ICON}</button></div>
+${MAKER_FILTER_HTML}
 <p class="count" data-count aria-live="polite">${count(n)} models</p>
+${MAKER_CHIPS_HTML}
 </div>`;
 }
 
@@ -170,11 +182,13 @@ function table(table: "models" | "tasks", lines: NamedLine[], input: UsagePageIn
   const boxed = table === "models" && sorted.length > 0;
   const searchable = boxed && sorted.length > BOX_ROWS;
   const noMatch = searchable
-    ? `\n<tr class="empty" data-no-match hidden><td colspan="5"><span>No model matches “<span data-said></span>”.</span> <button type="button" class="btn secondary small" data-clear>Clear</button></td></tr>`
+    ? `\n<tr class="empty" data-no-match hidden><td colspan="5"><span>No model matches “<span data-said></span>”<span data-said-makers hidden> from the makers you picked</span>.</span> <button type="button" class="btn secondary small" data-clear>Clear</button></td></tr>`
     : "";
   const body = sorted.length ? sorted.map((l) => row(l, table)).join("\n") + noMatch : `<tr class="empty"><td colspan="5">${emptyRow}</td></tr>`;
+  // The search script names the foot "All models this month" while it narrows the rows.
+  const footLabel = searchable ? `<span data-foot-label>This month</span>` : "This month";
   const foot = sorted.length
-    ? `<tfoot><tr><th scope="row">This month<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
+    ? `<tfoot><tr><th scope="row">${footLabel}<span class="u-sub u-phone">${count(total.calls)} call${total.calls === 1 ? "" : "s"}</span></th><td class="num wide">${count(total.calls)}</td><td class="num wide">${count(total.inputTokens)}</td><td class="num wide">${count(total.outputTokens)}</td><td class="num">${money(total.costUsd)}</td></tr></tfoot>`
     : "";
   const frame = boxed
     ? `${searchable ? modelSearch(sorted.length) : ""}<div class="tbl-wrap tbl-box" tabindex="0" role="region" aria-label="Per model, scrolls">`
@@ -281,7 +295,7 @@ export function renderUsagePage(input: UsagePageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Models · Usage · Chief of staff</title>
-<style>${PAGE_CSS}${CONTROLS_CSS}${BAR_CSS}${CSS}</style>
+<style>${PAGE_CSS}${CONTROLS_CSS}${BAR_CSS}${MAKER_FILTER_CSS}${CSS}</style>
 </head>
 <body>
 <main class="screen">
@@ -349,8 +363,14 @@ table.usage .num .u-sub { white-space: nowrap; }
   .u-id { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .u-phone { display: block; }
 }
-/* Per model: the search above it, then its own scroll box. */
-.find { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 8px; }
+/* Per model: the search and the Maker filter above it, then its own scroll box.
+   The filter's tokens (maker-filter.ts), on this page's palette. */
+.find { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 8px;
+  --surface: var(--card); --raised: color-mix(in oklab, var(--text) 4%, var(--card)); --active: color-mix(in oklab, var(--text) 8%, var(--card));
+  --chip-hover: color-mix(in oklab, var(--text) 13%, var(--card)); --border: var(--line); --rule: var(--line); --control: var(--line);
+  --control-hover: var(--muted); --shadow: color-mix(in oklab, var(--text) 16%, transparent); --radius-control: 8px; --radius-card: 10px;
+  --control-h: 36px; --fs-small: .85rem; --t: 150ms; }
+.find .chips { flex: 1 1 100%; }
 .find[hidden] { display: none; }
 .search { position: relative; flex: 0 1 340px; min-width: 0; }
 .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
@@ -382,40 +402,53 @@ table.usage .num .u-sub { white-space: nowrap; }
 .pill { white-space: nowrap; }
 `;
 
-// The Per model search: shows the hidden search, then filters the rows on
-// each keystroke. Every word typed must appear in the row's name, maker or
-// ID. Nothing is sent and the address never changes.
-export const FIND_JS = `
+// The Per model search and Maker filter: shows them, then filters the rows
+// on each keystroke or choice. Every word typed must appear in the row's
+// name, maker or ID, and its maker must be one chosen, if any is. The search's
+// own clear and Escape clear the search; Clear under "No model matches"
+// clears the makers too. While either narrows the rows, the foot reads "All
+// models this month". Nothing is sent and the address never changes.
+export const FIND_JS = String.raw`
+(function () {
+${MAKER_FILTER_JS}
 Array.prototype.forEach.call(document.querySelectorAll("[data-find]"), function (find) {
   var table = document.getElementById(find.getAttribute("data-find"));
-  var box = table.parentNode, input = find.querySelector("input"), count = find.querySelector("[data-count]"), x = find.querySelector(".clear-x");
+  var box = table.parentNode, input = find.querySelector(".search input"), count = find.querySelector("[data-count]"), x = find.querySelector("[data-clear-q]");
   var rows = Array.prototype.slice.call(table.querySelectorAll("tr[data-find-text]"));
-  var none = table.querySelector("tr[data-no-match]"), said = none.querySelector("[data-said]"), noun = " " + find.getAttribute("data-noun");
+  var none = table.querySelector("tr[data-no-match]"), said = none.querySelector("[data-said]"), fromMakers = none.querySelector("[data-said-makers]"), noun = " " + find.getAttribute("data-noun");
+  var footLabel = table.querySelector("[data-foot-label]");
   var all = rows.length.toLocaleString("en-US");
+  var makers = makerFilter({ scope: find, rows: function () { return rows; }, changed: apply });
   function apply() {
-    var q = input.value.trim(), words = q.toLowerCase().split(/\\s+/).filter(Boolean), shown = 0;
+    var q = input.value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean), picked = makers.chosen().length, shown = 0;
     rows.forEach(function (r) {
       var text = r.getAttribute("data-find-text");
-      var hit = words.every(function (w) { return text.indexOf(w) !== -1; });
+      var hit = makers.matches(r) && words.every(function (w) { return text.indexOf(w) !== -1; });
       r.hidden = !hit;
       if (hit) shown++;
     });
-    count.textContent = words.length ? shown.toLocaleString("en-US") + " of " + all + noun : all + noun;
-    said.textContent = q;
+    var narrowed = words.length > 0 || picked > 0;
+    count.textContent = narrowed ? shown.toLocaleString("en-US") + " of " + all + noun : all + noun;
+    footLabel.textContent = narrowed ? "All models this month" : "This month";
+    said.textContent = q || "your filter";
+    fromMakers.hidden = !picked;
     none.hidden = shown > 0;
     x.hidden = !input.value;
     box.scrollTop = 0;
+    makers.render(true);
   }
-  function clear() { input.value = ""; apply(); input.focus(); }
+  function clearSearch() { input.value = ""; apply(); input.focus(); }
   input.addEventListener("input", apply);
   input.addEventListener("keydown", function (e) {
     if (e.key === "Enter") e.preventDefault();
-    if (e.key === "Escape" && input.value) { e.preventDefault(); clear(); }
+    if (e.key === "Escape" && input.value) { e.preventDefault(); clearSearch(); }
   });
-  [x, none.querySelector("[data-clear]")].forEach(function (b) { b.addEventListener("click", clear); });
+  x.addEventListener("click", clearSearch);
+  none.querySelector("[data-clear]").addEventListener("click", function () { makers.clear(); clearSearch(); });
   find.hidden = false;
   apply();
 });
+})();
 `;
 
 export interface UsageDeps {
@@ -423,6 +456,7 @@ export interface UsageDeps {
   userId: string;
   now: Date;
   secrets: SecretStore;
+  plugins: PluginRegistry;
   fetcher?: typeof fetch;
 }
 
@@ -438,6 +472,8 @@ export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
     // Read whatever the budget: without a key in the vault it asks nothing.
     readKeyFigure(deps.secrets, userId, now, deps.fetcher),
   ]);
+  const plugin = deps.plugins.openrouter;
+  const own = plugin && { key: plugin.provider, name: plugin.connect.guide.name };
   return {
     now,
     connected: providers.includes("openrouter"),
@@ -446,7 +482,7 @@ export async function usagePageInput(deps: UsageDeps): Promise<UsagePageInput> {
     connection,
     ...(keySince ? { keySince: keySince.toISOString() } : {}),
     usage,
-    models: nameModels(usage.byModel, catalog),
+    models: nameModels(usage.byModel, catalog, own),
     tasks: nameTasks(usage.byTask),
   };
 }

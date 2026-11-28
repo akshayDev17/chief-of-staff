@@ -1,8 +1,9 @@
 // The script of Models › Setup › Providers. Nothing it does reloads the page
 // or changes its address (the owner, 2026-11-28):
 //
-// - Search, the Maker filter (its find box and chips) and the strip's Works /
-//   Doesn't work / Not tested yet cells only show and hide rows: no request.
+// - Search, the Maker filter (models/maker-filter.ts: its find box and chips)
+//   and the strip's Works / Doesn't work / Not tested yet cells only show and
+//   hide rows: no request.
 // - Every form marked data-fetch (Test, Refresh, Check again, the price cap,
 //   Test all, Retest failed, Disconnect) and every link marked data-view (a
 //   confirm, the cap editor, Cancel) is sent in place, asking for JSON: the
@@ -17,12 +18,14 @@
 // survive every swap. Without the script, every form posts and redirects
 // back (page.ts), and every link is a plain address.
 
+import { MAKER_FILTER_JS } from "../models/maker-filter";
+
 export const PAGE_SCRIPT = String.raw`
 (function () {
   "use strict";
   var main = document.getElementById("screen");
   if (!main || !window.fetch || !window.history) return;
-  var S = { q: "", makers: [], filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, timer: 0, built: false };
+  var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, timer: 0, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
   var NOUN = { works: "that work", fails: "that don't work", pending: "not tested yet" };
 
@@ -37,7 +40,7 @@ export const PAGE_SCRIPT = String.raw`
 
   // ---------- filters: search, maker, the strip ----------
   function matches(li, t) {
-    if (S.makers.length && S.makers.indexOf(li.getAttribute("data-maker")) === -1) return false;
+    if (!makers.matches(li)) return false;
     var hay = li.getAttribute("data-hay") || "";
     for (var i = 0; i < t.length; i++) if (hay.indexOf(t[i]) === -1) return false;
     if (S.filter) {
@@ -73,13 +76,13 @@ export const PAGE_SCRIPT = String.raw`
       var li = document.createElement("li");
       li.className = "empty";
       li.setAttribute("data-client", "");
-      var narrowed = S.q.trim() || S.makers.length;
-      li.innerHTML = "<p>" + (narrowed ? "No model matches “" + esc(S.q.trim() || "your filter") + "”" + (S.makers.length ? " from the makers you picked" : "") + "." : "None " + NOUN[S.filter] + ".") + "</p>" + (narrowed ? '<button type="button" class="btn small outline" data-clear-all>Clear</button>' : "");
+      var narrowed = S.q.trim() || makers.chosen().length;
+      li.innerHTML = "<p>" + (narrowed ? "No model matches “" + esc(S.q.trim() || "your filter") + "”" + (makers.chosen().length ? " from the makers you picked" : "") + "." : "None " + NOUN[S.filter] + ".") + "</p>" + (narrowed ? '<button type="button" class="btn small outline" data-clear-all>Clear</button>' : "");
       list.appendChild(li);
     }
     var base = S.filter ? stateCount(S.filter) : all.length, count = $("pick-count");
     if (count) {
-      count.innerHTML = S.q.trim() || S.makers.length
+      count.innerHTML = S.q.trim() || makers.chosen().length
         ? '<b class="num">' + shown + "</b> of " + base + (S.filter ? " " + NOUN[S.filter] : "") + (S.q.trim() ? " match “" + esc(S.q.trim()) + "”" : "")
         : '<span class="num">' + base + "</span> " + (S.filter ? NOUN[S.filter] + ' · <button type="button" class="link" data-filter="' + S.filter + '" style="font-size:13px">Show all</button>' : "models");
     }
@@ -93,51 +96,11 @@ export const PAGE_SCRIPT = String.raw`
     });
     Object.keys(S.allowed).forEach(showCheck);
     Object.keys(S.waiting).forEach(function (k) { var b = byK(k); if (b) busy(b); });
-    renderMakers(true);
+    makers.render(true);
   }
 
-  // ---------- the Maker filter ----------
-  function makerCounts() {
-    var out = {}, order = [];
-    each(rows(), function (li) {
-      var k = li.getAttribute("data-maker");
-      if (!out[k]) { out[k] = { name: li.getAttribute("data-maker-name") || k, n: 0 }; order.push(k); }
-      out[k].n++;
-    });
-    order.sort(function (a, b) { return out[a].name.localeCompare(out[b].name); });
-    return { by: out, order: order };
-  }
-  function renderMakers(keepList) {
-    var el = main.querySelector("[data-maker]");
-    if (!el) return;
-    var mk = makerCounts();
-    S.makers = S.makers.filter(function (k) { return mk.by[k]; });
-    if (!el.firstChild) {
-      el.innerHTML = '<button type="button" class="btn outline maker-btn" aria-haspopup="true" aria-expanded="false" data-maker-toggle data-k="maker">Maker <span class="n"></span><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg></button>' +
-        '<div class="pop" role="dialog" aria-label="Filter by maker"><input type="search" name="maker-find" placeholder="Find a maker" aria-label="Find a maker" data-maker-find autocomplete="off"><ul></ul><div class="pop-foot"><button type="button" class="link" data-maker-clear>Clear</button><button type="button" class="btn small outline" data-maker-done>Done</button></div></div>';
-    }
-    var find = el.querySelector("[data-maker-find]"), f = find.value.toLowerCase();
-    if (!keepList || !el.querySelector(".pop ul").children.length) {
-      var items = mk.order.filter(function (k) { return !f || mk.by[k].name.toLowerCase().indexOf(f) !== -1 || k.indexOf(f) !== -1; }).map(function (k) {
-        return '<li><label><input type="checkbox" name="maker" data-maker-key value="' + esc(k) + '"' + (S.makers.indexOf(k) !== -1 ? " checked" : "") + ">" + esc(mk.by[k].name) + '<span class="c num">' + mk.by[k].n + "</span></label></li>";
-      }).join("") || '<li class="none">No maker matches “' + esc(find.value) + '”.</li>';
-      el.querySelector(".pop ul").innerHTML = items;
-    }
-    var btn = el.querySelector(".maker-btn");
-    btn.classList.toggle("on", S.makers.length > 0);
-    btn.querySelector(".n").textContent = S.makers.length || "";
-    btn.setAttribute("aria-label", S.makers.length ? "Maker, " + S.makers.length + " chosen" : "Maker");
-    var chips = $("pick-chips");
-    if (chips) {
-      chips.classList.toggle("on", S.makers.length > 0);
-      chips.innerHTML = S.makers.map(function (k) { return '<button type="button" class="chip" data-chip="' + esc(k) + '" aria-label="Remove ' + esc(mk.by[k].name) + '">' + esc(mk.by[k].name) + '<svg viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>'; }).join("") +
-        (S.makers.length > 1 ? '<button type="button" class="link" style="font-size:13px" data-maker-clear>Clear makers</button>' : "");
-    }
-  }
-  function closeMakers() {
-    var m = main.querySelector(".maker.open");
-    if (m) { m.classList.remove("open"); m.querySelector(".maker-btn").setAttribute("aria-expanded", "false"); }
-  }
+  // ---------- the Maker filter (models/maker-filter.ts) ----------
+  ${MAKER_FILTER_JS}
 
   // ---------- rows the account leaves out: the settings link, then Check again ----------
   function showCheck(id) {
@@ -275,7 +238,6 @@ export const PAGE_SCRIPT = String.raw`
   document.addEventListener("click", function (e) {
     var t = e.target;
     if (!t.closest) return;
-    if (!t.closest(".maker")) closeMakers();
     var a = t.closest("a[data-view]");
     if (a && main.contains(a) && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
       e.preventDefault();
@@ -299,44 +261,22 @@ export const PAGE_SCRIPT = String.raw`
     if (det) { var d = det.getAttribute("data-det"); S.det[d] = !S.det[d]; apply(); return; }
     var cell = t.closest("[data-filter]");
     if (cell) { var f = cell.getAttribute("data-filter"); S.filter = S.filter === f ? null : f; var bx = $("tbl-box"); if (bx) bx.scrollTop = 0; apply(); return; }
-    if (t.closest("[data-clear-all]")) { S.q = ""; S.makers = []; var q = $("pick-q"); if (q) { q.value = ""; q.focus(); } apply(); renderMakers(); return; }
+    if (t.closest("[data-clear-all]")) { S.q = ""; makers.clear(); var q = $("pick-q"); if (q) { q.value = ""; q.focus(); } apply(); return; }
     if (t.closest("[data-clear-q]")) { S.q = ""; $("pick-q").value = ""; $("pick-q").focus(); apply(); return; }
-    var tog = t.closest("[data-maker-toggle]");
-    if (tog) {
-      var m = tog.parentElement, open = !m.classList.contains("open");
-      closeMakers();
-      m.classList.toggle("open", open);
-      tog.setAttribute("aria-expanded", String(open));
-      if (open) { var fi = m.querySelector("[data-maker-find]"); fi.value = ""; renderMakers(); fi.focus(); }
-      return;
-    }
-    if (t.closest("[data-maker-done]")) { closeMakers(); var mb = byK("maker"); if (mb) mb.focus(); return; }
-    if (t.closest("[data-maker-clear]")) { S.makers = []; renderMakers(); apply(); return; }
-    var chip = t.closest("[data-chip]");
-    if (chip) { var key = chip.getAttribute("data-chip"); S.makers = S.makers.filter(function (x) { return x !== key; }); renderMakers(); apply(); var mb2 = byK("maker"); if (mb2) mb2.focus(); }
-  });
-  document.addEventListener("change", function (e) {
-    var t = e.target;
-    if (t.matches && t.matches("[data-maker-key]")) {
-      var v = t.value;
-      if (t.checked) { if (S.makers.indexOf(v) === -1) S.makers.push(v); } else S.makers = S.makers.filter(function (x) { return x !== v; });
-      renderMakers(true);
-      apply();
-    }
   });
   document.addEventListener("input", function (e) {
     var t = e.target;
     if (t.id === "pick-q") { S.q = t.value; var bx = $("tbl-box"); if (bx) bx.scrollTop = 0; apply(); }
-    else if (t.matches && t.matches("[data-maker-find]")) renderMakers();
   });
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     if (t.id === "pick-q" && e.key === "Escape" && t.value) { e.preventDefault(); t.value = ""; S.q = ""; apply(); }
-    else if (e.key === "Escape" && main.querySelector(".maker.open")) { closeMakers(); var mb = byK("maker"); if (mb) mb.focus(); }
   });
   document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") poll(); });
 
   // ---------- start ----------
+  // After the page's own listeners: Escape that clears the search does only that.
+  var makers = makerFilter({ scope: main, rows: rows, changed: apply });
   remember();
   apply();
   poll();

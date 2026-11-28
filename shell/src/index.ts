@@ -100,7 +100,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleUsage({ db: env.DB, userId: user.id, now, secrets: vaultSecrets(env.DB, env) });
+      return handleUsage({ db: env.DB, userId: user.id, now, secrets: vaultSecrets(env.DB, env), plugins: await readProviderPlugins(env, env.DB) });
     }
     // Owner only: behind the Cloudflare Access check above (T15).
     if (url.pathname === PRICE_TABLE_PATH && request.method === "GET") {

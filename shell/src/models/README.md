@@ -196,9 +196,13 @@ Both tables list the dearest first, ties by name, in a fixed order with no
 sort control. Per model scrolls inside its own box, about ten rows tall (fewer
 on a phone), with its column header and its "This month" foot pinned; over
 ten rows a search sits above it (any part of the name, maker or ID, a live
-count, Clear when nothing matches). The search runs in the page only, with no
-request and the address unchanged; without scripts it stays hidden and the
-box holds the whole list. Per task, a row per task, stays a plain table.
+count, Clear when nothing matches), with beside it the same Maker filter as
+Providers (`maker-filter.ts`), which names a maker as Providers does and
+narrows the rows together with the search. While either narrows the rows, the
+foot, still the month's totals, reads "All models this month". Both run in
+the page only, with no request and the address unchanged; without scripts
+they stay hidden and the box holds the whole list. Per task, a row per task,
+stays a plain table.
 
 When OpenRouter's figure for the current key and the app's count differ, one
 line under the figures says why, with the detail collapsed: each Connect makes
