@@ -1,22 +1,24 @@
-// Testing a model (design-v3 1.5, T17): on the provider's Connect screen
-// (providers/models-table.ts), one table lists every model the connected
-// provider lists, each with Test. Test runs the model's test call once and
-// records it as the model's latest test (models/usable.ts): a model whose
-// latest test passed is one the user's tasks can use, and a later failed
-// test takes it out (the owner, 2026-11-27: "quite franky remove the add
-// feature altogether"). Only the model's own verdict is recorded so: a
-// refusal that says nothing about the model (`notVerdict`: the provider not
-// connected, the month's budget spent, no credential, no credit, the
-// provider busy) leaves its latest test, and so its tasks, as they were.
+// The model list and its optional Test (design-v3 1.5, T17): on the
+// provider's Connect screen (providers/models-table.ts), one table lists every
+// model the connected provider lists, each with Test. A model needs no test to
+// be Ready (models/ready.ts); Test runs the model's test call once, when the
+// user wants to see it answer, and records it as the model's latest call
+// (models/latest-tests.ts): a failed one marks the row Failed when tested,
+// with Try again, and a later pass takes that back. Only the model's own
+// verdict is recorded so: a refusal that says nothing about the model
+// (`notVerdict`: the provider not connected, the month's budget spent, no
+// credential, no credit, the provider busy) records nothing.
 //
 //   listOffer(db, plugins, userId, provider) -> OfferRow[]
 //   testOne(db, plugins, { userId, provider, model, now }) -> TestOutcome     Test on a row
-//   testModel(db, plugin, plugins, input) -> TestOutcome                      one test call, also for Test all models
+//   testModel(db, plugin, plugins, input) -> TestOutcome                      one test call
 //   testRecord(outcome, plugin) -> TestRecord                                  what a test showed, as stored
 //
 // The list is every model OpenRouter's own model list names (the owner,
-// 2026-11-27: "i would like to list all models and then choose"), read with
-// the price table (src/prices/openrouter.ts). Each row carries the model's
+// 2026-11-27: "i would like to list all models and then choose") that lists
+// tool use among its supported parameters (a task's agent calls tools, so a
+// model without them is never choosable and never listed), read with the
+// price table (src/prices/openrouter.ts). Each row carries the model's
 // list price, the source and date read, and its tier from that price
 // (tiers.ts). A model the plug-in cannot call shows why and cannot be tested;
 // one with no input and output price shows "no price yet" and cannot be
@@ -42,7 +44,7 @@ import type { Link, PlainReason, PluginRegistry, ProviderPlugin, Usage } from ".
 import { sendTestCall } from "../proxy/proxy";
 import { readAccountList } from "./account-list";
 import { readPriceCaps, type PriceCap } from "./price-caps";
-import { latestTestWrite, type TestRecord } from "./usable";
+import { latestTestWrite, type TestRecord } from "./latest-tests";
 
 export interface OfferRow {
   model: string;
@@ -63,8 +65,6 @@ export interface OfferRow {
   cap?: PriceCap;
   // The user's own account leaves it out (models/account-list.ts).
   accountLeftOut: boolean;
-  // Where the provider lists no tool support for it, the plug-in's words.
-  noToolUse?: string;
   // The plug-in's plain notes for the entry (a retirement date, a price
   // that rises with the prompt's length).
   notes: string[];
@@ -149,7 +149,7 @@ function priceOf(rows: PriceRow[], location: string): Pick<OfferRow, "price" | "
 }
 
 // Every model the provider's own list names and every model the price table
-// prices there, by ID.
+// prices there, by ID, but those the provider lists with no tool use.
 export async function listOffer(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider): Promise<OfferRow[]> {
   const plugin = plugins[provider];
   if (!plugin) return [];
@@ -162,7 +162,7 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
   const free = new Set((catalog?.models ?? []).filter((m) => m.free).map((m) => m.id));
   const account = await readAccountList(db, userId, provider);
   const caps = await readPriceCaps(db, userId, provider);
-  const ids = [...new Set([...names.keys(), ...rowsByModel.keys()])].sort(byText);
+  const ids = [...new Set([...names.keys(), ...rowsByModel.keys()])].filter((model) => plugin.connect.noToolUse?.(model) === undefined).sort(byText);
   return ids.map((model) => {
     const location = plugin.connect.locations(model)[0] ?? "global";
     const name = names.get(model);
@@ -187,7 +187,6 @@ export async function listOffer(db: D1Database, plugins: PluginRegistry, userId:
       router,
       ...(cap ? { cap } : {}),
       accountLeftOut: account !== undefined && !account.models.has(model),
-      noToolUse: plugin.connect.noToolUse?.(model),
       notes: [...(isFree ? [FREE_NOTE] : zeroTokens ? [NOT_FREE_NOTE] : []), ...(plugin.connect.modelNotes?.(model) ?? [])],
     };
   });
@@ -258,7 +257,7 @@ const NOT_VERDICT_FAILURES: ReadonlySet<PlainReason> = new Set<PlainReason>(["no
 export const isVerdict = (o: TestOutcome): boolean => o.kind === "passed" || !o.notVerdict;
 
 // One test call on `model` through the proxy, and what it proved: the passed
-// call, or the plain refusal. Used by Test and by Test all models.
+// call, or the plain refusal.
 export async function testModel(
   db: D1Database,
   plugin: ProviderPlugin,
@@ -381,8 +380,8 @@ export function testRecord(o: TestOutcome, plugin: ProviderPlugin): TestRecord {
   };
 }
 
-// Test on a row: one test call, recorded as the model's latest test when it
-// is the model's verdict. A row that cannot be tested is refused with no
+// Test on a row (and Try again on a failed one): one test call, recorded as
+// the model's latest call when it is the model's verdict. A row that cannot be tested is refused with no
 // call and nothing recorded.
 export async function testOne(
   db: D1Database,
@@ -421,9 +420,9 @@ export function refusalText(o: Refused, plugin: ProviderPlugin | undefined): str
       return "This month's budget is spent.";
     case "no_credits":
       if (o.free) return `${short} asked for credit even for this free model.`;
-      return plugin ? reasonText(o.reason, plugin) : `${short} refused the test call.`;
+      return plugin ? reasonText(o.reason, plugin) : `${short} refused the call.`;
     default:
-      return plugin ? reasonText(o.reason, plugin) : `${short} refused the test call.`;
+      return plugin ? reasonText(o.reason, plugin) : `${short} refused the call.`;
   }
 }
 

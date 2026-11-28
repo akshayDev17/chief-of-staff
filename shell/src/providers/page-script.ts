@@ -2,41 +2,43 @@
 // or changes its address (the owner, 2026-11-28):
 //
 // - Search, the Maker filter (models/maker-filter.ts: its find box and chips)
-//   and the strip's Works / Needs credit / Doesn't work / Not tested yet cells only show and
-//   hide rows: no request. The strip and its bar count the rows search, the
-//   Maker filter and a strength show (each row's data-state, its rowState),
-//   the end label then reading "N shown", and a line under Test all
-//   says Test all and Retest failed still cover the whole list. A strip cell
-//   filters within that view and leaves the counts as they are.
-// - Every form marked data-fetch (Test, Refresh, Check again, the price cap,
-//   Test all, Retest failed, Disconnect) and every link marked data-view (a
+//   and the strip's Ready / Needs credit / Needs a step cells only show and hide rows: no request. The strip and its bar count
+//   the rows search, the Maker filter and a strength show (each row's
+//   data-state, its rowState), the end label then reading "N shown". A strip
+//   cell filters within that view and leaves the counts as they are.
+// - Every form marked data-fetch (Test, Try again, Refresh, Check again, the
+//   price cap, Disconnect) and every link marked data-view (the Disconnect
 //   confirm, the cap editor, Cancel) is sent in place, asking for JSON: the
 //   server answers with the page's <main> rendered for that view, and only
 //   the parts that changed are swapped in. Requests go one at a time, in
-//   order; a button waiting shows it is busy.
-// - While a Test all models run goes on (the rail is marked data-running),
-//   the same view is asked for again every few seconds.
+//   order; a button waiting shows it is busy, and Refresh dims the strip and
+//   the rows until its answer is in. A request that fails (no
+//   answer, or an error status) reads the page again, so whatever the server
+//   saved shows, and says so with Try again, which sends it once more.
 // - Back from the provider's consent page (main is marked data-land), the
 //   search field takes focus once.
-// - An address with strength=<Smallest|Middle|Strongest> (and show=<works|
-//   credit|fails|pending>) opens the table showing only that strength's models (in
-//   that state), as Model for each task links a strength with no usable model;
+// - An address with strength=<Smallest|Middle|Strongest> (and show=<ready|
+//   credit|step>) opens the table showing only that strength's models (in
+//   that state), as Model for each task links a strength with no Ready model;
 //   the count line names it, and its Show all shows every model again.
 // Focus, the table's scroll position, typed cap values and the open details
 // survive every swap. Without the script, every form posts and redirects
 // back (page.ts), and every link is a plain address.
 
 import { MAKER_FILTER_JS } from "../models/maker-filter";
+import { ICON } from "./models-table";
 
 export const PAGE_SCRIPT = String.raw`
 (function () {
   "use strict";
   var main = document.getElementById("screen");
   if (!main || !window.fetch || !window.history) return;
-  var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, timer: 0, built: false };
+  var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, lists: 0, det: {}, allowed: {}, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
-  var NOUN = { works: "that work", credit: "that need credit", fails: "that don't work", pending: "not tested yet" };
-  var TONE = { works: "good", credit: "warn", fails: "bad" };
+  var BAD = ${JSON.stringify(ICON.bad)};
+  var STATES = ["ready", "credit", "step"];
+  var NOUN = { ready: "ready", credit: "that need credit", step: "that need a step" };
+  var TONE = { ready: "good", credit: "warn" };
   var asked = new URLSearchParams(location.search);
   S.tier = ["Smallest", "Middle", "Strongest"].indexOf(asked.get("strength")) !== -1 ? asked.get("strength") : null;
   if (S.tier && NOUN[asked.get("show")]) S.filter = asked.get("show");
@@ -63,15 +65,16 @@ export const PAGE_SCRIPT = String.raw`
   function matches(li, t) { return inView(li, t) && (!S.filter || li.getAttribute("data-state") === S.filter); }
   // The strip, its bar and its end label, from the rows in view.
   function recount(all, t) {
-    var c = { works: 0, credit: 0, fails: 0, pending: 0 };
+    var c = { ready: 0, credit: 0, step: 0 }, total = 0;
     each(all, function (li) {
       if (!inView(li, t)) return;
+      total++;
       var st = li.getAttribute("data-state");
       if (c.hasOwnProperty(st)) c[st]++;
     });
-    var total = c.works + c.credit + c.fails + c.pending, narrowed = !!(S.tier || t.length || makers.chosen().length);
+    var narrowed = !!(S.tier || t.length || makers.chosen().length);
     function pct(n) { return (total ? (n / total) * 100 : 0).toFixed(3); }
-    each(["works", "credit", "fails", "pending"], function (k) {
+    each(STATES, function (k) {
       var v = main.querySelector('.cell[data-filter="' + k + '"] .v');
       if (!v) return;
       v.textContent = String(c[k]);
@@ -80,8 +83,8 @@ export const PAGE_SCRIPT = String.raw`
     var bar = main.querySelector(".bar");
     if (bar) {
       // The same words as models-table.ts barLabel.
-      bar.setAttribute("aria-label", (c.works + c.credit + c.fails) + (narrowed ? " tested of " + total + " shown" : " of " + total + " tested") + ": " + c.works + " work, " + c.credit + " need credit, " + c.fails + " don't");
-      each([["w", "works"], ["c", "credit"], ["f", "fails"]], function (seg) {
+      bar.setAttribute("aria-label", c.ready + " of " + total + (narrowed ? " shown" : "") + " ready: " + c.credit + " need credit, " + c.step + " need a step");
+      each([["w", "ready"], ["c", "credit"]], function (seg) {
         var i = bar.querySelector("i." + seg[0]);
         if (i) i.setAttribute("style", "width:" + pct(c[seg[1]]) + "%");
       });
@@ -90,7 +93,6 @@ export const PAGE_SCRIPT = String.raw`
     if (act) act.hidden = !c.credit;
     var ends = main.querySelector("[data-ends]");
     if (ends) ends.textContent = narrowed ? total + " shown" : total + " models";
-    each(main.querySelectorAll("[data-whole-list]"), function (p) { p.hidden = !narrowed; });
   }
   function mark(text, t) {
     var s = esc(text);
@@ -141,7 +143,7 @@ export const PAGE_SCRIPT = String.raw`
       if (panel) panel.hidden = !open;
     });
     Object.keys(S.allowed).forEach(showCheck);
-    Object.keys(S.waiting).forEach(function (k) { var b = byK(k); if (b) busy(b); });
+    showBusy();
     makers.render(true);
   }
 
@@ -166,48 +168,60 @@ export const PAGE_SCRIPT = String.raw`
     if (lbl) { lbl.textContent = label; if (ico) ico.innerHTML = SPIN; else lbl.insertAdjacentHTML("beforebegin", SPIN); }
     else b.innerHTML = SPIN + (label ? " " + esc(label) : "");
   }
-  function say(text) {
-    var box = main.querySelector('[data-part="err"]') || main.querySelector('[data-part="banner"]');
-    if (box) box.innerHTML = '<div class="err" role="alert"><div><p>' + esc(text) + "</p></div></div>";
+  // Every request still waiting shows it: its button, and for Refresh the strip and the rows.
+  function showBusy() {
+    Object.keys(S.waiting).forEach(function (k) { var b = byK(k); if (b) busy(b); });
+    if (S.lists) each(main.querySelectorAll('[data-part="strip"], [data-part="rows"]'), function (p) { p.setAttribute("aria-busy", "true"); });
+  }
+  // A request that failed: the page as the server has it now, then the
+  // failure, with Try again sending the same request.
+  function failed(job) {
+    S.retry = job;
+    fetch(location.pathname + "?" + S.view, { headers: { accept: "application/json" }, credentials: "same-origin" })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(function (j) { swap(j.main); }, function () { swap(null); })
+      .then(function () {
+        var box = main.querySelector('[data-part="err"]') || main.querySelector('[data-part="banner"]');
+        if (!box) return;
+        var old = box.querySelector("[data-failed]");
+        if (old) old.remove();
+        box.insertAdjacentHTML("afterbegin", '<div class="err" role="alert" data-failed>' + BAD + '<div><p>Couldn&#39;t reach the app just now.</p><div class="acts"><button type="button" class="btn small outline" data-retry data-k="retry">Try again</button></div></div></div>');
+        delete S.last[box.getAttribute("data-part")];
+      })
+      .then(next);
   }
   // opens: a view link, whose answer may open a confirm or an editor: focus
   // goes to what it marks data-autofocus.
-  function send(url, init, k, isPoll, opens) {
+  // list: a Refresh, which re-reads the whole list.
+  function send(url, init, k, opens, list) {
     if (k) S.waiting[k] = true;
-    S.queue.push({ url: url, init: init, k: k, poll: !!isPoll, opens: !!opens });
+    if (list) S.lists++;
+    S.queue.push({ url: url, init: init, k: k, opens: !!opens, list: !!list });
+    showBusy();
     if (!S.busy) next();
   }
   function next() {
     var job = S.queue.shift();
-    if (!job) { S.busy = false; poll(); return; }
+    if (!job) { S.busy = false; return; }
     S.busy = true;
     var init = job.init || {};
     // The view shown now goes with every action, so a test keeps the results
     // already under their rows.
-    init.headers = job.poll ? { accept: "application/json", "x-cos-poll": "1" } : { accept: "application/json", "x-cos-view": S.view };
+    init.headers = { accept: "application/json", "x-cos-view": S.view };
     init.credentials = "same-origin";
     fetch(job.url, init)
       .then(function (r) { if (!r.ok && r.status !== 400 && r.status !== 429 && r.status !== 502) throw new Error(String(r.status)); return r.json(); })
       .then(function (j) {
         if (job.k) delete S.waiting[job.k];
+        if (job.list) S.lists--;
         if (typeof j.view === "string") S.view = j.view;
         swap(j.main, j.focus, job.opens);
       })
-      .catch(function () {
+      .then(next, function () {
         if (job.k) delete S.waiting[job.k];
-        swap(null);
-        say("Couldn't reach the app just now. Try again.");
-      })
-      .then(next);
-  }
-  var POLL_MS = 8000;
-  function poll() {
-    clearTimeout(S.timer);
-    if (!main.querySelector("[data-running]")) return;
-    S.timer = setTimeout(function () {
-      if (S.busy || S.queue.length || document.visibilityState === "hidden") { poll(); return; }
-      send(location.pathname + "?" + S.view, { method: "GET" }, null, true);
-    }, POLL_MS);
+        if (job.list) S.lists--;
+        failed(job);
+      });
   }
 
   // ---------- swapping the parts that changed ----------
@@ -243,7 +257,7 @@ export const PAGE_SCRIPT = String.raw`
         each(fresh, function (p, i) {
           if (p.hasAttribute("data-keep")) return;
           var name = p.getAttribute("data-part"), outer = p.outerHTML;
-          if (S.last[name] !== outer) live[i].replaceWith(p);
+          if (S.last[name] !== outer || live[i].getAttribute("aria-busy") === "true" || live[i].querySelector('[aria-busy="true"]')) live[i].replaceWith(p);
           S.last[name] = outer;
         });
       }
@@ -265,7 +279,6 @@ export const PAGE_SCRIPT = String.raw`
       target.focus({ preventScroll: true });
       if (focusK || opens) rowIntoView(target);
     }
-    poll();
   }
 
   // ---------- events ----------
@@ -279,7 +292,7 @@ export const PAGE_SCRIPT = String.raw`
     if (b && b.name) data.append(b.name, b.value);
     var k = b && b.getAttribute("data-k");
     if (b) busy(b);
-    send(form.action, { method: "POST", body: data }, k);
+    send(form.action, { method: "POST", body: data }, k, false, form.hasAttribute("data-busy-list"));
   });
   document.addEventListener("click", function (e) {
     var t = e.target;
@@ -287,11 +300,13 @@ export const PAGE_SCRIPT = String.raw`
     var a = t.closest("a[data-view]");
     if (a && main.contains(a) && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
       e.preventDefault();
-      send(a.href.split("#")[0], { method: "GET" }, a.getAttribute("data-k"), false, true);
+      send(a.href.split("#")[0], { method: "GET" }, a.getAttribute("data-k"), true);
       return;
     }
     var allow = t.closest("a[data-allow]");
     if (allow) { var id = allow.getAttribute("data-allow"); S.allowed[id] = true; setTimeout(function () { showCheck(id); var f = main.querySelector('form[data-check-for="' + cssq(id) + '"] button'); if (f) f.focus({ preventScroll: true }); }, 0); return; }
+    var retry = t.closest("[data-retry]");
+    if (retry) { var again = S.retry; S.retry = null; if (again) { busy(retry); send(again.url, again.init, again.k, again.opens, again.list); } return; }
     var hide = t.closest("[data-hide]");
     if (hide) {
       var more = hide.closest(".more"), gone = hide.getAttribute("data-hide");
@@ -319,14 +334,12 @@ export const PAGE_SCRIPT = String.raw`
     var t = e.target;
     if (t.id === "pick-q" && e.key === "Escape" && t.value) { e.preventDefault(); t.value = ""; S.q = ""; apply(); }
   });
-  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") poll(); });
 
   // ---------- start ----------
   // After the page's own listeners: Escape that clears the search does only that.
   var makers = makerFilter({ scope: main, rows: rows, changed: apply });
   remember();
   apply();
-  poll();
   // Back from the consent page: the search field, once, with the section in view.
   if (main.hasAttribute("data-land")) {
     main.removeAttribute("data-land");

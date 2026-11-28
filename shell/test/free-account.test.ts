@@ -5,17 +5,15 @@
 // both, with Google's Lyria music model listed at $0 a token; OpenRouter
 // refuses every paid model with 402 and answers the free one. Connect makes
 // no call; the account line says the account never bought credits; the free
-// model is labelled Free and passes its test; a paid one says it needs
-// credit, with Add credits; the music model is never tested; Test all models
-// says the paid ones need credit; and the free model that passed is usable,
-// in one step, for every task of its strength (Smallest).
+// model is labelled Free and is Ready with no test; the paid ones read Needs
+// credit, with Add credits; the music model is never listed; a Test of the
+// free one passes and of a paid one says it needs credit; and the free model
+// takes every task of its strength (Smallest) in one step, with no call made.
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import worker from "../src/index";
 import { handleTaskModels } from "../src/models/picker-page";
 import { routeTask, TASKS } from "../src/models/tasks";
-import { FRESH_LIST_WAIT, readTestAll, runQueuedTests } from "../src/models/test-all";
-import { readLatestTests } from "../src/models/usable";
+import { readLatestTests } from "../src/models/latest-tests";
 import { refreshPrices } from "../src/prices/refresh";
 import { readCurrentCatalog } from "../src/prices/store";
 import { isTrulyFreeTextModel } from "../src/prices/openrouter";
@@ -74,7 +72,6 @@ const entry = (html: string, id: string): string => {
   return start < 0 ? "" : html.slice(html.lastIndexOf("<li", start), html.indexOf("</li>", start));
 };
 
-const after = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
 const modelListReads = () => fetcher.sent.filter((s) => s.url === "https://openrouter.ai/api/v1/models").length;
 
 // The current list as the previous Worker stored it: no version, the music
@@ -100,12 +97,6 @@ beforeEach(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-// The every-minute cron, with OpenRouter answered by `f`.
-const minuteCron = (at: Date, f: typeof fetch) => {
-  vi.spyOn(globalThis, "fetch").mockImplementation(f);
-  return worker.scheduled({ cron: "* * * * *", scheduledTime: at.getTime(), noRetry: () => {} } as ScheduledController, { ...ENV, DB: env.DB });
-};
-
 const FREE_TIER_KEY = () => keyReply({ is_free_tier: true, limit: 10, limit_remaining: 10, free_model_daily_requests: { used: 17, limit: 50, remaining: 33 } });
 
 describe("a $0 OpenRouter account", () => {
@@ -124,48 +115,31 @@ describe("a $0 OpenRouter account", () => {
     expect(html).toContain("https://openrouter.ai/settings/privacy");
   });
 
-  it("keeps a list that predates the free and text-only rules in use and reads nothing by itself; queued tests wait for Refresh model list, then run without the music model", async () => {
+  it("keeps a list that predates the free and text-only rules in use and reads nothing by itself, until Refresh model list reads it without the music model", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
-    expect((await post("/openrouter/test-all")).status).toBe(303);
-    // A run queued before the deploy, on a list that let the music model through.
-    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
-    await env.DB.prepare("INSERT INTO model_tests (run_id, user_id, provider, model, state) VALUES (?, ?, 'openrouter', ?, 'queued')").bind(run.id, userId, MUSIC).run();
     await storeOldCatalog();
-    const queued = async () => (await readTestAll(env.DB, userId, "openrouter"))!.tests.filter((t) => t.state === "queued").length;
-    const before = await queued();
-
     fetcher = fakeFetch({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
-    for (const seconds of [0, 60, 20 * 60]) await minuteCron(after(seconds), fetcher);
     expect((await tasks()).status).toBe(200);
-    const html = await (await get("", after(20 * 60))).text();
-    expect(html).toContain("Waiting for a fresh model list.");
-    expect(FRESH_LIST_WAIT).toMatch(/^Waiting for a fresh model list/);
+    const html = await (await get()).text();
+    expect(html).toContain("This list follows older rules.");
+    expect(html).toMatch(/class="btn primary small" data-k="refresh-list"[^>]*>Refresh model list</);
     expect(modelListReads()).toBe(0);
     expect(chatModels()).toEqual([]);
-    expect(await queued()).toBe(before);
     expect((await readCurrentCatalog(env.DB))!.version).toBeUndefined();
-
     expect((await post("/openrouter/refresh")).status).toBe(303);
     expect(modelListReads()).toBe(1);
     expect((await readCurrentCatalog(env.DB))!.models.find((m) => m.id === MUSIC)).toBeUndefined();
-    for (let minute = 21; (await queued()) > 0 && minute < 50; minute++) await minuteCron(after(minute * 60), fetcher);
-    expect(modelListReads()).toBe(1);
-    const done = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(done.done).toBe(done.tests.length);
-    expect(chatModels()).not.toContain(MUSIC);
-    expect(chatModels()).toContain(FREE);
-    expect(done.tests.find((t) => t.model === MUSIC)).toMatchObject({ state: "failed", result: { reason: "cannot_call" } });
-    expect(done.tests.find((t) => t.model === FREE)).toMatchObject({ state: "passed" });
+    expect(chatModels()).toEqual([]);
   });
 
   it("passes the free model when it is tested, and says a paid one needs credit, with Add credits first", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
     const free = entry(await tested(FREE), FREE);
-    expect(free).toMatch(/<strong>[^<]+ passed\.<\/strong> Tasks can use it\./);
+    expect(free).toMatch(/<strong>[^<]+ passed\.<\/strong> It answered just now\./);
     const paidModel = MODELS.data.find((m) => !isTrulyFreeTextModel(m) && Number(m.pricing.prompt) > 0 && !m.id.startsWith("~") && !m.id.endsWith(":batch") && m.id !== "anthropic/claude-sonnet-5.5")!.id;
     const paid = entry(await tested(paidModel), paidModel);
-    // A 402 says nothing about the model: no verdict, so the row stays untested.
-    expect(paid).toContain('data-state="pending"');
+    // A 402 says nothing about the model: no verdict; the row reads Needs credit, as the account line says.
+    expect(paid).toContain('data-state="credit"');
     expect((await readLatestTests(env.DB, userId, "openrouter")).has(paidModel)).toBe(false);
     // The one action leads; OpenRouter's own words are in the collapsed details.
     expect(paid).toMatch(/<strong>Needs credit on OpenRouter\.<\/strong><\/span><button type="button" class="link hide" data-hide="[^"]+">Hide<\/button><\/p><div class="acts"><a class="btn small outline ext" href="https:\/\/openrouter.ai\/settings\/credits"[^>]*>Add credits<\/a><\/div><details><summary>Details<\/summary><p>OpenRouter replied: 402/);
@@ -175,44 +149,39 @@ describe("a $0 OpenRouter account", () => {
     expect(chatModels()).toEqual([FREE, paidModel]);
   });
 
-  it("never tests the music model in Test all models: the free one works, the paid ones need credit; the free one takes every Smallest task in one step", async () => {
+  it("makes the free model Ready and the paid ones Needs credit with no call, and the free one takes every Smallest task in one step", async () => {
     await connect({ chat: chatAsZeroAccount, currentKey: FREE_TIER_KEY });
-    expect((await post("/openrouter/test-all")).status).toBe(303);
-    await runQueuedTests(env.DB, await plugins(), NOW);
-    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(run.done).toBe(run.modelCount);
-    expect(run.tests.map((t) => t.model)).not.toContain(MUSIC);
-    expect(chatModels()).not.toContain(MUSIC);
-    const free = run.tests.find((t) => t.model === FREE)!;
-    expect(free.state).toBe("passed");
-    const paid = run.tests.filter((t) => t.model !== FREE);
-    expect(paid.length).toBeGreaterThan(0);
-    for (const t of paid) expect(t).toMatchObject({ state: "failed", result: { reason: "no_credits", text: "Needs credit on OpenRouter." } });
     const page = await (await get()).text();
-    // Never usable, so no outcome tag; the reason line says it.
-    expect(entry(page, paid[0]!.model)).not.toContain('class="pill');
-    expect(entry(page, paid[0]!.model)).toContain('<span class="meta why">Needs credit on OpenRouter. · ');
-    expect(entry(page, FREE)).toContain('data-state="works"');
+    const paid = [...page.matchAll(/<li class="row"[^>]*data-id="([^"]+)"[^>]*data-state="credit"/g)].map((m) => m[1]!);
+    expect(paid.length).toBeGreaterThan(0);
+    expect(paid).not.toContain(FREE);
+    expect(entry(page, paid[0]!)).toContain('<span class="pill warn">Needs credit</span>');
+    expect(entry(page, FREE)).toContain('data-state="ready"');
     expect(entry(page, FREE)).not.toContain('class="pill ok"');
+    expect(page).toMatch(/data-credit-act>Add credits<\/a>/);
+    expect(chatModels()).toEqual([]);
 
-    // The free model passed, so it is usable: no Add. It is a Smallest
-    // model (its price is $0), so only the Smallest tasks can take it (the
-    // owner, 2026-11-27: "when suggested strenght == Smallest --> the
-    // dropdown next to it should only contain all passing run models tagged
-    // with the smallest chip"); the Middle ones wait for a Middle model.
+    // The free model is Ready: no Add, no test. It is a Smallest model (its
+    // price is $0), so only the Smallest tasks can take it (the owner,
+    // 2026-11-27: "when suggested strenght == Smallest --> the dropdown next
+    // to it should only contain all passing run models tagged with the
+    // smallest chip"); the Middle ones wait for credit.
     const smallest = TASKS.filter((t) => t.tier === "Smallest");
     const picker = await (await tasks()).text();
-    expect(picker).toContain("Your models that passed are all free, so none is proposed.");
+    expect(picker).toContain("Your Ready models are all free, so none is proposed.");
     expect(picker).toContain(`Use my free models for ${smallest.length} tasks`);
-    expect(picker).toContain("No Middle model has passed a test yet.");
+    // The fixture's one Middle model with tool use is left out by the account's settings.
+    expect(picker).toContain("No Middle model is ready yet.</span>");
+    expect(picker).toContain('href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle#test">See Middle models</a>');
     const used = await tasks("/use-free", {});
     expect(used.status).toBe(303);
     expect(used.headers.get("location")).toBe(`${TASKS_URL}?free=${smallest.length}`);
     expect(await (await handleTaskModels(new Request(used.headers.get("location")!), { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW })).text()).toContain(`${smallest.length} tasks now use your free models.`);
     for (const task of TASKS) {
-      if (task.tier === "Smallest") expect(await routeTask(env.DB, userId, task.id)).toMatchObject({ main: { model: FREE } });
-      else expect(await routeTask(env.DB, userId, task.id)).toBeUndefined();
+      if (task.tier === "Smallest") expect(await routeTask(env.DB, await plugins(), userId, task.id)).toMatchObject({ main: { model: FREE } });
+      else expect(await routeTask(env.DB, await plugins(), userId, task.id)).toBeUndefined();
     }
+    expect(chatModels()).toEqual([]);
   });
 
   it("says a 402 on a free model plainly, never as a paid model's", async () => {

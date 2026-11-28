@@ -244,9 +244,3 @@ export interface ProviderPlugin {
 }
 
 export type PluginRegistry = Partial<Record<Provider, ProviderPlugin>>;
-
-// A provider refusal the task's fallback answers: rate limited or overloaded
-// (429 and the like), or the provider failing (5xx). Any other status is the
-// request's own fault, or the account's (no credits, a removed key), and
-// another model would be refused too.
-export const fallbackAnswers = (status: number): boolean => status === 408 || status === 429 || status >= 500;

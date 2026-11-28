@@ -1,6 +1,7 @@
 // Provider connections (design-v3 1.4): one per user and provider. Written by
-// the provider's Connect method (T16) and read by the proxy; nothing else
-// writes or reads them. They hold nothing secret: only the fields the
+// the provider's Connect method (T16) and read by the proxy; the account's
+// credit figure (has_credit) is written by the pages that read it live.
+// They hold nothing secret: only the fields the
 // provider's plug-in declares are accepted, each a short plain string.
 
 import type { ConnectionFields, ProviderPlugin } from "./plugin";
@@ -29,7 +30,9 @@ export async function writeConnection(
       `INSERT INTO provider_connections (user_id, provider, fields, plugin_version, connected_at) VALUES (?1, ?2, ?3, ?4, ?5)
        ON CONFLICT (user_id, provider) DO UPDATE SET fields = excluded.fields, plugin_version = excluded.plugin_version,
          connected_at = CASE WHEN json_extract(provider_connections.fields, '$.key_hash') = json_extract(excluded.fields, '$.key_hash')
-           THEN provider_connections.connected_at ELSE excluded.connected_at END`,
+           THEN provider_connections.connected_at ELSE excluded.connected_at END,
+         has_credit = CASE WHEN json_extract(provider_connections.fields, '$.key_hash') = json_extract(excluded.fields, '$.key_hash')
+           THEN provider_connections.has_credit ELSE NULL END`,
     )
     .bind(userId, plugin.provider, JSON.stringify(fields), plugin.version, now.toISOString())
     .run();
@@ -51,6 +54,20 @@ export async function connectedAt(db: D1Database, userId: string, provider: stri
     .bind(userId, provider)
     .first<{ connected_at: string }>();
   return row ? new Date(row.connected_at) : undefined;
+}
+
+// Whether the account behind the current key has credit left, as its last
+// live read said (models/ready.ts): undefined before any read on this key.
+export async function readHasCredit(db: D1Database, userId: string, provider: string): Promise<boolean | undefined> {
+  const row = await db
+    .prepare("SELECT has_credit FROM provider_connections WHERE user_id = ? AND provider = ?")
+    .bind(userId, provider)
+    .first<{ has_credit: number | null }>();
+  return typeof row?.has_credit === "number" ? row.has_credit === 1 : undefined;
+}
+
+export async function saveHasCredit(db: D1Database, userId: string, provider: string, hasCredit: boolean): Promise<void> {
+  await db.prepare("UPDATE provider_connections SET has_credit = ? WHERE user_id = ? AND provider = ?").bind(hasCredit ? 1 : 0, userId, provider).run();
 }
 
 // Disconnect: the record goes, so the provider's models stop answering for

@@ -1,22 +1,31 @@
 // Models › Setup › Budgets (design-v3 1.8): the one monthly OpenRouter
-// budget, its suggestion from the usable models at OpenRouter's list prices,
+// budget, its suggestion from the tasks' models (or, before a task has one,
+// the Ready models proposed for them) at OpenRouter's list prices,
 // and setting and changing it in place or, without the script, by
 // post-redirect-get. Every request goes through the Worker, Access included,
 // against a D1 with every migration applied.
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
+import { saveAccountList } from "../src/models/account-list";
 import { savePriceCap } from "../src/models/price-caps";
 import { CATALOG_VERSION } from "../src/prices/openrouter";
 import { writeSnapshot } from "../src/prices/store";
 import { monthlyFor, parseBudget, readBudget, readSuggestionBasis, setBudget, suggest, TOKENS_PER_APPLICATION } from "../src/proxy/budgets";
-import { writeConnection } from "../src/proxy/connections";
+import { saveHasCredit, writeConnection } from "../src/proxy/connections";
 import { writeLedgerRow } from "../src/proxy/ledger";
 import { ENV, generateKey, serveCerts, signToken, type TestKey } from "./access-fixture";
 import { element, pageScripts, runScript, type Sent } from "./script-dom";
 import { recordTest, row, seedPrices, TEST_CATALOG, testPlugin, userFor } from "./test-plugin";
 
 const NOW = new Date("2026-11-25T10:00:00Z");
+// The plug-in the direct reads use; the Worker's own reads the stored list.
+const plugins = { openrouter: testPlugin("openrouter", { routers: ["openrouter/auto"] }) };
+const basisNow = () => readSuggestionBasis(env.DB, plugins, ownerId);
+const dropRoutes = () => env.DB.prepare("DELETE FROM task_routes").run();
+// The owner's account's own list, leaving out `models`: they are not Ready.
+const leaveOut = (...models: string[]) =>
+  saveAccountList(env.DB, ownerId, "openrouter", TEST_CATALOG.models.map((m) => m.id).concat("openrouter/auto").filter((id) => !models.includes(id)), NOW);
 const BASE = "https://shell.test/chief-of-staff/models/setup/budgets";
 let key: TestKey;
 
@@ -56,16 +65,19 @@ beforeEach(async () => {
   await seedPrices();
   ownerId = (await userFor("test-sub")).id;
   await writeConnection(env.DB, ownerId, testPlugin(), { method: "oauth_pkce", key_hash: "a".repeat(64) }, NOW);
-  for (const m of ["test-sonnet", "test-mini"]) await recordTest(ownerId, m);
+  // The account has credit, as its last live read said: every priced model is Ready.
+  await saveHasCredit(env.DB, ownerId, "openrouter", true);
+  // A Middle task runs on the Strongest Test Sonnet, kept from before.
+  await routeTask(ownerId, "score", "test-sonnet");
 });
 
 describe("the suggested budget", () => {
-  it("is the dearest usable model at OpenRouter's list prices and the design's tokens, a month of days", async () => {
-    const basis = (await readSuggestionBasis(env.DB, ownerId))!;
+  it("is the dearest model the tasks use at OpenRouter's list prices and the design's tokens, a month of days", async () => {
+    const basis = (await basisNow())!;
     // (51,100 × $3 + 3,225 × $15) per million = $0.201675 an application; × 5 × 30 = $30.25, rounded up.
     expect(TOKENS_PER_APPLICATION).toEqual({ input: 51_100, output: 3_225 });
     expect(basis).toEqual({
-      from: "usable",
+      from: "tasks",
       perApplicationUsd: 0.201675,
       model: { model: "test-sonnet", name: "Test Sonnet", inputUsdPerMTok: 3, outputUsdPerMTok: 15, free: false, capped: false, checkedOn: "2026-11-27" },
     });
@@ -74,20 +86,24 @@ describe("the suggested budget", () => {
     expect(monthlyFor(0, 5)).toBe(1);
   });
 
-  it("is worked from the models the tasks use, once a task uses a usable one, main or fallback", async () => {
+  it("is worked from the models the tasks use, main or fallback", async () => {
+    await dropRoutes();
     await routeTask(ownerId, "match", "test-mini");
-    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ from: "tasks", model: { model: "test-mini" }, perApplicationUsd: 0.016 });
+    expect(await basisNow()).toMatchObject({ from: "tasks", model: { model: "test-mini" }, perApplicationUsd: 0.016 });
     await routeTask(ownerId, "score", "test-mini", "test-sonnet");
-    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ from: "tasks", model: { model: "test-sonnet" } });
+    expect(await basisNow()).toMatchObject({ from: "tasks", model: { model: "test-sonnet" } });
   });
 
-  it("ignores a task's model that is no longer usable, and has none before any model passed", async () => {
-    await routeTask(ownerId, "match", "test-luna");
-    // test-luna never passed its test: not usable, so not the tasks' basis.
-    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ from: "usable", model: { model: "test-sonnet" } });
-    await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
-    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
-    expect(await readSuggestionBasis(env.DB, ownerId)).toBeUndefined();
+  it("is worked from the Ready models proposed for the tasks before a task uses one, ignores one the provider no longer offers, and has none before any is Ready", async () => {
+    await dropRoutes();
+    await routeTask(ownerId, "match", "test-gone");
+    // The Smallest tasks are proposed Test Luna with Test Mini; no Middle model is Ready.
+    expect(await basisNow()).toMatchObject({ from: "proposed", model: { model: "test-mini" }, perApplicationUsd: 0.016 });
+    // A failed call leaves a model Ready; the account's settings leaving them out does not.
+    await recordTest(ownerId, "test-luna", "failed", "2026-11-27T09:30:00.000Z");
+    expect(await basisNow()).toMatchObject({ from: "proposed", model: { model: "test-mini" } });
+    await leaveOut("test-luna", "test-mini");
+    expect(await basisNow()).toBeUndefined();
   });
 
   it("follows the current model list's prices, and leaves out a model the list no longer has", async () => {
@@ -96,13 +112,14 @@ describe("the suggested budget", () => {
       catalog: { ...TEST_CATALOG, models: TEST_CATALOG.models.filter((m) => m.id !== "test-sonnet").concat({ id: "test-mini", name: "Test Mini 2", tools: true }).filter((m, i, a) => a.findIndex((x) => x.id === m.id) === i) },
       rows: [{ ...row("test-mini", "input", 2), dateRead: "2026-11-28" }, { ...row("test-mini", "output", 8), dateRead: "2026-11-28" }],
     });
-    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({ model: { model: "test-mini", inputUsdPerMTok: 2, outputUsdPerMTok: 8, checkedOn: "2026-11-28" } });
+    // Test Sonnet is no longer listed: the proposals are Test Luna (Smallest) and Test Mini, Middle now.
+    expect(await basisNow()).toMatchObject({ from: "proposed", model: { model: "test-mini", inputUsdPerMTok: 2, outputUsdPerMTok: 8, checkedOn: "2026-11-28" } });
   });
 
-  it("prices a router at the user's own price cap on it", async () => {
+  it("prices a router a task uses at the user's own price cap on it", async () => {
     await savePriceCap(env.DB, ownerId, "openrouter", "openrouter/auto", { input: 10, output: 40 }, new Date("2026-11-26T08:00:00Z"));
-    await recordTest(ownerId, "openrouter/auto");
-    expect(await readSuggestionBasis(env.DB, ownerId)).toMatchObject({
+    await routeTask(ownerId, "match", "openrouter/auto");
+    expect(await basisNow()).toMatchObject({
       model: { model: "openrouter/auto", name: "Auto router", inputUsdPerMTok: 10, outputUsdPerMTok: 40, capped: true, checkedOn: "2026-11-26" },
     });
   });
@@ -113,10 +130,10 @@ describe("the suggested budget", () => {
       await writeSnapshot(env.DB, {
         takenAt: "2026-11-28T06:00:00Z", status: "good", results: [],
         catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, free] },
-        // Test Sonnet stays priced and usable: only the tasks' choices make the basis free.
+        // Test Sonnet stays priced and Ready: only the tasks' choices make the basis free.
         rows: [row(free.id, "input", 0), row(free.id, "output", 0), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
       });
-      await recordTest(ownerId, free.id);
+      await dropRoutes();
     });
 
     it("names $1 the floor, the smallest budget that switches calls on, not a dearest model's estimate", async () => {
@@ -131,11 +148,9 @@ describe("the suggested budget", () => {
       expect(html).not.toContain('<div class="bb" data-budget-bar>');
     });
 
-    it("says every tested model is free before any task has one", async () => {
-      await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
-      await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+    it("says the Ready models the tasks would get are all free before any task has one", async () => {
       const html = await page();
-      expect(html).toContain('<p class="from">Every model that passed its test is free.</p>');
+      expect(html).toContain('<p class="from">Your Ready models for tasks are all free.</p>');
       expect(html).not.toContain("dearest");
     });
 
@@ -169,7 +184,7 @@ describe("Models › Setup › Budgets, before the budget is set", () => {
     const html = await page("?per_day=5");
     expect(html).toContain('<p class="label">Suggested <span class="pill warn">estimate</span> <span class="meta">checked on 2026&#8209;11&#8209;27</span></p>');
     expect(html).toContain('<span class="num big" data-sugg>$31</span> <span class="unit">a month</span>');
-    expect(html).toContain('From <strong>Test Sonnet</strong>, the dearest model that passed its test.');
+    expect(html).toContain('From <strong>Test Sonnet</strong>, the dearest model your tasks use.');
     expect(html).toContain("<li>Its price on OpenRouter's list: $3.00 in, $15.00 out per million tokens, read 2026&#8209;11&#8209;27.</li>");
     expect(html).toMatch(/<button type="submit" class="btn primary wide" name="do" value="accept" data-k="accept" data-accept data-label="Set \{usd\} a month">Set \$31 a month<\/button>/);
     expect(html).toContain("Model calls stay stopped until it is set. Tests still run.");
@@ -206,11 +221,12 @@ describe("Models › Setup › Budgets, before the budget is set", () => {
     expect(await page("?per_day=nope")).toContain("Set $31 a month");
   });
 
-  it("gives a direct action when there is no suggestion: Test a model, with Set budget the one primary", async () => {
-    await recordTest(ownerId, "test-sonnet", "failed", "2026-11-27T09:30:00.000Z");
-    await recordTest(ownerId, "test-mini", "failed", "2026-11-27T09:30:00.000Z");
+  it("gives a direct action when there is no suggestion: See models, with Set budget the one primary", async () => {
+    await dropRoutes();
+    await leaveOut("test-luna", "test-mini");
     const html = await page();
-    expect(html).toContain('<a class="btn outline" href="/chief-of-staff/models/setup/providers#test" data-k="test">Test a model</a>');
+    expect(html).toContain("No suggestion yet: no model is ready.");
+    expect(html).toContain('<a class="btn outline" href="/chief-of-staff/models/setup/providers#test" data-k="test">See models</a>');
     expect(html).toMatch(/<button type="submit" class="btn primary" name="do" value="set" data-k="set">Set budget<\/button>/);
     expect(primaries(html)).toBe(1);
   });
@@ -345,7 +361,7 @@ describe("the page's script", () => {
     const s = stage(html);
     const sent: Sent = [];
     runScript(pageScripts(html), s.document, BASE, sent, { window: { fetch: () => {}, addEventListener: () => {} } });
-    const basis = (await readSuggestionBasis(env.DB, ownerId))!;
+    const basis = (await basisNow())!;
     for (const n of [10, 1, 37, 100]) {
       s.field.value = String(n);
       s.fire("input", s.field);

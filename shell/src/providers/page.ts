@@ -7,12 +7,10 @@
 //   POST /chief-of-staff/models/setup/providers/<id>/connect        to the provider's own consent page
 //   GET  /chief-of-staff/models/setup/providers/<id>/consented      back from it: the key into the vault, then the page, search focused once
 //   POST /chief-of-staff/models/setup/providers/<id>/disconnect
-//   POST /chief-of-staff/models/setup/providers/<id>/test           model: its test call runs once; the result opens under its row
+//   POST /chief-of-staff/models/setup/providers/<id>/test           model: its test call runs once (Test, or Try again); the result opens under its row
 //   POST /chief-of-staff/models/setup/providers/<id>/check-account  model: reads the account's model list again
 //   POST /chief-of-staff/models/setup/providers/<id>/cap            model, input, output: a router's price cap
 //   POST /chief-of-staff/models/setup/providers/<id>/refresh        Refresh model list
-//   POST /chief-of-staff/models/setup/providers/<id>/test-all       Test all models, after its confirm step
-//   POST /chief-of-staff/models/setup/providers/<id>/retest         Retest failed, after its confirm step
 //   POST /chief-of-staff/models/setup/providers/<id>/help           friends only
 //   POST /chief-of-staff/models/setup/providers/<id>/model-help     friends only: a model's failed test
 //
@@ -36,8 +34,11 @@
 // The account line reads the provider's own figures for the key, live,
 // server side, with the key from the vault (OpenRouter's GET /api/v1/key):
 // whether the account has ever bought credit, who owns the key, its limit,
-// what it has spent. A request that cannot change the card (a test, a poll)
-// does not read it again: the card is sent as "keep yours".
+// what it has spent. That read comes first, so the table's Ready rule
+// (models/ready.ts) takes this visit's credit figure: credit added on
+// OpenRouter makes its paid models Ready here with no click. A request that
+// cannot change the card (a test, Check again) does not read it again: the
+// card is sent as "keep yours", and the rule takes the figure last read.
 //
 // The app cannot delete the key on OpenRouter (openrouter.ts, "Revoking"), so
 // Disconnect's confirmation opens that exact key's page there, named by the
@@ -46,10 +47,9 @@
 import { readAccountList, refreshAccountList } from "../models/account-list";
 import { parsePriceCap, savePriceCap } from "../models/price-caps";
 import { modelsSubtabs, nextAction, SETUP_TABS } from "../models/setup-tabs";
+import { readAccountLive, readReadyModels, readTable } from "../models/ready";
 import { readTaskRoutes } from "../models/tasks";
-import { planRetest, planTestAll, readTestAll, shownTests, startRetest, startTestAll } from "../models/test-all";
-import { isVerdict, listOffer, MODEL_HELP_REASONS, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
-import { readLatestTests, readUsableModels } from "../models/usable";
+import { isVerdict, MODEL_HELP_REASONS, PRECHECK_REFUSALS, refusalFix, refusalText, testOne, type TestRefusal } from "../models/test-model";
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { isCurrentCatalog } from "../prices/openrouter";
 import { esc, nbDate } from "../prices/page";
@@ -61,7 +61,7 @@ import { readConnection } from "../proxy/connections";
 import type { AccountInfo, ConnectionFields, PluginRegistry, ProviderPlugin } from "../proxy/plugin";
 
 import { callbackUrl, connectProvider, disconnectProvider, finishConsent, isConnected, readCheck, type Check } from "./check";
-import { formatCost, ICON, isRunning, MAX_RESULTS, modelParts, nextStep, parseView, rowAnchor, viewQuery, type ModelsTableInput, type Step, type View, type Viewer } from "./models-table";
+import { formatCost, ICON, MAX_RESULTS, modelParts, nextStep, parseView, rowAnchor, viewQuery, type ModelsTableInput, type Step, type View, type Viewer } from "./models-table";
 import { MAKER_CHIPS_HTML, MAKER_FILTER_HTML } from "../models/maker-filter";
 import { NOSCRIPT_STYLE, PAGE_STYLE } from "./page-style";
 import { PAGE_SCRIPT } from "./page-script";
@@ -89,7 +89,8 @@ export interface PageState {
   // The account, read live; `unread` when it could not be; undefined when
   // the card is not rendered again.
   account?: AccountInfo | "unread";
-  usable: number;
+  // How many of the provider's models are Ready.
+  ready: number;
   table?: ModelsTableInput;
   view: View;
   flash: Flash;
@@ -131,7 +132,7 @@ function providerCard(state: PageState): string {
   const g = plugin.connect.guide;
   const p = plugin.provider;
   const connect = `<form method="post" action="${action(p, "connect")}"><button type="submit" class="btn ${state.step === "connect" ? "primary" : "outline"}" data-k="connect">Connect ${esc(g.name)}</button></form>`;
-  const help = state.viewer === "friend" && !state.usable ? `<form method="post" action="${action(p, "help")}" data-fetch><button type="submit" class="btn small outline" data-k="help">Ask Admin for help</button></form>` : "";
+  const help = state.viewer === "friend" && !state.ready ? `<form method="post" action="${action(p, "help")}" data-fetch><button type="submit" class="btn small outline" data-k="help">Ask Admin for help</button></form>` : "";
   if (!connection) {
     const keys = g.revokeLinks(undefined).at(-1);
     const lines = view.disconnected
@@ -176,10 +177,10 @@ export function renderMain(state: PageState): string {
   let tests = "";
   if (table) {
     const parts = modelParts(table);
-    const sub = state.flash.landed ? "Connected just now. Test any model, or all of them. Tasks use the models that pass." : "Test any model, or all of them. Tasks use the models that pass.";
+    const sub = `${state.flash.landed ? "Connected just now. " : ""}Ready models need no test. Tasks choose among them.`;
     tests = `<section class="block" id="test" aria-labelledby="h-test">
-<div class="block-head"><h2 id="h-test">Test models</h2><p class="sub" id="test-sub">${sub}</p></div>
-<div class="panel split">
+<div class="block-head"><h2 id="h-test">Your models</h2><p class="sub" id="test-sub">${sub}</p></div>
+<div class="panel">
 <div class="pane">
 <div class="toolbar">
 <div class="search" role="search">${ICON.search}<input type="search" id="pick-q" name="q" aria-label="Search models by name, maker or ID" aria-controls="pick-list" placeholder="Search name, maker or ID" autocomplete="off" spellcheck="false"><button type="button" class="clear-x" data-clear-q aria-label="Clear search">${ICON.x}</button></div>
@@ -193,7 +194,6 @@ ${MAKER_CHIPS_HTML}
 <div class="tbl-box" id="tbl-box" tabindex="0" role="region" aria-label="Models, scrolls"><ul class="rows" id="pick-list" aria-label="Models" data-part="rows">${parts.rows}</ul></div>
 <div class="list-foot" data-part="foot">${parts.foot}</div>
 </div>
-<aside class="pane side" aria-label="Test all"><div class="rail" data-part="rail"${isRunning(table.run) ? " data-running" : ""}>${parts.rail}</div></aside>
 </div>
 </section>`;
   }
@@ -228,26 +228,16 @@ ${renderMain(state)}
 </html>`;
 }
 
-// The account behind the user's key, read live with the key from the vault.
-async function readAccount(plugin: ProviderPlugin, connection: ConnectionFields, userId: string): Promise<AccountInfo | undefined> {
-  if (!plugin.connect.readAccount) return undefined;
-  try {
-    return await plugin.connect.readAccount(await plugin.mintCredential(connection, { userId }));
-  } catch {
-    return undefined;
-  }
-}
-
-// For each of `models`: the tasks whose saved main model it is and that
-// stopped with it, each with the fallback it runs on now, if any.
-async function tasksStoppedOn(db: D1Database, userId: string, provider: Provider, models: string[]): Promise<Map<string, Array<{ task: string; fallback?: string }>>> {
+// For each of `models`: the tasks whose saved main model it is, each with
+// the fallback its calls fall to when it fails, if any.
+async function tasksUsing(db: D1Database, plugins: PluginRegistry, userId: string, provider: Provider, models: string[]): Promise<Map<string, Array<{ task: string; fallback?: string }>>> {
   if (!models.length) return new Map();
-  const { routes } = await readTaskRoutes(db, userId);
+  const { routes } = await readTaskRoutes(db, plugins, userId);
   return new Map(
     models.map((model) => [
       model,
       routes.flatMap((r) =>
-        r.stopped?.main.provider === provider && r.stopped.main.model === model ? [{ task: r.task.label, ...(r.stopped.fallback ? { fallback: r.stopped.fallback.model } : {}) }] : [],
+        r.current?.main.provider === provider && r.current.main.model === model ? [{ task: r.task.label, ...(r.current.fallback ? { fallback: r.current.fallback.name ?? r.current.fallback.model } : {}) }] : [],
       ),
     ]),
   );
@@ -264,44 +254,36 @@ export async function readPageState(
   const check = await readCheck(db, userId, provider);
   const connected = isConnected(connection, check);
   const monthlyBudget = (await readBudget(db, userId, provider))?.monthlyUsd;
-  const usable = (await readUsableModels(db, userId)).filter((m) => m.provider === provider).length;
-  const state: PageState = { viewer: input.viewer, plugin, connection, check, connected, monthlyBudget, usable, view, flash, keepCard: input.keepCard && connected };
+  const state: PageState = { viewer: input.viewer, plugin, connection, check, connected, monthlyBudget, ready: 0, view, flash, keepCard: input.keepCard && connected };
   if (connection && connected) {
-    const rows = await listOffer(db, plugins, userId, provider);
-    const [catalog, run, latest] = await Promise.all([readCurrentCatalog(db), readTestAll(db, userId, provider), readLatestTests(db, userId, provider)]);
-    const plan = await planTestAll(db, plugins, userId, provider, now, rows);
-    const retest = await planRetest(db, plugins, userId, provider, rows);
-    const shown = shownTests(run, latest);
-    const failed = (view.results ?? []).filter((r) => {
-      const s = shown.get(r.model);
-      return s?.state === "failed" && s.verdict === "failed" && !s.notVerdict;
-    });
-    const usedBy = await tasksStoppedOn(db, userId, provider, failed.map((r) => r.model));
+    // The live read first: its credit figure is the one the rows' Ready rule takes.
+    if (!state.keepCard) state.account = (await readAccountLive(db, plugin, userId)) ?? "unread";
+    const [{ rows }, catalog] = await Promise.all([readTable(db, plugins, userId, provider), readCurrentCatalog(db)]);
+    state.ready = rows.filter((r) => r.state === "ready").length;
+    // A failed result under a row names the tasks that fall to their fallback.
+    const failed = (view.results ?? []).filter((res) => rows.find((r) => r.model === res.model)?.latest?.state === "failed");
+    const usedBy = await tasksUsing(db, plugins, userId, provider, failed.map((r) => r.model));
     const catalogCurrent = isCurrentCatalog(catalog);
+    const noToolUse = (catalog?.models ?? []).filter((m) => plugin.connect.noToolUse?.(m.id) !== undefined).length;
     state.table = {
       plugin,
       viewer: input.viewer,
       rows,
-      ...(catalog ? { catalog: { readAt: catalog.readAt, current: catalogCurrent, dropped: catalog.dropped } } : {}),
-      plan,
-      retest,
-      run,
-      shown,
+      ...(catalog ? { catalog: { readAt: catalog.readAt, current: catalogCurrent, dropped: catalog.dropped, noToolUse } } : {}),
       usedBy,
       view,
       problem: flash.problem ? { text: flash.problem, details: flash.details } : undefined,
       now,
     };
-    state.step = nextStep({ connected: true, view, run, catalogCurrent, plan });
+    state.step = nextStep({ connected: true, view, catalogCurrent });
     state.table.step = state.step;
-    if (!state.keepCard) state.account = (await readAccount(plugin, connection, userId)) ?? "unread";
   } else {
     state.step = "connect";
   }
   return state;
 }
 
-const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|disconnect|help|model-help|test|check-account|cap|refresh|test-all|retest))?$`);
+const ROUTE = new RegExp(`^${PROVIDERS_PATH}(?:/([a-z]+)/(connect|consented|disconnect|help|model-help|test|check-account|cap|refresh))?$`);
 
 // Refresh model list may read again a minute after the last read.
 export const REFRESH_GAP_MS = 60_000;
@@ -400,11 +382,9 @@ export async function handleProviders(
     const asked = url.searchParams.get("provider") ?? "";
     const provider = registered.find((p) => p === asked) ?? registered[0]!;
     const flash = wantsJson ? undefined : readFlash(request);
-    // A poll for a run's progress, or any in-place view that leaves the card
-    // as it is, keeps the card the page has.
+    // Every visit, and every view, reads the account line live.
     const view = parseView(url.searchParams);
-    const keepCard = request.headers.get("x-cos-poll") === "1";
-    return show(provider, view, flash ?? {}, { clearFlash: flash !== undefined, keepCard });
+    return show(provider, view, flash ?? {}, { clearFlash: flash !== undefined });
   }
   if (!isProvider(providerPart ?? "") || !plugins[providerPart as Provider]) return new Response(null, { status: 404 });
   const provider = providerPart as Provider;
@@ -480,14 +460,6 @@ export async function handleProviders(
       const read = await refreshAccountList(db, plugins, userId, provider, now);
       return done(provider, {}, { ...("problem" in read ? { flash: { problem: read.problem, details: read.details } } : {}), keepCard: true });
     }
-    case "test-all": {
-      const started = await startTestAll(db, plugins, userId, provider, now);
-      return done(provider, {}, { ...("problem" in started ? { flash: { problem: started.problem } } : {}), focus: "ta", anchor: "#ta", keepCard: true });
-    }
-    case "retest": {
-      const started = await startRetest(db, plugins, userId, provider, now, field("credit") === "1");
-      return done(provider, {}, { ...("problem" in started ? { flash: { problem: started.problem } } : {}), focus: "rt", anchor: "#ta", keepCard: true });
-    }
     case "model-help": {
       // "Ask Admin for help" on a model's failed test: its name and the
       // plain reason only, never the provider's reply.
@@ -503,11 +475,11 @@ export async function handleProviders(
       // A friend asks Admin; the owner has no one above to ask.
       if (viewer !== "friend") return new Response(null, { status: 403 });
       const connected = isConnected(await readConnection(db, userId, provider), await readCheck(db, userId, provider));
-      const usable = (await readUsableModels(db, userId)).some((m) => m.provider === provider);
-      if (usable) return done(provider, {}, { flash: { problem: "There is nothing to ask about here." } });
+      const ready = (await readReadyModels(db, plugins, userId)).some((m) => m.provider === provider);
+      if (ready) return done(provider, {}, { flash: { problem: "There is nothing to ask about here." } });
       await db
         .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
-        .bind(userId, `Connect ${plugin.connect.guide.name}`, connected ? "connected, no model has passed yet" : "not connected yet", now.toISOString())
+        .bind(userId, `Connect ${plugin.connect.guide.name}`, connected ? "connected, no model is ready yet" : "not connected yet", now.toISOString())
         .run();
       return done(provider, {}, { flash: { said: "Sent to Admin: this item's name and its plain reason only." } });
     }

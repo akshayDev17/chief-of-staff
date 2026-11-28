@@ -3,15 +3,18 @@
 // looks like a secret (so tests can check it is never stored or logged), and
 // answers each call from a queue of scripted replies.
 import { env } from "cloudflare:test";
-import { ConnectProblem, ProviderRefusal, type ConnectionFields, type ProviderPlugin, type ProviderReply, type Usage } from "../src/proxy/plugin";
+import { ConnectProblem, ProviderRefusal, type AccountInfo, type ConnectionFields, type ProviderPlugin, type ProviderReply, type Usage } from "../src/proxy/plugin";
 import { vaultSecrets, type SecretStore } from "../src/providers/secrets";
 import { writeSnapshot } from "../src/prices/store";
 import { CATALOG_VERSION, type OpenRouterCatalog } from "../src/prices/openrouter";
 import type { PriceRow, Provider } from "../src/prices/types";
 import { userFromAccess } from "../src/users";
-import { latestTestWrite } from "../src/models/usable";
+import { latestTestWrite } from "../src/models/latest-tests";
 
 export interface TestPlugin extends ProviderPlugin {
+  // The account line its readAccount answers with, where it reads one
+  // (`account` in the options); a test changes it to add credit.
+  account?: AccountInfo;
   replies: Array<ProviderReply | Error>;
   calls: Array<{ credential: unknown; model: string; location: string; request: unknown; maxPrice?: { inputUsdPerMTok: number; outputUsdPerMTok: number } }>;
   minted: string[];
@@ -21,7 +24,18 @@ export interface TestPlugin extends ProviderPlugin {
 export const VAULT_KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 export const testSecrets = (): SecretStore => vaultSecrets(env.DB, { VAULT_KEY });
 
-export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?: boolean; refuseMint?: boolean; cannotCall?: string[]; routers?: string[] } = {}): TestPlugin => {
+// A $0 account, as OpenRouter's GET /api/v1/key reports one.
+export const NO_CREDIT: AccountInfo = { freeTier: true, usageUsd: 0 };
+// An account that has bought credit.
+export const HAS_CREDIT: AccountInfo = { freeTier: false, usageUsd: 0 };
+
+// `account`: the plug-in reads the account line (Ready's credit figure);
+// without it, the plug-in cannot, and credit is no part of Ready.
+// `noToolUse`: models the provider lists with no tool use.
+export const testPlugin = (
+  provider: Provider = "openrouter",
+  opts: { failMint?: boolean; refuseMint?: boolean; cannotCall?: string[]; routers?: string[]; account?: AccountInfo; noToolUse?: string[] } = {},
+): TestPlugin => {
   const plugin: TestPlugin = {
     provider,
     version: `test-${provider}-1`,
@@ -43,6 +57,8 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
       // The account's live list: the seeded models.
       readAccountModels: async () => ["test-luna", "test-mini", "test-sonnet"],
       canCall: (m) => !opts.cannotCall?.includes(m),
+      noToolUse: (m) => (opts.noToolUse?.includes(m) ? "lists no tool support for it" : undefined),
+      ...(opts.account ? { readAccount: async () => plugin.account } : {}),
       isRouter: (m) => opts.routers?.includes(m) ?? false,
       notCallableReason: () => "the test plug-in cannot call it",
       replyModel: (body) => {
@@ -54,6 +70,7 @@ export const testPlugin = (provider: Provider = "openrouter", opts: { failMint?:
       replyText: () => "OK",
       classify: (f) => ({ reason: f.step === "credential" || f.status === 401 ? "not_set_up" : f.status === 429 ? "busy" : f.status === 402 ? "no_credits" : "refused", fix: "", links: [] }),
     },
+    ...(opts.account ? { account: opts.account } : {}),
     replies: [],
     calls: [],
     minted: [],
@@ -99,9 +116,9 @@ export const TEST_CATALOG: OpenRouterCatalog = {
   version: CATALOG_VERSION,
   readAt: "2026-11-27T06:00:00.000Z",
   models: [
-    { id: "openrouter/auto", name: "Auto router", router: true, tools: false },
+    { id: "openrouter/auto", name: "Auto router", router: true, tools: true },
     { id: "test-luna", name: "Test Luna", tools: true },
-    { id: "test-mini", name: "Test Mini", tools: false },
+    { id: "test-mini", name: "Test Mini", tools: true },
     { id: "test-sonnet", name: "Test Sonnet", tools: true, longPromptFrom: 200_000 },
   ],
 };
@@ -139,9 +156,9 @@ export async function dumpEveryTable(): Promise<Record<string, unknown[]>> {
   return dump;
 }
 
-// Records a model's latest test as passed (or failed) at `at`, as Test,
-// Test all models or Retest failed would.
-export const recordTest = (userId: string, model: string, state: "passed" | "failed" = "passed", at = "2026-11-27T09:00:00.000Z") =>
+// Records a model's latest call as passed (or failed) at `at`, as Test
+// would; `used` as a task's own call would.
+export const recordTest = (userId: string, model: string, state: "passed" | "failed" = "passed", at = "2026-11-27T09:00:00.000Z", used = false) =>
   latestTestWrite(
     env.DB,
     userId,
@@ -150,6 +167,6 @@ export const recordTest = (userId: string, model: string, state: "passed" | "fai
     state,
     state === "passed"
       ? { text: "Works now.", test: { at, location: "global", status: 200, costUsd: 0.000001 } }
-      : { reason: "no_such_model", text: "No such model.", reply: { status: 404 } },
+      : { reason: "no_such_model", text: "No such model.", reply: { status: 404 }, ...(used ? { used: true as const } : {}) },
     new Date(at),
   ).run();

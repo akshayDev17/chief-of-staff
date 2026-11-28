@@ -6,10 +6,10 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { changesData } from "../src/release/migration-rules";
-import { readLatestTests, readUsableModels } from "../src/models/usable";
+import { readLatestTests } from "../src/models/latest-tests";
 import { routeTask, TASKS } from "../src/models/tasks";
 import { writeSnapshot } from "../src/prices/store";
-import { seedPrices, TEST_CATALOG, userFor } from "./test-plugin";
+import { seedPrices, TEST_CATALOG, testPlugin, userFor } from "./test-plugin";
 
 const migration = env.TEST_MIGRATIONS.find((m) => m.name === "0013_models_one_table.sql")!;
 const carryOver = migration.queries.find((q) => q.includes("INSERT INTO model_latest_tests"))!;
@@ -52,9 +52,8 @@ describe("migration 0013", () => {
       ["test-sonnet", "passed", "2026-11-27T09:51:00Z"],
     ].sort());
     expect(latest.get("test-luna")!.result).toMatchObject({ text: "Works now.", test: { status: 200 } });
-    expect((await readUsableModels(env.DB, userId)).map((m) => m.model)).toEqual(["test-luna", "test-mini", "test-sonnet"]);
     // The task's saved choice is untouched and still answers.
-    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-luna" } });
+    expect(await routeTask(env.DB, { openrouter: testPlugin() }, userId, "match")).toMatchObject({ main: { model: "test-luna" } });
     const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM task_routes").first<{ n: number }>())!;
     expect(n).toBe(1);
   });
@@ -85,7 +84,6 @@ describe("migration 0013", () => {
     await env.DB.prepare(carryOver).run();
     for (const u of owners) {
       expect((await readLatestTests(env.DB, u, "openrouter")).get("test-luna")).toMatchObject({ state: "passed", testedAt: "2026-11-27T08:00:00.000Z" });
-      expect((await readUsableModels(env.DB, u)).map((m) => m.model)).toEqual(["test-luna"]);
     }
     for (const u of users.slice(0, 2)) expect((await readLatestTests(env.DB, u, "openrouter")).get("test-luna")?.state).toBe("failed");
     expect((await readLatestTests(env.DB, users[2]!, "openrouter")).size).toBe(0);

@@ -13,24 +13,30 @@
 // place, its answer is only what it says, and the page keeps its rows.
 //
 // One row per task: its suggested strength, and a dropdown for its main model
-// and one for its fallback. Each dropdown lists only the user's usable models
-// (models/usable.ts: each model whose latest test passed, that the provider
-// still offers the user) whose strength chip is the task's (the owner,
-// 2026-11-27: "when suggested strenght == Smallest --> the dropdown next to
-// it should only contain all passing run models tagged with the smallest
-// chip"), the cheapest first, grouped under their provider, so choosing one
+// and one for its fallback. Each dropdown lists every one of the user's Ready
+// models (models/ready.ts: on the account's own list, with tool use, nothing
+// blocking it, and free or the account has credit left; no
+// test needed, the owner, 2026-11-28) whose strength chip is the task's (the
+// owner, 2026-11-27: "when suggested strenght == Smallest --> the dropdown
+// next to it should only contain all passing run models tagged with the
+// smallest chip"), the cheapest first, grouped under their provider, so choosing one
 // chooses the provider and the model (OpenRouter is the one provider today).
 // A long list has a search box at its top. Each model shows its name, its ID
 // and its list price per million input and output tokens, or Free.
 //
 // A task's saved choice is always shown, even where its model is no longer in
 // the list: one of another strength saved before the rule says so and keeps
-// running; one no longer usable says why, by the checks that decide it (it
-// failed its last test, it is no longer on the provider's list, the account's
-// settings leave it out, it needs a price cap), with the action that fixes
-// it, and the row says whether the task runs on its fallback or has no model.
-// A task whose strength has no usable model says so in its row, with a link to
-// Providers and models showing that strength's models not tested yet.
+// running; one that needs credit says so and keeps its
+// place, its calls falling to the fallback when it fails; one the provider no
+// longer offers says why (it is no longer on the provider's list, the
+// account's settings leave it out, it needs a price cap, it lists no tool
+// use), with the action that fixes it, and the row says whether the task runs
+// on its fallback or has no model. A task whose strength has no Ready model
+// says so in its row, with Add credits where that strength's paid models need
+// credit, else a link to Providers and models showing that strength's models.
+// The account line's credit figure is read live on every visit
+// (models/ready.ts readAccountLive), so credit added on the provider fills
+// the lists on the next visit, with no click.
 //
 // Choosing a model sends nothing (the owner, 2026-11-27: "upon changing a
 // model in the dropdwon, i believe some request is sent"): the changed rows
@@ -44,12 +50,10 @@
 //
 // A free model is never proposed, only chosen: in its dropdown, or with one tap
 // for the tasks of its strength (Smallest) that have no model and no proposal
-// (a $0 account's passed models are all free), which the page offers and explains, with the
-// provider's own terms for free models. A model known to make no tool call
-// (the plug-in's `noToolUse`) says so. Friend screens say "Admin" for the owner.
-//
-// TODO(T18): tasks name no tools yet. Once a task's agent sends tools, never
-// propose a "no tool use" model for it, and refuse one chosen for it.
+// (a $0 account's Ready models are all free), which the page offers and explains, with the
+// provider's own terms for free models. A model with no tool use is never
+// listed (models/test-model.ts listOffer); one saved before that rule says so.
+// Friend screens say "Admin" for the owner.
 
 import { esc } from "../prices/page";
 import type { Tier } from "../prices/tiers";
@@ -61,7 +65,9 @@ import type { Viewer } from "../providers/page";
 import type { Link, PluginRegistry } from "../proxy/plugin";
 import { PROVIDER_NAMES } from "../proxy/proxy";
 import { modelsSubtabs, nextAction, SETUP_TABS } from "./setup-tabs";
-import { readModelNames, readToTest } from "./picker-data";
+import { readModelNames, readToReady } from "./picker-data";
+import { readAccountLive } from "./ready";
+import { PROVIDERS } from "../prices/types";
 import { PICKER_SCRIPT } from "./picker-script";
 import { FREE_NOTE } from "./test-model";
 import {
@@ -80,15 +86,17 @@ import {
   type Task,
   type TaskChange,
   type TaskRoute,
+  type NotUsable,
 } from "./tasks";
-import type { NotUsable } from "./usable";
 
-// Where a strength with no usable model can get one: Providers and models,
-// showing that strength's models, those not tested yet where there are any.
-export interface ToTest {
+// Where a strength with no Ready model can get one: Add credits where its
+// paid models need credit (`needCredit`, per strength), else Providers and
+// models showing that strength's models.
+export interface ToReady {
   provider: Provider;
   connected: boolean;
-  untested: Partial<Record<Tier, number>>;
+  needCredit: Partial<Record<Tier, number>>;
+  credits?: Link;
 }
 
 export interface PickerPageInput {
@@ -103,9 +111,11 @@ export interface PickerPageInput {
   freeTerms?: { text: string; links: Link[] };
   // The page of the user's account settings at the provider, where it has one.
   accountSettings?: (p: Provider) => Link | undefined;
-  // The provider's name for a model no longer usable, where its list has one.
+  // The provider's page to add credits, where it has one.
+  credits?: (p: Provider) => Link | undefined;
+  // The provider's name for a model no longer offered, where its list has one.
   nameOf?: (m: { provider: Provider; model: string }) => string | undefined;
-  toTest?: ToTest;
+  toReady?: ToReady;
   problem?: string;
   said?: string;
 }
@@ -134,53 +144,62 @@ function optionText(m: Offered | Ref, input: PickerPageInput, note = ""): string
 }
 
 const WHY: Record<NotUsable, string> = {
-  failed: "failed its last test",
   not_listed: "is no longer on the provider's list",
   left_out: "is left out by your account settings",
   no_cap: "needs a price cap",
-  earlier_key: "needs a test on your new key",
-  unknown: "is no longer usable",
+  no_tools: "lists no tool use",
+  unknown: "is no longer offered",
 };
 
 const whyText = (why: NotUsable, provider: Provider, input: PickerPageInput): string => {
   const name = input.providerName(provider);
   if (why === "not_listed") return `is no longer on ${name}'s list`;
   if (why === "left_out") return `is left out by your ${name} settings`;
-  if (why === "earlier_key") return `needs a test on your new ${name} key`;
   return WHY[why];
 };
 
 const newTab = (l: Link, cls: string): string => `<a class="${cls}" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`;
 
-// The one action that fixes a saved model that is no longer usable.
+// The one action that fixes a saved model the provider no longer offers.
 function fixFor(m: Ref, why: NotUsable, pickId: string, input: PickerPageInput, cls: string): string {
   switch (why) {
-    case "failed":
-      return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, {})}#${rowAnchor(m.model)}`)}">Test it again</a>`;
     case "left_out": {
       const settings = input.accountSettings?.(m.provider);
       return settings ? newTab(settings, `${cls} ext`) : "";
     }
     case "no_cap":
       return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, { cap: m.model })}#${rowAnchor(m.model)}`)}">Set its price cap</a>`;
-    case "earlier_key":
-      return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, { confirm: "test-all" })}#ta`)}">Test all models</a>`;
     default:
       return `<a class="${cls}" href="#${pickId}" data-open="${pickId}">Choose another</a>`;
   }
 }
 
-// The link to the strength's models on Providers and models.
-function testLink(tier: Tier, input: PickerPageInput, cls: string): string {
-  const t = input.toTest;
+// What makes a strength's models Ready: Add credits where its paid models
+// need credit, else its models on Providers and models.
+function readyLink(tier: Tier, input: PickerPageInput, cls: string): string {
+  const t = input.toReady;
   if (!t) return "";
   if (!t.connected) return `<a class="${cls}" href="${PROVIDERS_PATH}">Connect ${esc(input.providerName(t.provider))}</a>`;
-  const untested = t.untested[tier] ?? 0;
-  const q = new URLSearchParams({ provider: t.provider, strength: tier, ...(untested ? { show: "pending" } : {}) });
-  return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${q}#test`)}">${untested ? "Test" : "See"} ${tier} models</a>`;
+  if ((t.needCredit[tier] ?? 0) > 0 && t.credits) return newTab(t.credits, `${cls} ext`);
+  const q = new URLSearchParams({ provider: t.provider, strength: tier });
+  return `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${q}#test`)}">See ${tier} models</a>`;
 }
 
-// What a task shows now in each role: its saved choice, usable or not, else
+// Why a saved model that is offered but not Ready keeps its place: it needs
+// credit. Its calls still try it first.
+function notReadyNote(m: Offered | undefined, role: "main model" | "fallback", hasFallback: boolean): string {
+  if (m?.state !== "credit") return "";
+  return role === "main model" ? `Its main model needs credit. ${hasFallback ? "Calls fall to its fallback meanwhile." : "Add a fallback."}` : `Its fallback needs credit.`;
+}
+
+// The action beside that note: Add credits, or the model's row on Providers
+// and models.
+function notReadyFix(m: Offered, input: PickerPageInput): (cls: string) => string {
+  const credits = input.credits?.(m.provider);
+  return (cls) => (credits ? newTab(credits, `${cls} ext`) : `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, {})}#${rowAnchor(m.model)}`)}">See why</a>`);
+}
+
+// What a task shows now in each role: its saved choice, offered or not, else
 // its proposal while it waits for the tap.
 interface Shown {
   main?: { ref: Ref; model?: Offered; why?: NotUsable };
@@ -214,7 +233,10 @@ function rowNeed(r: TaskRoute, list: Offered[], shown: Shown, input: PickerPageI
     const runs = r.stopped.fallback ? `Runs on its fallback for now.` : `No model now: its calls are refused.`;
     return { note: [{ text: `${esc(name)} ${esc(whyText(r.stopped.why, m.provider, input))}. ${runs}`, about: "main" }], action: (cls) => fixFor(m, r.stopped!.why, `main-${id}`, input, cls), blocked: !r.stopped.fallback };
   }
-  if (!shown.main && !list.length) return { note: [{ text: `No ${tier} model has passed a test yet.` }], action: (cls) => testLink(tier, input, cls), blocked: true };
+  if (!shown.main && !list.length) {
+    const credit = (input.toReady?.needCredit[tier] ?? 0) > 0;
+    return { note: [{ text: `No ${tier} model is ready yet.${credit ? " Paid ones need credit." : ""}` }], action: (cls) => readyLink(tier, input, cls), blocked: true };
+  }
   if (!shown.main) return { note: [], blocked: true };
   const notes: RowNeed["note"] = [];
   // An accepted task whose proposal has changed keeps its models until the tap.
@@ -222,10 +244,15 @@ function rowNeed(r: TaskRoute, list: Offered[], shown: Shown, input: PickerPageI
     const p = r.proposal;
     notes.push({ text: `Proposed now: ${esc(p.main.name ?? p.main.model)}${p.fallback ? `, with ${esc(p.fallback.name ?? p.fallback.model)} as its fallback` : ""}.` });
   }
-  let action: RowNeed["action"];
+  let action: RowNeed["action"] | undefined;
   const off = (m: Offered | undefined, role: string) => (m?.tier && m.tier !== tier ? `Its ${role} is a ${m.tier} model, kept from before.` : m && !m.tier ? `Its ${role} has no ${tier} chip, kept from before.` : "");
   const offMain = off(shown.main.model, "main model");
   if (offMain) notes.push({ text: offMain, about: "main" });
+  const mainNote = notReadyNote(shown.main.model, "main model", Boolean(shown.fallback?.model));
+  if (mainNote) {
+    notes.push({ text: mainNote, about: "main" });
+    action = notReadyFix(shown.main.model!, input);
+  }
   if (r.fallbackGone && !r.pending) {
     const f = r.fallbackGone;
     notes.push({ text: `Its fallback ${esc(input.nameOf?.(f) ?? f.model)} ${esc(whyText(f.why, f.provider, input))}.`, about: "fallback" });
@@ -233,9 +260,14 @@ function rowNeed(r: TaskRoute, list: Offered[], shown: Shown, input: PickerPageI
   } else {
     const offFallback = off(shown.fallback?.model, "fallback");
     if (offFallback) notes.push({ text: offFallback, about: "fallback" });
+    const fallbackNote = notReadyNote(shown.fallback?.model, "fallback", false);
+    if (fallbackNote) {
+      notes.push({ text: fallbackNote, about: "fallback" });
+      action ??= notReadyFix(shown.fallback!.model!, input);
+    }
     if (!shown.fallback && list.filter((m) => !shown.main || modelKey(m) !== modelKey(shown.main.ref)).length === 0) {
-      notes.push({ text: `No other ${tier} model for a fallback yet.`, about: "fallback" });
-      action = (cls) => testLink(tier, input, cls);
+      notes.push({ text: `No other ${tier} model is ready for a fallback yet.`, about: "fallback" });
+      action ??= (cls) => readyLink(tier, input, cls);
     }
   }
   return { note: notes, action, blocked: false };
@@ -249,10 +281,17 @@ function dropdown(r: TaskRoute, role: "main" | "fallback", list: Offered[], show
   const value = now ? modelKey(now.ref) : "";
   const inList = now ? list.some((m) => modelKey(m) === value) : false;
   // The saved model where the list no longer has it, kept as it is.
-  const keptTag = now && !inList ? (now.why ? `<span class="pill bad">Not usable</span>` : now.model?.tier ? `<span class="pill">${now.model.tier}</span>` : `<span class="pill">Other fees</span>`) : "";
-  const keptNote = now && !inList ? (now.why ? `${WHY[now.why]}` : "kept from before") : "";
+  const state = now?.model?.state;
+  const keptTag = now && !inList
+    ? now.why
+      ? `<span class="pill bad">Not offered</span>`
+      : state === "credit"
+        ? `<span class="pill warn">Needs credit</span>`
+        : now.model?.tier ? `<span class="pill">${now.model.tier}</span>` : `<span class="pill">Other fees</span>`
+    : "";
+  const keptNote = now && !inList ? (now.why ? `${WHY[now.why]}` : state === "credit" ? "needs credit" : "kept from before") : "";
   const label = role === "main" ? "Main model" : "Fallback";
-  // Nothing to choose: the strength has no usable model, and none is saved.
+  // Nothing to choose: the strength has no Ready model, and none is saved.
   const empty = !list.length && !now;
   // The plain select.
   const providers = [...new Set(list.map((m) => m.provider))];
@@ -300,9 +339,9 @@ ${dropdown(r, "fallback", list, shown, input)}
 function freeTap(input: PickerPageInput, primary: boolean): string {
   const set = freeRoutes(input.offered, input.routes);
   if (!set.length) return "";
-  const allFree = input.offered.every((m) => m.free);
+  const allFree = input.offered.filter((m) => m.state === "ready").every((m) => m.free);
   const why = allFree
-    ? "Your models that passed are all free, so none is proposed."
+    ? "Your Ready models are all free, so none is proposed."
     : `${set.length === 1 ? "One task has" : `${set.length} tasks have`} no proposed model. Your free models can take ${set.length === 1 ? "it" : "them"}.`;
   return `<div class="banner free-tap" role="note"><p>${esc(why)}</p>
 <form method="post" action="${TASK_MODELS_PATH}/use-free" data-fetch data-rows><button type="submit" class="btn${primary ? " primary" : ""}">Use my free models for ${set.length === TASKS.length ? "every task" : set.length === 1 ? "1 task" : `${set.length} tasks`}</button></form>
@@ -318,7 +357,7 @@ function finding(input: PickerPageInput): string {
   const pending = input.routes.filter((r) => r.pending).length;
   if (n === TASKS.length && !pending) return "Every task has a model. Its fallback answers when the main model fails a call.";
   const has = n === 0 ? "No task has a model yet" : `${n} of ${TASKS.length} tasks have a model`;
-  return pending ? `${has} · ${pending === 1 ? "1 proposal" : `${pending} proposals`} to accept` : `${has}. Each takes a model of its strength that passed its test.`;
+  return pending ? `${has} · ${pending === 1 ? "1 proposal" : `${pending} proposals`} to accept` : `${has}. Each takes a Ready model of its strength.`;
 }
 
 const tabsLine = (): string =>
@@ -338,7 +377,7 @@ export function renderMain(input: PickerPageInput): string {
   const accept = pending
     ? `<form method="post" action="${TASK_MODELS_PATH}/accept" data-fetch data-rows><button type="submit" class="btn primary">Accept all with one tap</button></form>`
     : "";
-  const terms = input.freeTerms && input.offered.some((m) => m.free)
+  const terms = input.freeTerms && input.offered.some((m) => m.free && m.state === "ready")
     ? `<li>${esc(input.freeTerms.text)} ${input.freeTerms.links.map((l) => newTab(l, "ext")).join(" · ")}</li>`
     : "";
   const help =
@@ -360,8 +399,8 @@ ${freeTap(input, free && !pending)}
 ${rows}
 </ul>
 <div class="tasks-foot"><details><summary>How it works</summary><ul>
-<li>Each list holds your models of the task's strength whose latest test passed, the cheapest first.</li>
-<li>When the main model fails a call, its fallback answers it.</li>
+<li>Each list holds your Ready models of the task's strength, the cheapest first. No test needed.</li>
+<li>When the main model fails a call, its fallback answers it, and the model's row on Providers and models says why.</li>
 <li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50.</li>
 <li>A free model is never proposed. Choose it in its list${free ? ", or with the one tap" : ""}.</li>
 ${terms}
@@ -486,7 +525,7 @@ function problemText(task: Task | undefined, problem: ChangeProblem): string {
   const text: Record<ChangeProblem, string> = {
     no_such_task: "There is no such task.",
     no_main: "Choose a main model first.",
-    not_your_model: "That model has not passed its test. Choose one from its list.",
+    not_your_model: "That model is not ready. Choose one from its list.",
     wrong_strength: `This task takes only ${task?.tier ?? "its strength's"} models. Choose one from its list.`,
     same_model: "The fallback must be another model than the main one.",
   };
@@ -523,15 +562,16 @@ export async function handleTaskModels(
   const [, verb] = ROUTE.exec(url.pathname) ?? [];
   const wantsJson = (request.headers.get("accept") ?? "").includes("application/json");
   const state = async (flash: { said?: string; problem?: string }): Promise<PickerPageInput> => {
-    const { offered, routes } = await readTaskRoutes(db, userId);
+    const { offered, routes } = await readTaskRoutes(db, plugins, userId);
     const providerName = (p: Provider) => plugins[p]?.connect.guide.short ?? PROVIDER_NAMES[p];
     const noToolUse = (m: Ref) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
-    const freeTerms = offered.filter((m) => m.free).map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
+    const freeTerms = offered.filter((m) => m.free && m.state === "ready").map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
     const accountSettings = (p: Provider) => plugins[p]?.connect.guide.accountSettings;
-    // Only a strength with fewer than two models links to its models to test.
+    const credits = (p: Provider) => plugins[p]?.connect.guide.credits;
+    // Only a strength with fewer than two Ready models links to what makes more Ready.
     const short = TASKS.some((t) => offeredFor(t, offered).length < 2);
-    const [nameOf, toTest] = await Promise.all([readModelNames(db), short ? readToTest(db, plugins, userId) : undefined]);
-    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, nameOf, toTest, ...flash };
+    const [nameOf, toReady] = await Promise.all([readModelNames(db), short ? readToReady(db, plugins, userId) : undefined]);
+    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, credits, nameOf, toReady, ...flash };
   };
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
   // After an action: in place, the page's <main> with what it said; without
@@ -543,6 +583,9 @@ export async function handleTaskModels(
 
   if (!verb) {
     if (request.method !== "GET") return new Response(null, { status: 405 });
+    // The account line's credit figure, live, before the lists are worked out.
+    const first = PROVIDERS.find((p) => plugins[p]);
+    if (first) await readAccountLive(db, plugins[first]!, userId);
     return new Response(renderPickerPage(await state(flashFrom(url.searchParams))), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
   }
   if (request.method !== "POST") return new Response(null, { status: 405 });
@@ -562,15 +605,15 @@ export async function handleTaskModels(
   const said = (query: Record<string, string>) => done(flashFrom(new URLSearchParams(query)), query);
 
   if (verb === "accept") {
-    const n = await acceptProposals(db, userId, now, changes);
+    const n = await acceptProposals(db, plugins, userId, now, changes);
     return typeof n === "number" ? said({ ...saved, accepted: String(n) }) : refuse(n);
   }
   if (verb === "use-free") {
-    const set = await useFreeModels(db, userId, now, changes);
+    const set = await useFreeModels(db, plugins, userId, now, changes);
     return Array.isArray(set) ? said({ ...saved, free: String(set.length) }) : refuse(set);
   }
   if (verb === "change") {
-    const refused = changes.length ? await changeTasks(db, userId, changes, now) : { task: "", problem: "no_such_task" as const };
+    const refused = changes.length ? await changeTasks(db, plugins, userId, changes, now) : { task: "", problem: "no_such_task" as const };
     return refused ? refuse(refused) : said(saved);
   }
   // "Ask Admin for help": the item's name only.

@@ -36,8 +36,9 @@ export function element(attrs: Record<string, string> = {}) {
 export type Sent = string[];
 
 // Runs `script` with the given document, at `href`, and every recorder.
-// `extra.fetch` answers a fetch after it is recorded.
-export function runScript(script: string, document: unknown, href: string, sent: Sent, extra: { window?: unknown; fetch?: (url: string, init?: RequestInit) => Promise<Response> } = {}): void {
+// `extra.fetch` answers a fetch after it is recorded; `extra.FormData`
+// stands in for the browser's, for a stand-in form.
+export function runScript(script: string, document: unknown, href: string, sent: Sent, extra: { window?: unknown; fetch?: (url: string, init?: RequestInit) => Promise<Response>; FormData?: unknown } = {}): void {
   const url = new URL(href);
   const location = {
     href: url.href,
@@ -52,7 +53,7 @@ export function runScript(script: string, document: unknown, href: string, sent:
   const XMLHttpRequest = function () { sent.push("xhr"); };
   const navigator = { sendBeacon: (u: string) => { sent.push(`beacon ${u}`); return true; } };
   const window = extra.window ?? { addEventListener: () => {} };
-  new Function("document", "location", "window", "fetch", "XMLHttpRequest", "navigator", script)(document, location, window, fetch, XMLHttpRequest, navigator);
+  new Function("document", "location", "window", "fetch", "XMLHttpRequest", "navigator", "FormData", script)(document, location, window, fetch, XMLHttpRequest, navigator, extra.FormData ?? FormData);
 }
 
 // The inline scripts of a rendered page, in order: the page's own output.

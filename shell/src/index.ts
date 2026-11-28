@@ -3,7 +3,6 @@ import { refreshPrices } from "./prices/refresh";
 import { currentSnapshot, readSnapshotRows, recentAlerts } from "./prices/store";
 import { accessDenied, readAccessIdentity } from "./access";
 import { readAppOrigin } from "./app-config";
-import { runQueuedTests } from "./models/test-all";
 import { readProviderPlugins, type ProvidersEnv } from "./providers/index";
 import { vaultSecrets } from "./providers/secrets";
 import { handleProviders, isProvidersPath } from "./providers/page";
@@ -25,11 +24,6 @@ export interface Env extends ProvidersEnv {
   ACCESS_AUD?: string;
   DB: D1Database;
 }
-
-// The Cron Triggers in wrangler.jsonc. Only handlers may be exported from this
-// module: workerd refuses any other named export of the entry point.
-// Every minute: the queued tests of Test all models.
-const EVERY_MINUTE_CRON = "* * * * *";
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -60,7 +54,7 @@ export default {
       const now = new Date();
       const user = await userFromAccess(env.DB, claims, now);
       if (!user) return accessDenied();
-      return handleBudgets(request, env.DB, user.id, now, { secrets: vaultSecrets(env.DB, env) });
+      return handleBudgets(request, env.DB, user.id, now, { secrets: vaultSecrets(env.DB, env), plugins: await readProviderPlugins(env, env.DB) });
     }
     // Models › Setup › Providers, for the signed-in user. Access lets only
     // the owner in until invitations bring friends (T45), so every viewer
@@ -118,11 +112,6 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
-    if (controller.cron === EVERY_MINUTE_CRON) {
-      const plugins = await readProviderPlugins(env, env.DB);
-      await runQueuedTests(env.DB, plugins, now);
-      return;
-    }
     const { results } = await refreshPrices({ db: env.DB, fetcher: fetch, now });
     console.log(`price refresh: ${JSON.stringify(results)}`);
   },

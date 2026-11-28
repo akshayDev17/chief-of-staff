@@ -9,9 +9,8 @@
 // step, where authorization from openrouter succeeds, should be to
 // scroll/highlight the testing section"). Once the provider has issued the
 // app its key, the connection is connected, and the page opens at the model
-// test, where the user chooses a model and tests it with one tap
-// (models/test-model.ts). The provider is usable once one of the user's models has
-// passed its test call. Back from the consent page, the account's own model
+// table, where every model the account can use reads Ready with no test
+// (models/ready.ts). Back from the consent page, the account's own model
 // list is read with the new key and saved (it costs nothing), so the model
 // list can mark the models the account leaves out.
 //
@@ -95,7 +94,7 @@ export function reasonText(reason: PlainReason | undefined, plugin: ProviderPlug
   const { name, short } = plugin.connect.guide;
   switch (reason) {
     case "not_set_up":
-      return "The connection isn't set up yet, or was removed.";
+      return "The connection isn't set up, or was removed.";
     case "no_credits":
       return `Needs credit on ${name}.`;
     case "no_such_model":
@@ -105,11 +104,11 @@ export function reasonText(reason: PlainReason | undefined, plugin: ProviderPlug
     case "busy":
       return "Busy or out of quota, not a setup fault.";
     case "app_not_configured":
-      return `The app's own side of ${name} isn't set up yet.`;
+      return `The app's side of ${name} isn't set up yet.`;
     case "no_reply":
       return `No reply from ${short}.`;
     default:
-      return `${short} refused the test call.`;
+      return `${short} refused the call.`;
   }
 }
 

@@ -1,15 +1,16 @@
 // What a model's row and the result under it show, for every combination of
-// the one rule's inputs (models-table.ts describeRow): the latest verdict
-// (none, passed, failed, or a pass or failure on an earlier key, which is no
-// verdict), the newest refusal that says nothing about the
-// model (none, or each kind, from the user's own Test or from a run), and
-// whether the row is open, blocked or being tested in a run. Each is rendered
-// as the page renders it, for an owner and for a friend.
+// the one rule's inputs (models/ready.ts rowState, models-table.ts
+// describeRow): the model's latest call (none, passed, failed when used, failed
+// when tested, or a failure on an earlier key, which marks nothing), whether
+// the account has credit, whether something blocks the row, and this page's
+// own Test of it (none, a recorded result, or each kind of refusal that
+// records nothing). Each is rendered as the page renders it, for an owner and
+// for a friend.
 import { describe, expect, it } from "vitest";
-import { listOfferRow, type ShownLatest } from "./result-copy-helpers";
-import type { ShownTest } from "../src/models/test-all";
+import { listOfferRow } from "./result-copy-helpers";
+import type { LatestTest, TestRecord } from "../src/models/latest-tests";
+import { rowState } from "../src/models/ready";
 import { MODEL_HELP_REASONS, refusalFix, refusalText, type Refused, type TestRefusal } from "../src/models/test-model";
-import type { TestRecord } from "../src/models/usable";
 import { parseModels } from "../src/prices/openrouter";
 import { esc } from "../src/prices/page";
 import { modelParts, type ModelsTableInput } from "../src/providers/models-table";
@@ -25,8 +26,8 @@ const AT = NOW.toISOString();
 const FAILED: TestRecord = { reason: "no_such_model", text: "Not on OpenRouter any more.", reply: { status: 404, message: "No endpoints found" }, fix: "Refresh model list." };
 const WORKS: TestRecord = { text: "Works now.", test: { at: AT, location: "global", status: 200, costUsd: 0.000001 } };
 
-// Each kind of refusal that says nothing about the model; the last is only a run's.
-const KINDS: Array<{ name: string; reason: TestRefusal; runOnly?: true; text?: string }> = [
+// Each kind of refusal from a Test that records nothing.
+const KINDS: Array<{ name: string; reason: TestRefusal }> = [
   { name: "busy", reason: "busy" },
   { name: "needs credit", reason: "no_credits" },
   { name: "budget spent", reason: "budget_spent" },
@@ -34,160 +35,97 @@ const KINDS: Array<{ name: string; reason: TestRefusal; runOnly?: true; text?: s
   { name: "no key", reason: "not_set_up" },
   { name: "app setup", reason: "app_not_configured" },
   { name: "no credential", reason: "no_reply" },
-  { name: "could not run", reason: "no_reply", runOnly: true, text: "The test could not run." },
 ];
-const record = (k: (typeof KINDS)[number]): TestRecord => {
-  if (k.text) return { reason: k.reason, text: k.text };
-  const o: Refused = { kind: "refused", model: MODEL, reason: k.reason };
+const record = (reason: TestRefusal): TestRecord => {
+  const o: Refused = { kind: "refused", model: MODEL, reason };
   const fix = refusalFix(o, plugin);
-  return { reason: k.reason, text: refusalText(o, plugin), ...(fix ? { fix } : {}) };
+  return { reason, text: refusalText(o, plugin), ...(fix ? { fix } : {}) };
 };
 const ACTIONS: Partial<Record<TestRefusal, string>> = { no_credits: "Add credits", busy: "Test again", budget_spent: "Budgets" };
-const TAG: Partial<Record<TestRefusal, string>> = { no_credits: "Needs credit", busy: "Busy" };
 
-type Verdict = "none" | "passed" | "failed" | "earlier-passed" | "earlier-failed";
-const EARLIER_NOTE = { "earlier-passed": "Passed on an earlier key", "earlier-failed": "Failed on an earlier key" } as const;
-type Row = "open" | "blocked" | "testing";
-type Case = { verdict: Verdict; kind?: (typeof KINDS)[number]; from?: "test" | "run"; row: Row };
+type Latest = "none" | "passed" | "failed-used" | "failed-tested" | "earlier-failed";
+type Test = "none" | "recorded" | TestRefusal;
+type Case = { latest: Latest; credit: boolean; blocked: boolean; test: Test };
 
 const cases: Case[] = [];
-for (const verdict of ["none", "passed", "failed", "earlier-passed", "earlier-failed"] as const) {
-  for (const row of ["open", "blocked", "testing"] as const) {
-    cases.push({ verdict, row });
-    for (const kind of KINDS) for (const from of kind.runOnly ? (["run"] as const) : (["test", "run"] as const)) cases.push({ verdict, kind, from, row });
-  }
-}
+for (const latest of ["none", "passed", "failed-used", "failed-tested", "earlier-failed"] as const)
+  for (const credit of [true, false])
+    for (const blocked of [false, true])
+      for (const test of ["none", "recorded", ...KINDS.map((k) => k.reason)] as Test[]) cases.push({ latest, credit, blocked, test });
 
-function shownFor(c: Case): Map<string, ShownTest> {
-  if (c.row === "testing") return new Map([[MODEL, { state: "testing" }]]);
-  const run = c.kind && c.from === "run" ? record(c.kind) : undefined;
-  let s: ShownLatest | undefined;
-  if (c.verdict === "earlier-passed" || c.verdict === "earlier-failed") {
-    const earlier = c.verdict === "earlier-passed" ? "passed" : "failed";
-    // A run's refusal on the current key, over a test on an earlier key.
-    s = run ? { state: "failed", notVerdict: true, testedAt: AT, result: run, earlier } : { state: "earlier", earlier, testedAt: AT, result: earlier === "passed" ? WORKS : FAILED };
-  } else if (c.verdict === "failed") s = { state: "failed", verdict: "failed", testedAt: AT, result: FAILED, ...(run ? { later: run } : {}) };
-  else if (run) s = { state: "failed", ...(c.verdict === "passed" ? { verdict: "passed" as const } : {}), notVerdict: true, testedAt: AT, result: run };
-  else if (c.verdict === "passed") s = { state: "passed", verdict: "passed", testedAt: AT, result: WORKS };
-  return new Map(s ? [[MODEL, s]] : []);
-}
+const latestOf = (c: Case): LatestTest | undefined => {
+  if (c.latest === "none") return undefined;
+  if (c.latest === "passed") return { model: MODEL, state: "passed", testedAt: AT, result: WORKS };
+  return { model: MODEL, state: "failed", testedAt: AT, result: c.latest === "failed-used" ? { ...FAILED, used: true } : FAILED, ...(c.latest === "earlier-failed" ? { earlierKey: true as const } : {}) };
+};
 
-function render(c: Case, viewer: "owner" | "friend", withResult: boolean): string {
-  const fromTest = c.kind && c.from === "test" ? c.kind : undefined;
-  const view: ModelsTableInput["view"] = withResult ? { results: [{ model: MODEL, ...(fromTest ? { reason: fromTest.reason } : {}) }] } : {};
-  const input: ModelsTableInput = {
-    plugin, viewer, rows: [{ ...listOfferRow(MODEL), ...(c.row === "blocked" ? { accountLeftOut: true } : {}) }],
-    plan: { models: [], estimateUsd: 0 }, retest: { models: [], estimateUsd: 0, credit: [], creditEstimateUsd: 0, skipped: 0 }, shown: shownFor(c), usedBy: new Map(), view, now: NOW,
-  };
-  return modelParts(input).rows;
+function render(c: Case, viewer: "owner" | "friend"): string {
+  const offer = listOfferRow(MODEL, c.blocked ? { accountLeftOut: true } : {});
+  const latest = latestOf(c);
+  const current = latest && !latest.earlierKey ? latest : undefined;
+  const row = { ...offer, state: rowState(offer, c.credit), ...(current ? { latest: current } : {}) };
+  const view: ModelsTableInput["view"] = c.test === "none" ? {} : { results: [{ model: MODEL, ...(c.test === "recorded" ? {} : { reason: c.test }) }] };
+  return modelParts({ plugin, viewer, rows: [row], usedBy: new Map(), view, now: NOW }).rows;
 }
 
 // What the rule says each case shows.
 function expected(c: Case) {
-  const failed = c.verdict === "failed" && c.row !== "testing";
-  const refusal = c.kind && !(c.row === "testing" && c.from === "run") ? record(c.kind) : undefined;
-  const usable = c.verdict === "passed" && c.row === "open";
-  // A run's Needs credit on the current key, with no pass on it, is Needs credit.
-  const credit = c.kind?.reason === "no_credits" && c.from === "run";
-  const state = c.row === "blocked" ? "blocked" : c.row === "testing" ? "pending" : c.verdict === "passed" ? "works" : c.verdict === "failed" ? "fails" : credit ? "credit" : "pending";
-  const tag = failed ? "Doesn't work" : refusal && usable ? (TAG[refusal.reason!] ?? "Couldn't test") : undefined;
-  const lead = failed ? FAILED.text : refusal?.text;
-  const note = failed && refusal ? `${c.from === "test" ? "This test" : "Latest test"} couldn't run. ${refusal.text}` : undefined;
-  const leadActions = failed ? [] : refusal && ACTIONS[refusal.reason!] ? [ACTIONS[refusal.reason!]!] : [];
-  const noteActions = note && ACTIONS[refusal!.reason!] ? [ACTIONS[refusal!.reason!]!] : [];
-  const passed = !lead && c.verdict === "passed" && c.row !== "testing";
-  const askable = (reason: TestRefusal | undefined) => (reason && MODEL_HELP_REASONS.has(reason) ? reason : undefined);
-  const refusalAsk = askable(refusal?.reason);
-  const ask = !lead
-    ? undefined
-    : refusalAsk
-      ? { reason: refusalAsk, on: note ? "note" : "lead" }
-      : failed && askable(FAILED.reason)
-        ? { reason: FAILED.reason, on: "lead" }
-        : undefined;
-  // An earlier key's test: a grey note on an open row that reads Not tested
-  // yet, never a verdict; a current-key result (Needs credit) replaces it.
-  const earlier = c.row === "open" && state === "pending" && (c.verdict === "earlier-passed" || c.verdict === "earlier-failed") ? EARLIER_NOTE[c.verdict] : undefined;
-  return { state, tag, lead, note, leadActions, noteActions, passed, ask, earlier };
+  const state = c.blocked ? "step" : !c.credit ? "credit" : "ready";
+  const refusal = c.test !== "none" && c.test !== "recorded" ? record(c.test) : undefined;
+  const failedNow = !c.blocked && (c.latest === "failed-used" || c.latest === "failed-tested");
+  const failed = !refusal && failedNow ? (c.latest === "failed-used" ? "Failed when used" : "Failed when tested") : undefined;
+  const lead = refusal?.text ?? (failed ? FAILED.text : undefined);
+  const tag = refusal
+    ? refusal.reason === "no_credits" ? "Needs credit" : state !== "ready" ? undefined : refusal.reason === "busy" ? "Busy" : "Couldn't test"
+    : state === "credit" ? "Needs credit" : undefined;
+  const actions = refusal && ACTIONS[refusal.reason!] ? [ACTIONS[refusal.reason!]!] : [];
+  const passed = c.test === "recorded" && c.latest === "passed";
+  const askReason = refusal?.reason ?? (failed ? FAILED.reason : undefined);
+  const ask = lead && askReason && MODEL_HELP_REASONS.has(askReason) ? askReason : undefined;
+  return { state, lead, failed, tag, actions, passed, ask, again: failedNow };
 }
 
-const label = (c: Case) => `${c.verdict} verdict, ${c.kind ? `${c.kind.name} from ${c.from}` : "no refusal"}, ${c.row} row`;
+const label = (c: Case) => `${c.latest} latest, ${c.credit ? "credit" : "no credit"}, ${c.blocked ? "blocked" : "open"} row, test ${c.test}`;
 const labels = (html: string) => [...html.matchAll(/>(Add credits|Test again|Budgets|Ask Admin for help)</g)].map((m) => m[1]);
 
 describe("a model's row and its result", () => {
   it(`shows what the one rule says, in all ${cases.length} combinations`, () => {
-    expect(cases.length).toBe(5 * 3 * (1 + 7 * 2 + 1));
+    expect(cases.length).toBe(5 * 2 * 2 * (2 + KINDS.length));
     for (const c of cases) {
       const e = expected(c);
       const name = label(c);
-      // The row: a refusal from the user's own Test is carried by its result in the view.
-      const fromTest = c.from === "test";
-      const row = render(c, "owner", fromTest);
+      const row = render(c, "owner");
       expect(row.match(/data-state="([a-z]+)"/)![1], name).toBe(e.state);
       expect([...row.matchAll(/<span class="pill[^"]*">([^<]+)<\/span>/g)].map((m) => m[1]!.replace(/&#39;/g, "'")), name).toEqual(e.tag ? [e.tag] : []);
-      const why = row.match(/<span class="meta why">([\s\S]*?) · <button[^>]*>Details<\/button>(?: · <span class="later">([^<]*)<\/span>)?(?: · <span class="ek">([^<]*)<\/span>)?<\/span>/);
-      if (e.lead && c.row !== "blocked" && !fromTest) expect([why?.[1], why?.[2], why?.[3]], name).toEqual([esc(e.lead), e.note && esc(e.note), e.earlier]);
-      else expect(why, name).toBeNull();
-      expect([...row.matchAll(/<span class="ek">([^<]*)<\/span>/g)].map((m) => m[1]).slice(0, 1), name).toEqual(e.earlier ? [e.earlier] : []);
+      // Try again in place of Test, on a row whose latest call failed.
+      expect(row.includes('<span class="lbl">Try again</span>'), name).toBe(e.again);
+      expect(row, name).not.toContain("earlier key");
+      // With no result open, the reason line leads the row.
+      const why = row.match(/<span class="meta why">([\s\S]*?) · <button[^>]*>Details<\/button><\/span>/);
+      if (c.test === "none" && e.lead && !c.blocked) expect(why?.[1], name).toBe(`<span class="fw">${e.failed}</span> · ${esc(e.lead)}`);
+      else if (c.test === "none") expect(why, name).toBeNull();
+      if (c.test === "none") continue;
       // The result under it, for the owner.
-      const result = render(c, "owner", true);
-      if (e.passed) expect(result, name).toContain("passed.</strong> Tasks can use it.");
-      else expect(result, name).not.toContain("passed.</strong>");
-      const box = result.match(/<div class="result[^"]*" role="alert">([\s\S]*?)<\/div><\/div><\/li>/)?.[1];
+      if (e.passed) expect(row, name).toContain("passed.</strong> It answered just now.");
+      else expect(row, name).not.toContain("passed.</strong>");
+      const box = row.match(/<div class="result[^"]*" role="alert">([\s\S]*?)<\/div><\/div><\/li>/)?.[1];
       if (!e.lead) {
         expect(box, name).toBeUndefined();
         continue;
       }
-      expect(box!.match(/<strong>([\s\S]*?)<\/strong>/)![1], name).toBe(esc(e.lead));
-      const noteHtml = box!.match(/<div class="later"><p>([^<]*)<\/p>([\s\S]*?)(?=<details>|$)/);
-      expect(noteHtml?.[1], name).toBe(e.note && esc(e.note));
-      const before = noteHtml ? box!.slice(0, box!.indexOf('<div class="later">')) : box!.split("<details>")[0]!;
-      // Every action its lead takes, Add credits among them, stays on an earlier key's row.
-      expect(labels(before), name).toEqual(e.leadActions);
-      const earlierHtml = box!.match(/<div class="later"><p><span class="ek">([^<]*)<\/span>\. Tasks can use it once it passes on this key\.<\/p><\/div>/);
-      expect(earlierHtml?.[1], name).toBe(e.earlier);
-      expect(noteHtml ? labels(noteHtml[2]!) : [], name).toEqual(e.noteActions);
-      // A failed verdict's own fix, and the refusal's, are in Details.
+      expect(box!.match(/<strong>([\s\S]*?)<\/strong>/)![1], name).toBe(e.failed ? `${e.failed} · ${esc(e.lead)}` : esc(e.lead));
+      expect(labels(box!.split("<details>")[0]!), name).toEqual(e.actions);
       const det = box!.match(/<details><summary>Details<\/summary>([\s\S]*)<\/details>/)?.[1] ?? "";
-      if (e.lead === FAILED.text) expect(det, name).toContain(esc(FAILED.fix!));
-      const refusalFixText = c.kind && e.note ? record(c.kind).fix : undefined;
-      if (refusalFixText) expect(det, name).toContain(esc(refusalFixText));
-      // A friend's Ask Admin sends the refusal just hit, else the lead's
-      // reason, and sits in the block whose reason it sends.
-      const friend = render(c, "friend", true);
+      if (e.failed) expect(det, name).toContain(esc(FAILED.fix!));
+      // A friend's Ask Admin sends the reason shown, one the model-help form takes.
+      const friend = render(c, "friend");
       const asks = [...friend.matchAll(/name="reason" value="([^"]*)"><button[^>]*>Ask Admin for help/g)];
-      expect(asks.length, name).toBe(e.ask ? 1 : 0);
-      const asked = asks[0];
-      if (asked) {
-        const noteAt = friend.indexOf('<div class="later">');
-        const on = noteAt >= 0 && asked.index! > noteAt ? "note" : "lead";
-        expect({ reason: asked[1], on }, name).toEqual(e.ask);
-        // The server's model-help form takes every reason a button sends.
-        expect(MODEL_HELP_REASONS.has(asked[1]!), name).toBe(true);
-      }
+      expect(asks.map((a) => a[1]), name).toEqual(e.ask ? [e.ask] : []);
     }
   });
 
-  it("keeps Add credits on a Needs credit result over a pass on an earlier key, as on Nova Micro", () => {
-    const c: Case = { verdict: "earlier-passed", kind: KINDS.find((k) => k.reason === "no_credits"), from: "test", row: "open" };
-    const result = render(c, "owner", true);
-    expect(result).toMatch(new RegExp(`<strong>${esc(record(c.kind!).text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</strong>[\\s\\S]*?<div class="acts"><a class="btn small outline ext" href="${plugin.connect.guide.credits!.href}"[^>]*>Add credits</a></div><div class="later"><p><span class="ek">Passed on an earlier key</span>`));
-    expect(result).toMatch(/data-state="pending"/);
-  });
-
-  it("drops the earlier key's note once a run on this key answers Needs credit, as on the owner's 322 rows", () => {
-    const c: Case = { verdict: "earlier-passed", kind: KINDS.find((k) => k.reason === "no_credits"), from: "run", row: "open" };
-    const row = render(c, "owner", false);
-    expect(row).toMatch(/data-state="credit"/);
-    expect(row).toContain(esc(record(c.kind!).text));
-    expect(row).not.toContain("on an earlier key");
-    const result = render(c, "owner", true);
-    expect(result).toContain(">Add credits</a>");
-    expect(result).not.toContain("on an earlier key");
-  });
-
-  it("never changes the case of a refusal's text in the note", () => {
-    const c: Case = { verdict: "failed", kind: KINDS.find((k) => k.reason === "not_connected"), from: "run", row: "open" };
-    expect(render(c, "owner", false)).toContain(`Latest test couldn&#39;t run. ${esc(plugin.connect.guide.name)} is not connected.`);
+  it("never changes the case of a refusal's text", () => {
+    const c: Case = { latest: "none", credit: true, blocked: false, test: "not_connected" };
+    expect(render(c, "owner")).toContain(`<strong>${esc(plugin.connect.guide.name)} is not connected.</strong>`);
   });
 });

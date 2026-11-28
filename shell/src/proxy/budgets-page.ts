@@ -6,9 +6,9 @@
 //
 // Before the budget is set the page suggests one, with its basis, marked
 // "estimate" with its "checked on" date: the dearest model, for one
-// application, among the user's usable models that their tasks' saved
-// choices use, else among all their usable models (budgets.ts
-// readSuggestionBasis; usable through models/usable.ts only), at its price
+// application, among the models that their tasks' saved choices use, else
+// among the Ready models proposed for their tasks (budgets.ts
+// readSuggestionBasis; Ready through models/ready.ts only), at its price
 // on OpenRouter's list (a router at the user's price cap on it), and the
 // design's tokens per application at the applications a day the user plans
 // (5 until they type another). Typing the volume works the figure out again
@@ -50,7 +50,7 @@ import {
 } from "./budgets";
 import { readConnection } from "./connections";
 import { monthSpend } from "./ledger";
-import type { ConnectionFields } from "./plugin";
+import type { ConnectionFields, PluginRegistry } from "./plugin";
 
 const PROVIDER: Provider = "openrouter";
 
@@ -116,9 +116,9 @@ const isFloor = (basis: SuggestionBasis): boolean => basis.perApplicationUsd ===
 function floorLines(basis: SuggestionBasis): string {
   const tasks = basis.from === "tasks";
   return `<p class="from">The smallest budget that switches model calls on.</p>
-<p class="from">${tasks ? "Your tasks use only free models." : "Every model that passed its test is free."}</p>
+<p class="from">${tasks ? "Your tasks use only free models." : "Your Ready models for tasks are all free."}</p>
 <details class="how"><summary>How this is worked out</summary><ul>
-<li>${tasks ? "Every model your tasks use" : "Every model that passed its test"} is free on OpenRouter's list, so a call costs nothing.</li>
+<li>${tasks ? "Every model your tasks use" : "Every Ready model your tasks would get"} is free on OpenRouter's list, so a call costs nothing.</li>
 <li>A budget is at least $1, so $1 a month, at any number of applications a day.</li>
 <li>Once a task uses a paid model, the suggestion is worked out from its price.</li>
 </ul></details>`;
@@ -127,7 +127,7 @@ function floorLines(basis: SuggestionBasis): string {
 function basisLines(basis: SuggestionBasis): string {
   if (isFloor(basis)) return floorLines(basis);
   const m = basis.model;
-  const which = basis.from === "tasks" ? "the dearest model your tasks use" : "the dearest model that passed its test";
+  const which = basis.from === "tasks" ? "the dearest model your tasks use" : "the dearest Ready model proposed for your tasks";
   const price = m.capped
     ? `Your price cap on it: ${perM(m.inputUsdPerMTok)} in, ${perM(m.outputUsdPerMTok)} out per million tokens, set ${nbDate(m.checkedOn)}. A call to it costs at most that.`
     : `Its price on OpenRouter's list: ${perM(m.inputUsdPerMTok)} in, ${perM(m.outputUsdPerMTok)} out per million tokens, read ${nbDate(m.checkedOn)}.`;
@@ -185,8 +185,8 @@ function unsetPanel(state: BudgetsState): string {
   if (!basis) {
     return `<div class="sugg">
 <p class="label">Suggested</p>
-<p class="none">No suggestion yet: no model has passed its test.</p>
-<div class="acts"><a class="btn outline" href="${PROVIDERS_PATH}#test" data-k="test">Test a model</a></div>
+<p class="none">No suggestion yet: no model is ready.</p>
+<div class="acts"><a class="btn outline" href="${PROVIDERS_PATH}#test" data-k="test">See models</a></div>
 </div>
 <div class="set">${ownForm(state, { cls: "primary", button: "Set budget", label: "Your monthly budget" })}
 ${stopLines(state)}</div>`;
@@ -249,7 +249,7 @@ ${said}${problem}
 <div class="panel budget">${panel}</div>
 <details class="how about"><summary>How a budget works</summary><ul>
 <li>When the month's spend reaches it, every model call stops until the 1st, a task's fallback model included.</li>
-<li>Until it is set, no model can be called except a model's test call and Test all models.</li>
+<li>Until it is set, no model can be called except a model's test call.</li>
 <li>OpenRouter's key has its own credit limit, set on OpenRouter; it can refuse calls first.</li>
 </ul></details>
 </section>
@@ -407,6 +407,8 @@ const BUDGETS_SCRIPT = String.raw`
 export interface KeyReader {
   secrets: SecretStore;
   fetcher?: typeof fetch;
+  // The plug-ins, for the Ready models the suggestion is worked from.
+  plugins: PluginRegistry;
 }
 
 async function readState(db: D1Database, userId: string, view: View, flash: Flash, now: Date, reader: KeyReader): Promise<BudgetsState> {
@@ -414,7 +416,7 @@ async function readState(db: D1Database, userId: string, view: View, flash: Flas
     readConnection(db, userId, PROVIDER),
     readBudget(db, userId, PROVIDER),
     monthSpend(db, userId, PROVIDER, now),
-    readSuggestionBasis(db, userId),
+    readSuggestionBasis(db, reader.plugins, userId),
   ]);
   return {
     connection,
@@ -505,7 +507,7 @@ export async function handleBudgets(request: Request, db: D1Database, userId: st
   switch (field("do")) {
     case "accept": {
       // The suggestion as the server works it out now, at the volume posted.
-      const basis = await readSuggestionBasis(db, userId);
+      const basis = await readSuggestionBasis(db, reader.plugins, userId);
       if (!basis) return done({ problem: "There is no suggestion yet. Type your own budget." }, "amount", 400);
       const { monthlyUsd } = suggest(basis, view.applicationsADay);
       await setBudget(db, userId, PROVIDER, monthlyUsd, "accepted", now);

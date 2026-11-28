@@ -118,9 +118,12 @@ function drive(script: string, document: Record<string, unknown>, m: ReturnType<
   return { ...m, sent, dispatch, listed, chipKeys, tick, removeChip, clearMakers, outside: node() };
 }
 
-// `state` is the row's rowState (data-state), "pending" unless given;
+// `state` is the row's rowState (data-state), "ready" unless given;
 // `strength` its strength chip (data-strength).
 export interface ListRow { text: string; maker: string; makerName: string; state?: string; strength?: string }
+
+// The strip's cells, in its order (models-table.ts STRIP_CELLS).
+const STATES = ["ready", "credit", "step"] as const;
 
 // Usage's Per model box for `rows`, its script run on it.
 export function perModelBox(rows: ListRow[]) {
@@ -151,29 +154,26 @@ export function perModelBox(rows: ListRow[]) {
 
 // Providers' model table for `rows`, its page script run on it at `href`,
 // with the strip (its cells' counts, the bar and its end label, Needs
-// credit's Add credits link) and the
-// line under Test all that says it covers the whole list.
+// credit's Add credits link).
 export function providersTable(rows: ListRow[], href = "https://cos.example.com/chief-of-staff/models") {
   const main = node({ id: "screen" });
-  const cellV = Object.fromEntries((["works", "credit", "fails", "pending"] as const).map((k) => [k, node({ class: "v" }, main)]));
+  const cellV = Object.fromEntries(STATES.map((k) => [k, node({ class: "v" }, main)]));
   for (const [k, v] of Object.entries(cellV)) main.q[`.cell[data-filter="${k}"] .v`] = v;
   const bar = node({ class: "bar" }, main);
   const barW = node({ class: "w" }, bar);
   const barC = node({ class: "c" }, bar);
-  const barF = node({ class: "f" }, bar);
-  Object.assign(bar.q, { "i.w": barW, "i.c": barC, "i.f": barF });
+  Object.assign(bar.q, { "i.w": barW, "i.c": barC });
   const ends = node({ "data-ends": "" }, main);
   const act = node({ class: "cell-act ext", "data-credit-act": "" }, main);
-  const whole = node({ class: "why", "data-whole-list": "", hidden: "" }, main);
-  const cells = (["works", "credit", "fails", "pending"] as const).map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
+  const cells = STATES.map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
   Object.assign(main.q, { ".bar": bar, "[data-ends]": ends, "[data-credit-act]": act });
-  Object.assign(main.qa, { "[data-whole-list]": [whole], ".cell[data-filter]": cells });
+  Object.assign(main.qa, { ".cell[data-filter]": cells });
   const q = node({ id: "pick-q", type: "search" }, main);
   const count = node({ id: "pick-count" }, main);
   const m = makerNodes(main);
   const box = node({ id: "tbl-box" }, main);
   const list = node({ id: "pick-list" }, box);
-  const lis = rows.map((r) => Object.assign(node({ class: "row", "data-hay": r.text, "data-state": r.state ?? "pending", "data-maker": r.maker, "data-maker-name": r.makerName, ...(r.strength ? { "data-strength": r.strength } : {}) }, list), { hidden: false }));
+  const lis = rows.map((r) => Object.assign(node({ class: "row", "data-hay": r.text, "data-state": r.state ?? "ready", "data-maker": r.maker, "data-maker-name": r.makerName, ...(r.strength ? { "data-strength": r.strength } : {}) }, list), { hidden: false }));
   main.qa["#pick-list > li.row"] = lis;
   const byId: Record<string, Node> = { screen: main, "pick-q": q, "pick-count": count, "tbl-box": box, "pick-list": list };
   // "No model matches": the row the script adds when none shows.
@@ -183,22 +183,19 @@ export function providersTable(rows: ListRow[], href = "https://cos.example.com/
   const type = (v: string) => { q.value = v; d.dispatch("input", q); };
   const shown = () => lis.flatMap((r, i) => (r.hidden ? [] : [i]));
   // The strip as the script left it: each cell's count and colour, the bar's
-  // widths and label, the end label, and whether the whole-list line shows.
+  // widths and label, and the end label.
   const strip = () => ({
-    works: cellV.works!.textContent,
+    ready: cellV.ready!.textContent,
     credit: cellV.credit!.textContent,
-    fails: cellV.fails!.textContent,
-    pending: cellV.pending!.textContent,
-    good: cellV.works!.classList.contains("good"),
+    step: cellV.step!.textContent,
+    good: cellV.ready!.classList.contains("good"),
     warn: cellV.credit!.classList.contains("warn"),
-    bad: cellV.fails!.classList.contains("bad"),
-    bar: [barW.getAttribute("style"), barC.getAttribute("style"), barF.getAttribute("style")],
+    bar: [barW.getAttribute("style"), barC.getAttribute("style")],
     label: bar.getAttribute("aria-label"),
     ends: ends.textContent,
-    wholeList: !whole.hidden,
   });
   // Whether the Needs credit cell's Add credits link shows.
   const addCredits = () => !act.hidden;
-  const press = (k: "works" | "credit" | "fails" | "pending") => d.dispatch("click", cells.find((c) => c.getAttribute("data-filter") === k)!);
+  const press = (k: (typeof STATES)[number]) => d.dispatch("click", cells.find((c) => c.getAttribute("data-filter") === k)!);
   return { ...d, main, q, count, lis, added, type, shown, strip, press, addCredits };
 }

@@ -6,7 +6,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAccountList } from "../src/models/account-list";
-import { readLatestTests, readUsableModels } from "../src/models/usable";
+import { readLatestTests } from "../src/models/latest-tests";
 import { refreshPrices } from "../src/prices/refresh";
 import { readCurrentCatalog } from "../src/prices/store";
 import { providerPlugins } from "../src/providers/index";
@@ -16,7 +16,12 @@ import { PAGE_SCRIPT } from "../src/providers/page-script";
 import { sha256Hex } from "../src/providers/openrouter";
 import { vaultSecrets } from "../src/providers/secrets";
 import { setBudget } from "../src/proxy/budgets";
-import { readConnection } from "../src/proxy/connections";
+import { readConnection, readHasCredit } from "../src/proxy/connections";
+import { handleTaskModels } from "../src/models/picker-page";
+import { TASK_MODELS_PATH } from "../src/paths";
+import { providersTable } from "./maker-dom";
+import { documentOf, type El } from "./mini-dom";
+import { pageScripts, runScript, type Sent } from "./script-dom";
 import { fakeFetch, ISSUED_KEY, keyReply, MODELS, type Overrides } from "./fake-sources";
 import { dumpEveryTable, userFor, VAULT_KEY } from "./test-plugin";
 
@@ -71,6 +76,65 @@ const visibleLines = (html: string): string[] =>
 // Every solid app-blue button: the one next step.
 const primaries = (html: string): string[] => [...html.matchAll(/class="btn(?: wide)? primary[^"]*"[^>]*>([^<]*)/g)].map((m) => m[1]!.trim());
 const rowOf = (html: string, model: string) => html.match(new RegExp(`<li class="row"[^>]*data-id="${model.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}"[\\s\\S]*?</li>`))![0];
+
+const PATH = new URL(BASE).pathname;
+// The page as the browser has it, its own script running: every request it
+// sends is recorded and answered by the app at `now`; `settle` waits for the
+// answers to be swapped in. `failNextPost`: the next form's request runs on
+// the app, which saves what it does, but its answer is a 503, as when the
+// Worker runs past its limits; with `{ saved: false }` the request never
+// reaches the app. `holdNextPost`: the next form's answer waits until the
+// function it returns is called, as a slow request does. Each request takes
+// the hold or the failure set when it is sent.
+async function inPlace(now: Date) {
+  const html = await (await get()).text();
+  const doc = documentOf(html);
+  const sent: Sent = [];
+  let answered: Promise<unknown> = Promise.resolve();
+  let failing: false | "saved" | "unsaved" = false;
+  let held: Promise<void> | undefined;
+  runScript(pageScripts(html), doc, `${BASE}?provider=openrouter`, sent, {
+    window: { addEventListener: () => {}, fetch: () => {}, history: {} },
+    // The browser's FormData of a stand-in form: its named inputs.
+    FormData: class extends FormData {
+      constructor(form?: El) {
+        super();
+        for (const input of form?.querySelectorAll("input[name]") ?? []) this.append(input.name, input.value);
+      }
+    },
+    fetch: (url, init) => {
+      const post = init?.method === "POST";
+      const wait = post ? held : undefined;
+      const fail = post ? failing : false;
+      if (post) {
+        held = undefined;
+        failing = false;
+      }
+      const request = new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } });
+      const answer = (fail === "unsaved" ? Promise.resolve(undefined) : handle(request, { now })).then(async (r) => {
+        if (wait) await wait;
+        return fail ? new Response("Worker exceeded resource limits", { status: 503 }) : r!;
+      });
+      answered = answer;
+      return answer;
+    },
+  });
+  const settle = async () => {
+    let seen: Promise<unknown>;
+    do {
+      seen = answered;
+      await seen;
+      for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    } while (seen !== answered);
+  };
+  const failNextPost = (opts: { saved?: boolean } = {}) => { failing = opts.saved === false ? "unsaved" : "saved"; };
+  const holdNextPost = () => {
+    let release = () => {};
+    held = new Promise<void>((r) => { release = r; });
+    return () => release();
+  };
+  return { doc, sent, settle, failNextPost, holdNextPost };
+}
 
 // Connect, then come back from OpenRouter's page as it would send the user.
 async function connect(overrides: Overrides = {}): Promise<Response> {
@@ -137,7 +201,7 @@ describe("Connect OpenRouter", () => {
     const page = await landing.text();
     expect(page).not.toContain(ISSUED_KEY);
     expect(page).toContain('<main class="screen" id="screen" data-view="provider=openrouter" data-land>');
-    expect(page).toContain("Connected just now. Test any model, or all of them. Tasks use the models that pass.");
+    expect(page).toContain("Connected just now. Ready models need no test. Tasks choose among them.");
     expect(page).toContain("Connected · key in your vault");
     expect(page).toContain('<input type="search" id="pick-q"');
     // The flash is spent: a refresh lands nowhere and focuses nothing.
@@ -150,8 +214,10 @@ describe("Connect OpenRouter", () => {
     await connect();
     const html = await (await get()).text();
     const ids = [...html.matchAll(/<li class="row"[^>]*data-id="([^"]+)"/g)].map((m) => m[1]);
-    const listed = (await readCurrentCatalog(env.DB))!.models.map((m) => m.id);
+    // Every one but those OpenRouter lists with no tool use.
+    const listed = (await readCurrentCatalog(env.DB))!.models.filter((m) => m.blocked || m.tools).map((m) => m.id);
     expect(ids).toEqual(listed);
+    expect(listed.length).toBeLessThan((await readCurrentCatalog(env.DB))!.models.length);
     expect(ids).not.toContain("~openai/gpt-luna-latest");
     expect(ids).not.toContain("openai/gpt-oss-20b:batch");
     const luna = rowOf(html, "openai/gpt-6-luna");
@@ -160,7 +226,8 @@ describe("Connect OpenRouter", () => {
     const free = MODELS.data.find((m) => m.id.endsWith(":free"))!.id;
     expect(rowOf(html, free)).toContain('<span class="pill free">Free</span>');
     expect(luna).not.toContain("pill free");
-    expect(html).toContain("Every model OpenRouter lists is here but the ones no test can pass: 1 “:batch” variant (they answer no chat call)");
+    expect(html).toContain("Every model OpenRouter lists is here but the ones no task can use: 1 “:batch” variant (they answer no chat call)");
+    expect(html).toMatch(/It also leaves out \d+ models? that lists? no tool use: a task's agent calls tools\./);
   });
 
   it("shows the OpenRouter account line, read live with the key from the vault", async () => {
@@ -174,6 +241,8 @@ describe("Connect OpenRouter", () => {
 
   it("tests a model in place: one call, a JSON answer with the result under its row, and no redirect", async () => {
     await connect();
+    // The landing visit reads the account line once.
+    await get();
     fetcher = fakeFetch();
     const tested = await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true });
     expect(tested.status).toBe(200);
@@ -182,10 +251,10 @@ describe("Connect OpenRouter", () => {
     expect(body.view).toBe("provider=openrouter&result=openai%2Fgpt-6-luna");
     expect(body.focus).toBe("t-openai/gpt-6-luna");
     const row = rowOf(body.main, "openai/gpt-6-luna");
-    expect(row).toContain("<strong>GPT-6 Luna passed.</strong> Tasks can use it.");
-    // A passing row carries no tag; the strip's Works cell finds it.
-    expect(row).toContain('data-state="works"');
-    expect(row).not.toMatch(/class="pill[^"]*">Works/);
+    expect(row).toContain("<strong>GPT-6 Luna passed.</strong> It answered just now.");
+    // A Ready row carries no tag; the strip's Ready cell finds it.
+    expect(row).toContain('data-state="ready"');
+    expect(row).not.toMatch(/class="pill[^"]*">(Works|Ready)/);
     // The card is left as the page has it: the account is not read again.
     expect(body.main).toContain('data-part="provider" data-keep');
     expect(fetcher.sent.map((s) => new URL(s.url).pathname)).toEqual(["/api/v1/chat/completions"]);
@@ -193,13 +262,13 @@ describe("Connect OpenRouter", () => {
     // The ledger has the test call at OpenRouter's reported cost and its generation ID.
     const row_ = await env.DB.prepare("SELECT task, cost_source, provider_call_id, cost_usd FROM model_calls WHERE user_id = ?").bind(userId).first();
     expect(row_).toEqual({ task: "test_call", cost_source: "reported", provider_call_id: "gen-test-0001", cost_usd: 0.0000022 });
-    expect((await readUsableModels(env.DB, userId)).map((m) => m.model)).toEqual(["openai/gpt-6-luna"]);
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("openai/gpt-6-luna")?.state).toBe("passed");
     // A second test keeps the first result under its row.
     const second = await handle(new Request(`${BASE}/openrouter/test`, { method: "POST", body: new URLSearchParams({ model: "mistralai/mistral-nemo" }), headers: { origin: ORIGIN, accept: "application/json", "x-cos-view": body.view } }));
     const both = await json(second);
     expect(both.view).toBe("provider=openrouter&result=mistralai%2Fmistral-nemo&result=openai%2Fgpt-6-luna");
-    expect(rowOf(both.main, "openai/gpt-6-luna")).toContain("passed.</strong> Tasks can use it.");
-    expect(rowOf(both.main, "mistralai/mistral-nemo")).toContain("passed.</strong> Tasks can use it.");
+    expect(rowOf(both.main, "openai/gpt-6-luna")).toContain("passed.</strong> It answered just now.");
+    expect(rowOf(both.main, "mistralai/mistral-nemo")).toContain("passed.</strong> It answered just now.");
     fetcher = fakeFetch();
     // Asking for the same view again runs nothing.
     fetcher = fakeFetch();
@@ -218,12 +287,14 @@ describe("Connect OpenRouter", () => {
     const page = await (await follow(tested)).text();
     expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
     const row = rowOf(page, "openai/gpt-6-luna");
-    expect(row).toContain(`<span class="pill bad">Doesn't work</span>`);
+    expect(row).toContain('data-state="ready"');
+    expect(row).toContain("<strong>Failed when tested · ");
+    expect(row).toContain('<span class="lbl">Try again</span>');
     expect(row).toContain("OpenRouter replied: 404");
     expect((await readLatestTests(env.DB, userId, "openrouter")).get("openai/gpt-6-luna")?.state).toBe("failed");
   });
 
-  it("keeps a passed model usable when a single Test is refused as busy, and carries the result in the view", async () => {
+  it("keeps a model Ready when a single Test is refused as busy, and carries the result in the view", async () => {
     await connect();
     fetcher = fakeFetch();
     await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true });
@@ -239,15 +310,14 @@ describe("Connect OpenRouter", () => {
     const page = await (await follow(tested)).text();
     expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
     const row = rowOf(page, "openai/gpt-6-luna");
-    expect(row).toContain('data-state="works"');
+    expect(row).toContain('data-state="ready"');
     expect(row).toContain("Test again");
     expect(row).toContain("OpenRouter replied: 429");
     expect(row).toContain("Rate limited upstream");
     expect((await readLatestTests(env.DB, userId, "openrouter")).get("openai/gpt-6-luna")).toEqual(passed);
-    expect((await readUsableModels(env.DB, userId)).map((m) => m.model)).toEqual(["openai/gpt-6-luna"]);
   });
 
-  it("names the tasks a failed test leaves on their fallback, or without a model", async () => {
+  it("names the tasks that fall to their fallback when a model fails, or that have none", async () => {
     await connect();
     fetcher = fakeFetch();
     await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true });
@@ -259,8 +329,8 @@ describe("Connect OpenRouter", () => {
     fetcher = fakeFetch({ chat: () => Response.json({ error: { code: 404, message: "No endpoints found" } }, { status: 404 }) });
     const { main } = await json(await post("/openrouter/test", { model: "openai/gpt-6-luna" }, { json: true, now: new Date("2026-11-27T10:05:00Z") }));
     const row = rowOf(main, "openai/gpt-6-luna");
-    expect(row).toContain("Scoring roles runs on its fallback mistralai/mistral-nemo now.");
-    expect(row).toContain("Matching questions reads “Choose a model” now.");
+    expect(row).toContain("<p>Scoring roles falls to Mistral: Mistral Nemo when it fails.</p>");
+    expect(row).toContain("<p>Matching questions has no fallback.</p>");
   });
 
   it("reads the account's own model list after Connect; a model it leaves out links the settings, then Check again", async () => {
@@ -271,8 +341,9 @@ describe("Connect OpenRouter", () => {
     const html = await (await get()).text();
     const row = rowOf(html, "anthropic/claude-sonnet-5.5");
     expect(row).toContain("Your OpenRouter settings leave it out");
-    expect(row).toContain('href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer" data-allow="anthropic/claude-sonnet-5.5"');
-    expect(row).toMatch(/<form method="post" action="[^"]+\/check-account" data-fetch class="inline" data-check-for="anthropic\/claude-sonnet-5.5" hidden>/);
+    // A labelled link straight to the settings, in the row's own line, so it shows whole at every width.
+    expect(row).toMatch(/<span class="meta left"[^>]*>Your OpenRouter settings leave it out · <a class="link ext" href="https:\/\/openrouter.ai\/settings\/privacy" target="_blank" rel="noopener noreferrer" data-allow="anthropic\/claude-sonnet-5.5"[^>]*>Allow in settings<\/a>/);
+    expect(row).toMatch(/<form method="post" action="[^"]+\/check-account" data-fetch class="inline" data-check-for="anthropic\/claude-sonnet-5.5" hidden>[\s\S]*?>Check again<\/button><\/form><\/span>/);
     expect(row).toMatch(/aria-label="Test Claude Sonnet 5.5" disabled/);
     // Still left out.
     let checked = await json(await post("/openrouter/check-account", { model: "anthropic/claude-sonnet-5.5" }, { json: true }));
@@ -282,9 +353,149 @@ describe("Connect OpenRouter", () => {
     fetcher = fakeFetch({ userModels: () => Response.json({ data: MODELS.data }) });
     checked = await json(await post("/openrouter/check-account", { model: "anthropic/claude-sonnet-5.5" }, { json: true }));
     const now = rowOf(checked.main, "anthropic/claude-sonnet-5.5");
-    expect(now).toContain("Now allowed for your account. Test it now.");
+    expect(now).toContain("Now allowed for your account. It&#39;s ready for tasks.");
     expect(now).not.toContain("data-blocked");
     expect(checked.focus).toBe("t-anthropic/claude-sonnet-5.5");
+  });
+
+  it("shows what Refresh saved even when its answer fails: the read stamp, the rows and the strip, with no reload, and Try again", async () => {
+    await connect();
+    const later = new Date("2026-11-27T10:05:00Z");
+    const { doc, sent, settle, failNextPost, holdNextPost } = await inPlace(later);
+    const stamp = () => doc.querySelector('[data-part="head"] .src')!.textContent;
+    const stateOf = (model: string) => doc.querySelector(`li.row[data-id="${model}"]`)!.getAttribute("data-state");
+    const cells = () => ["ready", "credit", "step"].map((k) => Number(doc.querySelector(`.cell[data-filter="${k}"] .v`)!.textContent));
+    expect(stamp()).toContain("06:00 UTC");
+    expect(stateOf("openai/gpt-6-luna")).toBe("ready");
+    const before = cells();
+    // The owner's settings on OpenRouter now leave out GPT-6 Luna too.
+    fetcher = fakeFetch({ userModels: () => Response.json({ data: MODELS.data.filter((m) => m.id !== "anthropic/claude-sonnet-5.5" && m.id !== "openai/gpt-6-luna") }) });
+    // The app reads and saves both lists, then its answer fails.
+    failNextPost();
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    await settle();
+    // The page reads itself again, in place, and shows what was saved.
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`, `fetch ${PATH}?provider=openrouter`]);
+    expect(stamp()).toContain("10:05 UTC");
+    expect(stateOf("openai/gpt-6-luna")).toBe("step");
+    expect(doc.querySelector('li.row[data-id="openai/gpt-6-luna"] .meta')!.textContent).toContain("Your OpenRouter settings leave it out");
+    expect(cells()).toEqual([before[0]! - 1, before[1]!, before[2]! + 1]);
+    expect(doc.querySelector("[data-ends]")!.textContent).toBe(`${before.reduce((a, b) => a + b, 0)} models`);
+    const refresh = doc.querySelector('[data-part="head"] button[data-k="refresh"]')!;
+    expect([refresh.disabled, refresh.textContent]).toEqual([false, "Refresh"]);
+    // It says the request failed, with Try again, which sends the same request once more.
+    const err = doc.querySelector('[data-part="err"]')!;
+    expect(err.textContent).toContain("Couldn't reach the app just now.");
+    // Try again shows it is busy at once, on Refresh, the strip and the rows, until its answer is in.
+    const release = holdNextPost();
+    const retry = err.querySelector("[data-retry]")!;
+    doc.fire("click", retry);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    expect([retry.disabled, refresh.disabled, refresh.getAttribute("aria-busy")]).toEqual([true, true, "true"]);
+    expect(["strip", "rows"].map((p) => doc.querySelector(`[data-part="${p}"]`)!.getAttribute("aria-busy"))).toEqual(["true", "true"]);
+    release();
+    await settle();
+    expect(sent.at(-1)).toBe(`fetch ${PATH}/openrouter/refresh`);
+    expect(sent).toHaveLength(3);
+    expect(doc.querySelector('[data-part="err"]')!.textContent).not.toContain("Couldn't reach the app");
+  });
+
+  it("keeps a Refresh queued behind a slow Test busy, on its button, the strip and the rows, until its own answer is in", async () => {
+    await connect();
+    const { doc, settle, holdNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const busyNow = () => [doc.querySelector('[data-part="head"] button[data-k="refresh"]')!.getAttribute("aria-busy"), ...["strip", "rows"].map((p) => doc.querySelector(`[data-part="${p}"]`)!.getAttribute("aria-busy"))];
+    const releaseTest = holdNextPost();
+    doc.fire("submit", doc.querySelector('li.row[data-id="openai/gpt-6-luna"] form')!);
+    const releaseRefresh = holdNextPost();
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    expect(busyNow()).toEqual(["true", "true", "true"]);
+    // The Test's answer is swapped in while the Refresh still waits.
+    releaseTest();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(busyNow()).toEqual(["true", "true", "true"]);
+    releaseRefresh();
+    await settle();
+    expect(doc.querySelectorAll('[aria-busy="true"]')).toEqual([]);
+    expect(doc.querySelector('[data-part="head"] .src')!.textContent).toContain("10:05 UTC");
+  });
+
+  it("keeps the stale-list notice when Refresh model list fails before anything is saved, and adds the failure above it", async () => {
+    await connect();
+    await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = json_set(catalog, '$.version', 2)").run();
+    const { doc, settle, failNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    failNextPost({ saved: false });
+    doc.fire("submit", doc.querySelector('[data-part="err"] form')!);
+    await settle();
+    const err = doc.querySelector('[data-part="err"]')!;
+    expect(err.textContent).toContain("Couldn't reach the app just now.");
+    expect(err.textContent).toContain("This list follows older rules. Read OpenRouter's list again.");
+    expect(err.querySelector('button[data-k="refresh-list"]')).not.toBeNull();
+    // A second failure replaces the first box, never stacks it.
+    failNextPost({ saved: false });
+    doc.fire("submit", err.querySelector("form")!);
+    await settle();
+    expect(doc.querySelectorAll("[data-failed]")).toHaveLength(1);
+  });
+
+  it("shows Refresh busy on its button, the strip and the rows for the whole of a slow request, then redraws in place", async () => {
+    await connect();
+    const { doc, sent, settle, holdNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const stamp = () => doc.querySelector('[data-part="head"] .src')!.textContent;
+    const part = (name: string) => doc.querySelector(`[data-part="${name}"]`)!;
+    const release = holdNextPost();
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    // Still waiting for the answer.
+    const refresh = doc.querySelector('[data-part="head"] button[data-k="refresh"]')!;
+    expect([refresh.disabled, refresh.getAttribute("aria-busy"), refresh.textContent.trim()]).toEqual([true, "true", "Reading OpenRouter's list…"]);
+    expect([part("strip").getAttribute("aria-busy"), part("rows").getAttribute("aria-busy")]).toEqual(["true", "true"]);
+    expect(stamp()).toContain("06:00 UTC");
+    release();
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`]);
+    expect(stamp()).toContain("10:05 UTC");
+    expect(doc.querySelectorAll('[aria-busy="true"]')).toEqual([]);
+  });
+
+  it("gives Refresh back once its answer is in, even when the list it shows has not changed", async () => {
+    await connect();
+    const { doc, sent, settle } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const refresh = () => doc.querySelector('[data-part="head"] button[data-k="refresh"]')!;
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    await settle();
+    // Again within the minute: the list is the same, and the page says when it can be read again.
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    await settle();
+    expect(sent).toHaveLength(2);
+    expect(doc.querySelector('[data-part="err"]')!.textContent).toContain("The model list was read less than a minute ago.");
+    expect([refresh().disabled, refresh().getAttribute("aria-busy"), refresh().textContent]).toEqual([false, null, "Refresh"]);
+  });
+
+  it("links a left-out model's settings, then Check again reads the account's list in place, with no reload", async () => {
+    await connect();
+    const { doc, sent, settle } = await inPlace(NOW);
+    const model = "anthropic/claude-sonnet-5.5";
+    const link = doc.querySelector(`a[data-allow="${model}"]`)!;
+    const form = () => doc.querySelector(`form[data-check-for="${model}"]`)!;
+    expect([link.textContent, link.hidden, form().hidden]).toEqual(["Allow in settings", false, true]);
+    // Back from the settings tab: Check again in its place.
+    doc.fire("click", link);
+    await settle();
+    expect([doc.querySelector(`a[data-allow="${model}"]`)!.hidden, form().hidden]).toEqual([true, false]);
+    expect(form().querySelector("button")!.textContent).toBe("Check again");
+    doc.fire("submit", form());
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/check-account`]);
+    expect(doc.querySelector(`li.row[data-id="${model}"]`)!.textContent).toContain("Your OpenRouter settings still leave it out.");
+    expect(form().hidden).toBe(false);
+    // Allowed on OpenRouter since: Check again makes it Ready, in place.
+    fetcher = fakeFetch({ userModels: () => Response.json({ data: MODELS.data }) });
+    doc.fire("submit", form());
+    await settle();
+    const row = doc.querySelector(`li.row[data-id="${model}"]`)!;
+    expect(row.getAttribute("data-state")).toBe("ready");
+    expect(row.textContent).toContain("Now allowed for your account.");
+    expect(sent).toHaveLength(2);
   });
 
   it("gives a router a labelled Set price cap, takes the cap in place, and tests it under the cap", async () => {
@@ -300,12 +511,12 @@ describe("Connect OpenRouter", () => {
     expect(rowOf(bad.main, "openrouter/auto")).toContain("Enter two prices above $0, each at most $1000.");
     const capped = await json(await post("/openrouter/cap", { model: "openrouter/auto", input: "3", output: "15" }, { json: true }));
     const row = rowOf(capped.main, "openrouter/auto");
-    expect(row).toContain("Capped at $3.00 / $15.00 per M tokens. Test it now.");
+    expect(row).toContain("Capped at $3.00 / $15.00 per M tokens. It&#39;s ready for tasks.");
     expect(row).toContain('<span class="price num" title="Price cap">≤ $3.00 / $15.00</span>');
     expect(capped.focus).toBe("t-openrouter/auto");
     fetcher = fakeFetch({ chat: () => Response.json({ id: "gen-r", model: "mistralai/mistral-nemo", choices: [{ message: { content: "OK" } }], usage: { prompt_tokens: 9, completion_tokens: 1, cost: 0.0000004 } }) });
     const tested = await json(await post("/openrouter/test", { model: "openrouter/auto" }, { json: true }));
-    expect(rowOf(tested.main, "openrouter/auto")).toContain("passed.</strong> Tasks can use it.");
+    expect(rowOf(tested.main, "openrouter/auto")).toContain("passed.</strong> It answered just now.");
     const sent = fetcher.sent.find((s) => s.url.endsWith("/chat/completions"))!.body as Record<string, unknown>;
     expect(sent.provider).toEqual({ max_price: { prompt: "3", completion: "15", request: "0", image: "0", audio: "0" } });
     expect(sent.plugins).toEqual([{ id: "auto-router", excluded_models: (await readCurrentCatalog(env.DB))!.feeModels }]);
@@ -313,37 +524,60 @@ describe("Connect OpenRouter", () => {
 
   it("keeps exactly one solid blue button, the next step, in every state", async () => {
     await connect();
-    // A fresh list and no run: Test all.
+    // Connected on a fresh list: nothing to test first, so Next: budgets.
     let html = await (await get()).text();
-    expect(primaries(html)).toEqual(["Test all 7 models"]);
-    // Its confirm: Run the test.
-    html = (await json(await get("?provider=openrouter&confirm=test-all", { json: true }))).main;
-    expect(primaries(html)).toEqual(["Run the test"]);
-    expect(html).toContain("Billed to your OpenRouter account.");
-    // Running: none, and the rail asks for progress.
-    const started = await json(await post("/openrouter/test-all", {}, { json: true }));
-    expect(primaries(started.main)).toEqual([]);
-    expect(started.main).toContain('data-part="rail" data-running');
-    // The poll keeps the card and reads no account.
-    fetcher = fakeFetch();
-    const poll = await handle(new Request(`${BASE}?provider=openrouter`, { headers: { accept: "application/json", "x-cos-poll": "1" } }));
-    expect((await json(poll)).main).toContain('data-part="provider" data-keep');
-    expect(fetcher.sent).toEqual([]);
-    // Finished on the current list: Next: budgets.
-    await env.DB.prepare("UPDATE model_tests SET state = 'passed', result = ?, tested_at = ?").bind(JSON.stringify({ text: "Works now." }), NOW.toISOString()).run();
-    await env.DB.prepare("UPDATE model_test_runs SET finished_at = ?").bind(NOW.toISOString()).run();
-    html = await (await get()).text();
     expect(primaries(html)).toEqual(["Next: budgets"]);
+    for (const gone of ["Test all", "Retest", "Run the test"]) expect(html).not.toContain(gone);
+    // The cap editor: Use this cap.
+    html = (await json(await get("?provider=openrouter&cap=openrouter%2Fauto", { json: true }))).main;
+    expect(primaries(html)).toEqual(["Use this cap"]);
     // A list from before the current rules: Refresh model list.
     await env.DB.prepare("UPDATE openrouter_catalogs SET catalog = json_set(catalog, '$.version', 2)").run();
     html = await (await get()).text();
     expect(primaries(html)).toEqual(["Refresh model list"]);
-    expect(html).toContain("Waiting for a fresh model list.");
-    // And a run made on that older list says so, with the same one step.
-    await env.DB.prepare("UPDATE model_test_runs SET catalog_version = 2").run();
-    html = await (await get()).text();
-    expect(primaries(html)).toEqual(["Refresh model list"]);
-    expect(html).toContain("used the old model list, so Retest failed waits for a new run. Refresh, then test all again.");
+    expect(html).toContain("This list follows older rules. Read OpenRouter's list again.");
+    // The old Test all addresses are gone.
+    expect((await post("/openrouter/test-all", {}, { json: true })).status).toBe(405);
+  });
+
+  it("makes paid models Ready once credit is added on OpenRouter, on the next visit, with no click and no call", async () => {
+    const noCredit = () => keyReply({ is_free_tier: true });
+    await connect({ currentKey: noCredit });
+    const states = (html: string) => Object.fromEntries([...html.matchAll(/<li class="row"[^>]*data-id="([^"]+)"[^>]*data-state="([a-z]+)"/g)].map((m) => [m[1], m[2]]));
+    const free = MODELS.data.find((m) => m.id.endsWith(":free"))!.id;
+    const before = await (await get()).text();
+    expect(states(before)["openai/gpt-6-luna"]).toBe("credit");
+    expect(states(before)[free]).toBe("ready");
+    expect(rowOf(before, "openai/gpt-6-luna")).toContain('<span class="pill warn">Needs credit</span>');
+    expect(before).toMatch(/data-credit-act>Add credits<\/a>/);
+    const tasks = async () => (await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins: await plugins(), userId, viewer: "owner", now: NOW })).text();
+    const offered = (html: string) => [...html.matchAll(/<li [^>]*data-value="openrouter\|([^"]+)"/g)].map((m) => m[1]);
+    expect(offered(await tasks())).not.toContain("openai/gpt-6-luna");
+    // The earlier visits kept "no credit" on the connection.
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(false);
+    // Credit is bought on OpenRouter, the key limited to the $4 budget; the next
+    // visit, to either page, reads the account line again.
+    fetcher = fakeFetch({ currentKey: () => keyReply({ is_free_tier: false, limit: 4, limit_remaining: 4 }) });
+    expect(offered(await tasks())).toContain("openai/gpt-6-luna");
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(true);
+    const after = await (await get()).text();
+    expect(states(after)["openai/gpt-6-luna"]).toBe("ready");
+    expect(Object.values(states(after))).not.toContain("credit");
+    expect(after).toMatch(/data-credit-act hidden>Add credits<\/a>/);
+    expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
+  });
+
+  it("gives the list's count and the strip's total the same number", async () => {
+    await connect();
+    const html = await (await get()).text();
+    const count = Number(html.match(/<p class="count" id="pick-count" aria-live="polite"><span class="num">(\d+)<\/span> models<\/p>/)![1]);
+    const ends = Number(html.match(/<span data-ends>(\d+) models<\/span>/)![1]);
+    const cells = ["ready", "credit", "step"].map((k) => Number(html.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]));
+    expect(ends).toBe(count);
+    expect(cells.reduce((a, b) => a + b, 0)).toBe(count);
+    expect(count).toBe([...html.matchAll(/<li class="row"/g)].length);
+    // The router with no cap and the model the account leaves out are counted, in Needs a step.
+    expect(cells[2]).toBeGreaterThanOrEqual(2);
   });
 
   it("says the app's own side is not set up without the vault key, and stores nothing", async () => {
@@ -465,6 +699,7 @@ describe("Connect OpenRouter", () => {
 
   it("Refresh model list reads OpenRouter's list and the account's again, at most once a minute", async () => {
     await connect();
+    await get();
     const later = new Date("2026-11-27T10:05:00Z");
     fetcher = fakeFetch();
     const refreshed = await post("/openrouter/refresh", {}, { now: later, json: true });
@@ -512,8 +747,19 @@ describe("the page's script", () => {
     for (const banned of ["location.reload", "location.assign", "location.replace", "location.href =", "pushState", "replaceState", "window.location ="]) {
       expect(PAGE_SCRIPT, banned).not.toContain(banned);
     }
-    // It asks for JSON, and polls with its own header.
+    // It asks for JSON.
     expect(PAGE_SCRIPT).toContain('accept: "application/json"');
-    expect(PAGE_SCRIPT).toContain('"x-cos-poll": "1"');
+  });
+
+  it("polls for nothing: loaded and left idle, it schedules no timer and sends no request", () => {
+    vi.useFakeTimers();
+    try {
+      const p = providersTable([{ text: "openai: gpt-4o openai/gpt-4o openai", maker: "openai", makerName: "OpenAI" }]);
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(p.sent).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

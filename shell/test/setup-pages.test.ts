@@ -41,7 +41,7 @@ async function screens(): Promise<Record<string, string>> {
   const providers = await handleProviders(new Request(`${ORIGIN}${PROVIDERS_PATH}`), {
     db: env.DB, plugins, readPlugins: async () => plugins, secrets: testSecrets(), userId, viewer: "owner", appOrigin: ORIGIN, now: NOW, fetcher: fakeFetch(),
   });
-  const budgets = await handleBudgets(new Request(`${ORIGIN}${BUDGETS_PATH}`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher: fakeFetch() });
+  const budgets = await handleBudgets(new Request(`${ORIGIN}${BUDGETS_PATH}`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher: fakeFetch(), plugins });
   const tasks = await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins, userId, viewer: "owner", now: NOW });
   return { [PROVIDERS_PATH]: await providers.text(), [BUDGETS_PATH]: await budgets.text(), [TASK_MODELS_PATH]: await tasks.text() };
 }
@@ -80,7 +80,7 @@ describe("Models › Setup", () => {
     expect(toolbar).toContain('<input type="search" id="pick-q"');
     const strip = html.match(/<div class="strip-wrap" data-part="strip">[\s\S]*?<\/div>\n<div class="list-head"/)![0];
     expect(strip).not.toContain("<form");
-    expect([...strip.matchAll(/<button type="button" class="cell" data-filter="(\w+)"/g)].map((m) => m[1])).toEqual(["works", "credit", "fails", "pending"]);
+    expect([...strip.matchAll(/<button type="button" class="cell" data-filter="(\w+)"/g)].map((m) => m[1])).toEqual(["ready", "credit", "step"]);
   });
 
   it("sends nothing and loads nothing when a task's model is chosen, and Save sends the changed rows once, in place", async () => {
@@ -150,7 +150,7 @@ describe("Models › Setup", () => {
     expect(doc.fire("submit", accept)).toBe(true);
     await new Promise((r) => setTimeout(r, 50));
     expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/accept`]);
-    const { routes } = await readTaskRoutes(env.DB, userId);
+    const { routes } = await readTaskRoutes(env.DB, { openrouter: testPlugin() }, userId);
     const now = (task: string) => { const c = routes.find((r) => r.task.id === task)!.current!; return [c.main.model, c.fallback?.model, c.setHow]; };
     expect(now("match")).toEqual(["test-mini", "test-luna", "changed"]);
     expect(now("extract")).toEqual(["test-luna", "test-mini", "accepted"]);
@@ -222,22 +222,22 @@ describe("Models › Setup", () => {
     doc.fire("submit", doc.querySelector(`form[action="${TASK_MODELS_PATH}/accept"]`)!);
     await new Promise((r) => setTimeout(r, 50));
     expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/help`, `fetch ${TASK_MODELS_PATH}/accept`]);
-    const { routes } = await readTaskRoutes(env.DB, userId);
+    const { routes } = await readTaskRoutes(env.DB, { openrouter: testPlugin() }, userId);
     expect(routes.find((r) => r.task.id === "match")!.current!.main.model).toBe("test-mini");
   });
 
-  it("opens Providers showing one strength's models not tested yet when the address asks, as an empty strength's link does, with Show all", async () => {
+  it("opens Providers showing one strength's models in one state when the address asks, as an empty strength's link does, with Show all", async () => {
     const html = (await screens())[PROVIDERS_PATH]!;
     // Every row carries its strength chip.
-    expect(html).toMatch(/<li class="row" id="m-test-luna"[^>]* data-state="works" data-strength="Smallest"/);
-    expect(html).toMatch(/<li class="row" id="m-test-sonnet"[^>]* data-state="pending" data-strength="Strongest"/);
+    expect(html).toMatch(/<li class="row" id="m-test-luna"[^>]* data-state="ready" data-strength="Smallest"/);
+    expect(html).toMatch(/<li class="row" id="m-test-sonnet"[^>]* data-state="ready" data-strength="Strongest"/);
     const doc = documentOf(html);
     const sent: Sent = [];
     const win = { addEventListener: () => {}, fetch: () => {}, history: {}, setTimeout: () => 0, clearTimeout: () => {} };
-    runScript(pageScripts(html), doc, `${ORIGIN}${PROVIDERS_PATH}?provider=openrouter&strength=Strongest&show=pending#test`, sent, { window: win });
+    runScript(pageScripts(html), doc, `${ORIGIN}${PROVIDERS_PATH}?provider=openrouter&strength=Strongest&show=ready#test`, sent, { window: win });
     const shown = () => doc.querySelectorAll("#pick-list > li.row").filter((li) => !li.hidden).map((li) => li.getAttribute("data-id"));
     expect(shown()).toEqual(["test-sonnet"]);
-    expect(doc.getElementById("pick-count")!.textContent).toBe("1 Strongest models not tested yet · Show all");
+    expect(doc.getElementById("pick-count")!.textContent).toBe("1 Strongest models ready · Show all");
     doc.fire("click", doc.querySelector("[data-show-all]")!);
     expect(shown().length).toBe(doc.querySelectorAll("#pick-list li.row").length);
     expect(sent).toEqual([]);

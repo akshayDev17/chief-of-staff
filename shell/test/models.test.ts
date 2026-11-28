@@ -1,27 +1,33 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { FREE_NOTE, listOffer, namesPickedModel, testOne, blockKind } from "../src/models/test-model";
-import { readLatestTests, readUsableModels } from "../src/models/usable";
+import { readLatestTests } from "../src/models/latest-tests";
+import { readAccountLive, readReadyModels, readTable, rowState } from "../src/models/ready";
 import { parsePriceCap, savePriceCap } from "../src/models/price-caps";
 import { renderPickerPage, handleTaskModels, type PickerPageInput } from "../src/models/picker-page";
-import { readModelNames, readToTest } from "../src/models/picker-data";
-import { acceptProposals, callTask, changeTasks, offeredFor, proposeRoute, readTaskRoutes, routeTask, taskById, TASKS, type Offered } from "../src/models/tasks";
+import { readModelNames, readToReady } from "../src/models/picker-data";
+import { acceptProposals, callTask, changeTasks, offeredFor, proposeRoute, readTaskRoutes, routeTask, taskById, TASKS, useFreeModels, type Offered } from "../src/models/tasks";
 import { TASK_MODELS_PATH } from "../src/paths";
-import { ESTIMATE_INPUT_TOKENS, NOTHING_FAILED, planRetest, planTestAll, PER_TICK, readTestAll, runQueuedTests, shownTests, startRetest, startTestAll } from "../src/models/test-all";
-import { classify, TEST_MAX_TOKENS } from "../src/providers/openrouter";
-import { formatCost, modelParts, nextStep, type ModelsTableInput } from "../src/providers/models-table";
-import { setBudget, suggestionCandidates } from "../src/proxy/budgets";
-import { connectedAt, writeConnection } from "../src/proxy/connections";
+import { barLabel, modelParts, nextStep, stripCounts, type ModelsTableInput } from "../src/providers/models-table";
+import { setBudget } from "../src/proxy/budgets";
+import { connectedAt, readHasCredit, writeConnection } from "../src/proxy/connections";
 import { writeSnapshot } from "../src/prices/store";
-import { ok, recordTest, refused, row, seedPrices, TEST_CATALOG, testPlugin, userFor, type TestPlugin } from "./test-plugin";
+import { HAS_CREDIT, NO_CREDIT, ok, recordTest, refused, row, seedPrices, TEST_CATALOG, testPlugin, userFor, type TestPlugin } from "./test-plugin";
 
 const NOW = new Date("2026-11-27T10:00:00Z");
 const ORIGIN = "https://cos.example.com";
-// The current key: made before every test these record (recordTest's 09:00 among them).
+// The current key: made before every call these record (recordTest's 09:00 among them).
 const CONNECTED = new Date("2026-11-27T08:00:00Z");
 let plugin: TestPlugin;
 let userId: string;
 const plugins = () => ({ openrouter: plugin });
+const CREDITS = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
+const SETTINGS = { label: "Privacy settings", href: "https://example.com/privacy" };
+// The plug-in itself, its guide given the provider's credits and settings pages.
+const withLinks = (p: TestPlugin): TestPlugin => {
+  p.connect.guide = { ...p.connect.guide, credits: CREDITS, accountSettings: SETTINGS };
+  return p;
+};
 
 beforeEach(async () => {
   await seedPrices();
@@ -30,25 +36,42 @@ beforeEach(async () => {
   await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, CONNECTED);
 });
 
-const usable = async () => (await readUsableModels(env.DB, userId)).map((m) => m.model);
-const userModelRows = async () => (await env.DB.prepare("SELECT count(*) AS n FROM user_models").first<{ n: number }>())!.n;
+const ready = async () => (await readReadyModels(env.DB, plugins(), userId)).map((m) => m.model);
+const stateOf = async (model: string) => (await readTable(env.DB, plugins(), userId, "openrouter")).rows.find((r) => r.model === model)?.state;
+// The row's mark: its latest call on the current key, passed or failed.
+const markOf = async (model: string) => (await readTable(env.DB, plugins(), userId, "openrouter")).rows.find((r) => r.model === model)?.latest?.state;
+const accountList = (models: string[]) =>
+  env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?) ON CONFLICT (user_id, provider) DO UPDATE SET models = excluded.models")
+    .bind(userId, NOW.toISOString(), JSON.stringify(models))
+    .run();
+const latestCount = async () => (await env.DB.prepare("SELECT count(*) AS n FROM model_latest_tests").first<{ n: number }>())!.n;
+
+// A free model beside the seeded paid ones.
+const withFree = () =>
+  writeSnapshot(env.DB, {
+    takenAt: "2026-11-27T07:00:00Z", status: "good", results: [],
+    catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models, { id: "test-free:free", name: "Test Free", tools: true, free: true as const }] },
+    rows: [row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-mini", "input", 0.25), row("test-mini", "output", 1), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15), row("test-free:free", "input", 0), row("test-free:free", "output", 0)],
+  });
 
 describe("the model list", () => {
-  it("lists every model OpenRouter lists, priced and tiered, and the router without a price until it has a cap", async () => {
+  it("lists every model OpenRouter lists with tool use, priced and tiered, and the router without a price until it has a cap", async () => {
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], noToolUse: ["test-mini"] });
     const rows = await listOffer(env.DB, plugins(), userId, "openrouter");
-    expect(rows.map((r) => r.model)).toEqual(["openrouter/auto", "test-luna", "test-mini", "test-sonnet"]);
+    // test-mini lists no tool use: it never reaches the list.
+    expect(rows.map((r) => r.model)).toEqual(["openrouter/auto", "test-luna", "test-sonnet"]);
     expect(rows.find((r) => r.model === "test-luna")).toMatchObject({ price: { input: 0.1, output: 0.5, source: "openrouter-models" }, tier: "Smallest", callable: true, accountLeftOut: false });
     expect(rows.find((r) => r.model === "test-sonnet")?.tier).toBe("Strongest");
     const auto = rows.find((r) => r.model === "openrouter/auto")!;
     expect(auto).toMatchObject({ router: true });
     expect(auto.price).toBeUndefined();
     expect(blockKind(auto)).toBe("router");
+    // Nor can it be tested.
+    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-mini", now: NOW })).toMatchObject({ kind: "refused", reason: "not_offered" });
   });
 
   it("marks a model the user's own account leaves out, and tests it with no call", async () => {
-    await env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?)")
-      .bind(userId, NOW.toISOString(), JSON.stringify(["test-luna", "test-sonnet"]))
-      .run();
+    await accountList(["test-luna", "test-sonnet"]);
     const rows = await listOffer(env.DB, plugins(), userId, "openrouter");
     expect(rows.find((r) => r.model === "test-mini")?.accountLeftOut).toBe(true);
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-mini", now: NOW })).toMatchObject({ kind: "refused", reason: "cannot_call" });
@@ -56,74 +79,104 @@ describe("the model list", () => {
     expect((await readLatestTests(env.DB, userId, "openrouter")).size).toBe(0);
   });
 
-  it("makes a model usable when its test passes, adds nothing, and a later failed test takes it out", async () => {
-    plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.000002 }, { model: "test-luna" }));
-    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW })).toMatchObject({ kind: "passed", test: { status: 200, costUsd: 0.000002 } });
-    expect(await usable()).toEqual(["test-luna"]);
-    expect(await userModelRows()).toBe(0);
-    plugin.replies.push(refused(400));
-    const later = new Date("2026-11-27T10:05:00Z");
-    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: later })).toMatchObject({ kind: "refused", reason: "refused" });
-    expect(await usable()).toEqual([]);
-    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ state: "failed", testedAt: later.toISOString(), result: { reason: "refused", reply: { status: 400 } } });
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: new Date("2026-11-27T10:06:00Z") });
-    expect(await usable()).toEqual(["test-luna"]);
-  });
-
-  it("keeps a usable model usable after a single Test's refusal that says nothing about the model", async () => {
-    plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.02 }, { model: "test-luna" }));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
-    const passed = (await readLatestTests(env.DB, userId, "openrouter")).get("test-luna");
-    const at = (minute: number) => new Date(`2026-11-27T10:${String(minute).padStart(2, "0")}:00Z`);
-    const expectUnchanged = async () => {
-      expect(await usable()).toEqual(["test-luna"]);
-      expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toEqual(passed);
-    };
-    for (const [status, reason] of [[429, "busy"], [402, "no_credits"], [401, "not_set_up"]] as const) {
-      plugin.replies.push(refused(status));
-      expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: at(status % 50) })).toMatchObject({ kind: "refused", reason, notVerdict: true, reply: { status } });
-      await expectUnchanged();
-    }
-    // No credential: the key cannot be minted.
-    const noKey = testPlugin("openrouter", { refuseMint: true });
-    expect(await testOne(env.DB, { openrouter: noKey }, { userId, provider: "openrouter", model: "test-luna", now: at(20) })).toMatchObject({ kind: "refused", notVerdict: true });
-    await expectUnchanged();
-    // The month's budget is spent by the first test's $0.02.
-    await setBudget(env.DB, userId, "openrouter", 0.01, "typed", NOW);
-    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: at(21) })).toMatchObject({ kind: "refused", reason: "budget_spent", notVerdict: true });
-    await expectUnchanged();
-  });
-
-  it("keeps an older test from replacing a newer one", async () => {
+  it("keeps an older call from replacing a newer one", async () => {
     await recordTest(userId, "test-luna", "failed", "2026-11-27T10:00:00.000Z");
     await recordTest(userId, "test-luna", "passed", "2026-11-27T09:00:00.000Z");
     expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")?.state).toBe("failed");
   });
 
-  it("uses a passed model only while the provider's list still offers it to the user", async () => {
-    await recordTest(userId, "test-luna");
-    await recordTest(userId, "test-mini");
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    // The account's own list leaves one out.
-    await env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?)").bind(userId, NOW.toISOString(), JSON.stringify(["test-luna"])).run();
-    expect(await usable()).toEqual(["test-luna"]);
-    // The provider stops listing it.
-    await writeSnapshot(env.DB, {
-      takenAt: "2026-11-27T11:00:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: TEST_CATALOG.models.filter((m) => m.id !== "test-luna") },
-      rows: [row("test-mini", "input", 0.25), row("test-mini", "output", 1)],
-    });
-    expect(await usable()).toEqual([]);
-  });
-
   it("fails a reply that names another model, but takes a variant or a dated ID as the same", async () => {
     plugin.replies.push(ok({ input: 1, output: 1 }, { model: "test-sonnet" }));
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW })).toMatchObject({ kind: "refused", reason: "wrong_model" });
-    expect(await usable()).toEqual([]);
+    // A failed Test marks the row and nothing else: the model stays Ready.
+    expect(await markOf("test-luna")).toBe("failed");
+    expect(await stateOf("test-luna")).toBe("ready");
+    expect(await ready()).toContain("test-luna");
     expect(namesPickedModel("openai/gpt-oss-20b", "openai/gpt-oss-20b:batch")).toBe(true);
     expect(namesPickedModel("anthropic/claude-haiku-5.5-20261001", "anthropic/claude-haiku-5.5")).toBe(true);
     expect(namesPickedModel("openai/gpt-6-luna-pro", "openai/gpt-6-luna")).toBe(false);
+  });
+});
+
+describe("Ready, with no test call", () => {
+  it("makes every model the provider offers Ready with no call at all, when nothing blocks it and the account has credit", async () => {
+    expect(await ready()).toEqual(["test-luna", "test-mini", "test-sonnet"]);
+    expect(plugin.calls).toEqual([]);
+    expect(await latestCount()).toBe(0);
+    // The router has no cap yet: it needs a step.
+    expect(await stateOf("openrouter/auto")).toBe("step");
+  });
+
+  it("reads a paid model on a $0 account as Needs credit and a free one as Ready, and credit added flips the paid ones on the next read, with no click", async () => {
+    await withFree();
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], account: NO_CREDIT });
+    // Before the account line is read on this key, paid models wait for it.
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBeUndefined();
+    expect(await ready()).toEqual(["test-free:free"]);
+    // A visit reads it live: still no credit.
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(false);
+    expect([await stateOf("test-luna"), await stateOf("test-sonnet"), await stateOf("test-free:free")]).toEqual(["credit", "credit", "ready"]);
+    // Credit is added on OpenRouter; the next visit's read makes them Ready.
+    plugin.account = HAS_CREDIT;
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await ready()).toEqual(["test-free:free", "test-luna", "test-mini", "test-sonnet"]);
+    expect(plugin.calls).toEqual([]);
+    // A key whose own limit is used up has no credit left.
+    plugin.account = { freeTier: false, usageUsd: 5, limitUsd: 5, limitRemainingUsd: 0 };
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await ready()).toEqual(["test-free:free"]);
+    // A read that fails keeps the last figure.
+    plugin.account = undefined;
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(false);
+  });
+
+  it("puts a model the account's settings leave out, a router with no cap and a model with no price in Needs a step, never Ready", async () => {
+    await accountList(["openrouter/auto", "test-luna", "test-sonnet"]);
+    expect(await stateOf("test-mini")).toBe("step");
+    expect(await stateOf("openrouter/auto")).toBe("step");
+    expect(await ready()).toEqual(["test-luna", "test-sonnet"]);
+    // A capped router is Ready.
+    await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 1, output: 2 }, NOW);
+    expect(await ready()).toEqual(["openrouter/auto", "test-luna", "test-sonnet"]);
+    const offer = (await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "test-luna")!;
+    expect(rowState({ ...offer, price: undefined }, true)).toBe("step");
+  });
+
+  it("marks the row of a model whose latest call on this key failed until a later call works, keeps it Ready, and ignores one on an earlier key", async () => {
+    await recordTest(userId, "test-luna", "failed", "2026-11-27T09:00:00.000Z", true);
+    expect(await markOf("test-luna")).toBe("failed");
+    expect(await stateOf("test-luna")).toBe("ready");
+    expect(await ready()).toEqual(["test-luna", "test-mini", "test-sonnet"]);
+    await recordTest(userId, "test-luna", "passed", "2026-11-27T09:30:00.000Z");
+    expect(await markOf("test-luna")).toBe("passed");
+    // A failure made before the current key marks nothing.
+    await recordTest(userId, "test-mini", "failed", "2026-11-27T07:00:00.000Z");
+    expect(await markOf("test-mini")).toBeUndefined();
+    expect(await stateOf("test-mini")).toBe("ready");
+  });
+
+  it("marks a model's row Failed when its Test gets a verdict, records nothing for a refusal that says nothing about it, and leaves it Ready either way", async () => {
+    plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.02 }, { model: "test-luna" }));
+    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW })).toMatchObject({ kind: "passed", test: { status: 200, costUsd: 0.02 } });
+    const passed = (await readLatestTests(env.DB, userId, "openrouter")).get("test-luna");
+    const at = (minute: number) => new Date(`2026-11-27T10:${String(minute).padStart(2, "0")}:00Z`);
+    for (const [status, reason] of [[429, "busy"], [402, "no_credits"], [401, "not_set_up"]] as const) {
+      plugin.replies.push(refused(status));
+      expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: at(status % 50) })).toMatchObject({ kind: "refused", reason, notVerdict: true, reply: { status } });
+      expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toEqual(passed);
+      expect(await stateOf("test-luna")).toBe("ready");
+    }
+    // The month's budget is spent by the first test's $0.02.
+    await setBudget(env.DB, userId, "openrouter", 0.01, "typed", NOW);
+    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: at(21) })).toMatchObject({ kind: "refused", reason: "budget_spent", notVerdict: true });
+    expect(await stateOf("test-luna")).toBe("ready");
+    await setBudget(env.DB, userId, "openrouter", 10, "typed", NOW);
+    plugin.replies.push(refused(400));
+    expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: at(30) })).toMatchObject({ kind: "refused", reason: "refused" });
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ state: "failed", result: { reason: "refused", reply: { status: 400 } } });
+    expect(await stateOf("test-luna")).toBe("ready");
   });
 });
 
@@ -141,7 +194,7 @@ describe("a router's price cap", () => {
     // With no reported cost, the ledger prices the call at the cap.
     const { cost_usd } = (await env.DB.prepare("SELECT cost_usd FROM model_calls WHERE model = 'openrouter/auto'").first<{ cost_usd: number }>())!;
     expect(cost_usd).toBeCloseTo((9 * 3 + 2 * 15) / 1e6, 12);
-    expect(await usable()).toEqual(["openrouter/auto"]);
+    expect(await ready()).toContain("openrouter/auto");
   });
 
   it("shows OpenRouter's own words when it refuses a call under the cap", async () => {
@@ -160,269 +213,89 @@ describe("a router's price cap", () => {
 });
 
 const tableInput = async (extra: Partial<ModelsTableInput> = {}): Promise<ModelsTableInput> => {
-  const rows = await listOffer(env.DB, plugins(), userId, "openrouter");
-  const run = await readTestAll(env.DB, userId, "openrouter");
-  return {
-    plugin, viewer: "owner", rows, plan: await planTestAll(env.DB, plugins(), userId, "openrouter", NOW, rows),
-    retest: await planRetest(env.DB, plugins(), userId, "openrouter", rows), run,
-    shown: shownTests(run, await readLatestTests(env.DB, userId, "openrouter")), usedBy: new Map(), view: {}, now: NOW,
-    catalog: { readAt: TEST_CATALOG.readAt, current: true }, ...extra,
-  };
+  const p = extra.plugin ?? plugin;
+  const { rows } = await readTable(env.DB, { openrouter: p }, userId, "openrouter");
+  return { plugin: p, viewer: "owner", rows, usedBy: new Map(), view: {}, now: NOW, catalog: { readAt: TEST_CATALOG.readAt, current: true, noToolUse: 0 }, ...extra };
 };
+const cellOf = (strip: string, k: string) => Number(strip.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]);
+const rowHtml = (rows: string, model: string) => rows.split("\n").find((l) => l.includes(`data-id="${model}"`))!;
 
-describe("Test all models", () => {
-  it("shows the estimate first, from the test's tokens at each model's price", async () => {
-    const plan = await planTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    expect(plan.models.map((m) => m.model)).toEqual(["test-luna", "test-mini", "test-sonnet"]);
-    const expected = [[0.1, 0.5], [0.25, 1], [3, 15]].reduce((s, [i, o]) => s + (ESTIMATE_INPUT_TOKENS * i! + TEST_MAX_TOKENS * o!) / 1e6, 0);
-    expect(plan.estimateUsd).toBeCloseTo(expected, 12);
-    expect(plan.wait).toBeUndefined();
-    const { rail } = modelParts(await tableInput({ view: { confirm: "test-all" }, step: "confirm" }));
-    expect(rail).toContain(`Test all 3 models for about ${formatCost(expected)}?`);
-    expect(rail).toMatch(/class="btn primary small" data-k="ta-run" data-autofocus>Run the test</);
-    expect(rail).toContain("Billed to your Test openrouter account.");
+describe("the Providers table", () => {
+  it("puts every row in exactly one strip cell, so the cells add up to the list's own count", async () => {
+    await accountList(["openrouter/auto", "test-luna", "test-sonnet"]);
+    // A failed call marks its row and leaves it Ready: it is no strip cell of its own.
+    await recordTest(userId, "test-sonnet", "failed", "2026-11-27T09:00:00.000Z", true);
+    const input = await tableInput();
+    const { strip, rows } = modelParts(input);
+    const c = stripCounts(input.rows);
+    expect(c).toEqual({ ready: 2, credit: 0, step: 2, total: 4 });
+    expect(c.ready + c.credit + c.step).toBe(input.rows.length);
+    expect([cellOf(strip, "ready"), cellOf(strip, "credit"), cellOf(strip, "step")]).toEqual([2, 0, 2]);
+    expect(strip).not.toContain('data-filter="failed"');
+    expect(rowHtml(rows, "test-sonnet")).toContain('data-state="ready"');
+    expect(rowHtml(rows, "test-sonnet")).toContain('<span class="fw">Failed when used</span>');
+    expect(strip).toContain("<span data-ends>4 models</span>");
+    expect(rows.split("\n")).toHaveLength(4);
+    expect(barLabel(c)).toBe("2 of 4 ready: 0 need credit, 2 need a step");
   });
 
-  it("keeps a usable model usable when Test all is refused for reasons that say nothing about the model, and shows the outcome on its row", async () => {
-    for (const model of ["test-luna", "test-mini", "test-sonnet"]) await recordTest(userId, model);
-    const before = await readLatestTests(env.DB, userId, "openrouter");
-    // A test that throws before its call: "The test could not run."
-    const testRequest = (model: string) => {
-      if (model === "test-sonnet") throw new TypeError("boom");
-      return plugin.connect.testRequest(model);
-    };
-    const throwing = { ...plugin, connect: { ...plugin.connect, testRequest } };
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(refused(429), refused(402));
-    await runQueuedTests(env.DB, { openrouter: throwing }, NOW);
-    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(run.tests.map((t) => [t.model, t.state, t.result?.reason])).toEqual([["test-luna", "failed", "busy"], ["test-mini", "failed", "no_credits"], ["test-sonnet", "failed", "no_reply"]]);
-    expect(await usable()).toEqual(["test-luna", "test-mini", "test-sonnet"]);
-    expect(await readLatestTests(env.DB, userId, "openrouter")).toEqual(before);
-    const shown = shownTests(run, before);
-    expect(shown.get("test-luna")).toMatchObject({ state: "failed", verdict: "passed", result: { reason: "busy" } });
-    const { rows, strip } = modelParts(await tableInput());
-    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="works"[\s\S]*?<span class="pill">Busy<\/span>/);
-    expect(rows).toMatch(/data-id="test-mini"[^>]*data-state="works"[\s\S]*?<span class="pill warn">Needs credit<\/span>/);
-    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="works"[\s\S]*?<span class="pill">Couldn't test<\/span>[\s\S]*?The test could not run\. · <button type="button" class="link" data-det=/);
-    // None of them is a verdict, so none reads Doesn't work.
-    expect(rows).not.toContain("Doesn't work");
-    expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num good">3<\/span>/);
-    // Retest failed tests the Doesn't work models only: none here.
-    expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num ">0<\/span>/);
-    expect(await planRetest(env.DB, plugins(), userId, "openrouter")).toMatchObject({ models: [], wait: NOTHING_FAILED });
+  it("labels the strip Ready, never Works, and offers no Test all or Retest", async () => {
+    const parts = modelParts(await tableInput());
+    const html = Object.values(parts).join("");
+    expect(parts.strip).toContain('<span class="l">Ready</span>');
+    for (const gone of ["Works", "Test all", "Retest", "Not tested yet", "Doesn't work", "earlier key"]) expect(html).not.toContain(gone);
+    expect(parts).not.toHaveProperty("rail");
   });
 
-  it("keeps a failed verdict on its row, with a newer refusal as a short note, and tags only usable models", async () => {
-    await recordTest(userId, "test-luna", "failed");
-    await recordTest(userId, "test-mini");
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    // test-sonnet has no verdict yet.
-    plugin.replies.push(refused(429), refused(429), refused(429));
-    await runQueuedTests(env.DB, plugins(), NOW);
-    expect(await usable()).toEqual(["test-mini"]);
-    const rowOf = (html: string, model: string) => html.match(new RegExp(`<li class="row"[^>]*data-id="${model}"[\\s\\S]*?</li>`))![0];
-    const { rows, strip } = modelParts(await tableInput());
-    const luna = rowOf(rows, "test-luna");
-    expect(luna).toContain('data-state="fails"');
-    expect(luna).toContain(`<span class="pill bad">Doesn't work</span>`);
-    expect(luna).toMatch(/<span class="meta why">No such model\. · <button[^>]*>Details<\/button> · <span class="later">Latest test couldn&#39;t run\. [^<]+<\/span><\/span>/);
-    expect(luna).toContain("openrouter replied: 404");
-    expect(luna).not.toContain('<span class="pill">Busy</span>');
-    // Still usable: the outcome tag.
-    expect(rowOf(rows, "test-mini")).toMatch(/data-state="works"[\s\S]*<span class="pill">Busy<\/span>/);
-    // No verdict: no tag, the reason line only.
-    const sonnet = rowOf(rows, "test-sonnet");
-    expect(sonnet).toContain('data-state="pending"');
-    expect(sonnet).not.toContain('class="pill');
-    expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num bad">1<\/span>/);
-    // The result under the row: the verdict first, then the newer outcome.
-    const under = rowOf(modelParts(await tableInput({ view: { results: [{ model: "test-luna" }] } })).rows, "test-luna");
-    expect(under).toMatch(/<strong>No such model\.<\/strong>[\s\S]*?<div class="later"><p>Latest test couldn&#39;t run\. /);
-    const carried = rowOf(modelParts(await tableInput({ view: { results: [{ model: "test-luna", reason: "budget_spent" }] } })).rows, "test-luna");
-    expect(carried).toMatch(/<strong>No such model\.<\/strong><\/span>[\s\S]*?<div class="later"><p>This test couldn&#39;t run\. This month&#39;s budget is spent\.<\/p><div class="acts"><a class="btn small outline" href="[^"]*\/budgets">Budgets<\/a><\/div><\/div>/);
-  });
-
-  it("keeps a usable model usable when the user disconnects or the budget runs out while Test all is queued", async () => {
-    plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.02 }, { model: "test-luna" }));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
-    await recordTest(userId, "test-mini", "passed", NOW.toISOString());
-    await setBudget(env.DB, userId, "openrouter", 0.01, "typed", NOW);
-    const later = new Date("2026-11-27T10:20:00Z");
-    await startTestAll(env.DB, plugins(), userId, "openrouter", later);
-    await runQueuedTests(env.DB, plugins(), later);
-    expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.every((t) => t.state === "failed" && t.result?.reason === "budget_spent")).toBe(true);
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    const next = new Date("2026-11-27T10:40:00Z");
-    await setBudget(env.DB, userId, "openrouter", 5, "typed", next);
-    await startTestAll(env.DB, plugins(), userId, "openrouter", next);
-    await env.DB.prepare("DELETE FROM provider_connections").run();
-    await runQueuedTests(env.DB, plugins(), next);
-    expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.every((t) => t.state === "failed" && t.result?.reason === "not_connected")).toBe(true);
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
+  it("shows Failed when used with its plain reason and Try again on a row a task's call failed, and Failed when tested for a Test", async () => {
+    await recordTest(userId, "test-luna", "failed", "2026-11-27T09:00:00.000Z", true);
+    await recordTest(userId, "test-mini", "failed", "2026-11-27T09:00:00.000Z");
     const { rows } = modelParts(await tableInput());
-    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="works"[\s\S]*?<span class="pill">Couldn't test<\/span>/);
-    expect(rows).not.toContain("Doesn't work");
+    const luna = rowHtml(rows, "test-luna");
+    expect(luna).toContain('data-state="ready"');
+    expect(luna).toContain('<span class="meta why"><span class="fw">Failed when used</span> · No such model. · <button type="button" class="link" data-det="m-test-luna"');
+    expect(luna).toMatch(/<button type="submit" class="btn tbtn again" data-k="t-test-luna" data-busy="Trying…"[^>]*aria-label="Try again Test Luna"[^>]*><span class="ico">.*?<\/span><span class="lbl">Try again<\/span><\/button>/);
+    expect(rowHtml(rows, "test-mini")).toContain('<span class="fw">Failed when tested</span> · No such model.');
+    // A Ready row keeps plain Test.
+    expect(rowHtml(rows, "test-sonnet")).toContain('<span class="lbl">Test</span>');
   });
 
-  it("runs in the background a few at a time; each result becomes the model's latest test, so the ones that pass are usable", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(
-      ok({ input: 9, output: 16, reportedCostUsd: 0.000001 }, { model: "test-luna" }),
-      refused(402),
-      // A reasoning model that used its few tokens thinking: a 200 with no text works.
-      { ...ok({ input: 9, output: 16, reportedCostUsd: 0.00025 }, { model: "test-sonnet" }) },
-    );
-    expect(await runQueuedTests(env.DB, plugins(), NOW)).toBe(3);
-    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(run.finishedAt).toBe(NOW.toISOString());
-    expect(run.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "failed"], ["test-sonnet", "passed"]]);
-    expect(run.tests[1]!.result).toMatchObject({ reason: "no_credits", text: "Needs credit on Test openrouter.", reply: { status: 402 } });
-    expect(run.realCostUsd).toBeCloseTo(0.000251, 12);
-    expect(await usable()).toEqual(["test-luna", "test-sonnet"]);
-    expect(await userModelRows()).toBe(0);
-    const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM model_calls WHERE task = 'test_all_models'").first<{ n: number }>())!;
-    expect(n).toBe(3);
+  it("names the tasks that fall to their fallback under a Try again that failed", async () => {
+    await recordTest(userId, "test-luna", "failed", "2026-11-27T09:00:00.000Z", true);
+    const { rows } = modelParts(await tableInput({ view: { results: [{ model: "test-luna" }] }, usedBy: new Map([["test-luna", [{ task: "Matching questions", fallback: "Test Mini" }, { task: "Extracting facts" }]]]) }));
+    const luna = rowHtml(rows, "test-luna");
+    expect(luna).toContain("<strong>Failed when used · No such model.</strong>");
+    expect(luna).toContain("<p>Matching questions falls to Test Mini when it fails.</p><p>Extracting facts has no fallback.</p>");
   });
 
-  it("keeps a model usable while a new run is still testing it", async () => {
-    await recordTest(userId, "test-luna");
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    const run = await readTestAll(env.DB, userId, "openrouter");
-    expect(shownTests(run, await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toEqual({ state: "testing" });
-    expect(await usable()).toEqual(["test-luna"]);
+  it("reads Needs credit on a $0 account's paid rows, with Add credits in its cell", async () => {
+    plugin = withLinks(testPlugin("openrouter", { routers: ["openrouter/auto"], account: NO_CREDIT }));
+    await readAccountLive(env.DB, plugin, userId);
+    const { strip, rows } = modelParts(await tableInput());
+    expect(cellOf(strip, "credit")).toBe(3);
+    expect(strip).toContain('<a class="cell-act ext" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer" data-credit-act>Add credits</a>');
+    expect(rowHtml(rows, "test-luna")).toContain('<span class="pill warn">Needs credit</span>');
+    // With credit, the cell is empty and its link hidden.
+    plugin.account = HAS_CREDIT;
+    await readAccountLive(env.DB, plugin, userId);
+    const after = modelParts(await tableInput()).strip;
+    expect(cellOf(after, "credit")).toBe(0);
+    expect(after).toContain("data-credit-act hidden>Add credits</a>");
   });
 
-  it("shows a key-limit refusal's fix and the key's own page on OpenRouter under its row", async () => {
-    plugin.connect.classify = classify;
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    const limit = { status: 403, body: { error: { code: 403, message: "Key limit exceeded" } }, error: { name: "HTTP 403", message: "Key limit exceeded" } };
-    plugin.replies.push(limit, limit, limit);
-    await runQueuedTests(env.DB, plugins(), NOW);
-    const run = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(run.tests[0]!.result).toMatchObject({ reason: "no_credits", fix: expect.stringContaining("reset period"), links: [{ href: "https://openrouter.ai/settings/keys" }, { href: `https://openrouter.ai/keys/${"a".repeat(64)}` }] });
-    const { rows } = modelParts(await tableInput({ view: { results: [{ model: "test-luna" }] } }));
-    expect(rows).toContain("give it a reset period");
-    expect(rows).toContain(`href="https://openrouter.ai/keys/${"a".repeat(64)}"`);
+  it("drops the earlier key's note: a call on an earlier key shows on no row", async () => {
+    await recordTest(userId, "test-luna", "passed", "2026-11-27T07:00:00.000Z");
+    await recordTest(userId, "test-mini", "failed", "2026-11-27T07:00:00.000Z");
+    const { rows } = modelParts(await tableInput());
+    expect(rows).not.toContain("earlier key");
+    expect(rowHtml(rows, "test-mini")).toContain('data-state="ready"');
   });
 
-  it("counts the same models in Doesn't work and Retest failed (N), and retests exactly those in the same run", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    // The live shape: verdict failures and refusals that say nothing about the
-    // model, side by side. test-mini fails (a verdict), test-sonnet is busy.
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(400), refused(429));
-    await runQueuedTests(env.DB, plugins(), NOW);
-    const later = new Date("2026-11-27T10:03:00Z");
-    // test-luna, passed in the run, then fails on its own row.
-    plugin.replies.push(refused(400));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: later });
-    const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
-    expect(plan.models.map((m) => m.model)).toEqual(["test-luna", "test-mini"]);
-    const { strip, rail, rows } = modelParts(await tableInput());
-    expect(strip).toMatch(/data-filter="fails"[\s\S]*?<span class="v num bad">2<\/span>/);
-    expect(rail).toContain('Retest failed <span class="num">(2)</span>');
-    // One count source: the strip is the sum of its rows' data-state, which
-    // the page's script sums again over the rows a filter shows; Test all and
-    // Retest failed say then that they still cover the whole list.
-    const states = [...rows.matchAll(/data-state="(\w+)"/g)].map((m) => m[1]);
-    for (const k of ["works", "fails", "pending"]) {
-      expect(strip).toMatch(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">${states.filter((s) => s === k).length}</span>`));
-    }
-    expect(strip).toContain(`<span data-ends>${states.filter((s) => s !== "blocked").length} models</span>`);
-    expect(rail).toContain('<p class="why" data-whole-list hidden>Test all and Retest failed cover the whole list, not only the models shown.</p>');
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 2, skipped: 0 });
-    const reopened = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(reopened.finishedAt).toBeUndefined();
-    expect(reopened.retestCount).toBe(2);
-    expect(reopened.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "queued"], ["test-mini", "queued"], ["test-sonnet", "failed"]]);
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-mini" }));
-    await runQueuedTests(env.DB, plugins(), later);
-    const done = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(done.finishedAt).toBe(later.toISOString());
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).wait).toBe(NOTHING_FAILED);
-  });
-
-  it("adds a model that failed only on its own row to the run it retests", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-mini" }), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
-    await runQueuedTests(env.DB, plugins(), NOW);
-    await env.DB.prepare("DELETE FROM model_tests WHERE model = 'test-sonnet'").run();
-    const later = new Date("2026-11-27T10:03:00Z");
-    plugin.replies.push(refused(400));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-sonnet", now: later });
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 1, skipped: 0 });
-    expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "passed"], ["test-sonnet", "queued"]]);
-  });
-
-  it("stops counting a failed model the list dropped once a fresh Test all has no failures", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(400), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
-    await runQueuedTests(env.DB, plugins(), NOW);
-    await writeSnapshot(env.DB, {
-      takenAt: "2026-11-27T10:05:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: TEST_CATALOG.models.filter((m) => m.id !== "test-mini") },
-      rows: [row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
-    });
-    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).skipped).toBe(1);
-    const later = new Date("2026-11-27T10:20:00Z");
-    await startTestAll(env.DB, plugins(), userId, "openrouter", later);
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
-    await runQueuedTests(env.DB, plugins(), later);
-    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-mini")?.state).toBe("failed");
-    expect(await planRetest(env.DB, plugins(), userId, "openrouter")).toMatchObject({ models: [], skipped: 0, wait: NOTHING_FAILED });
-  });
-
-  it("offers no Retest failed on a run made on an older model list", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(refused(429), refused(429), refused(429));
-    await runQueuedTests(env.DB, plugins(), NOW);
-    await env.DB.prepare("UPDATE model_test_runs SET catalog_version = 2").run();
-    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).wait).toBe("The last run used the old model list.");
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", NOW)).toEqual({ problem: "The last run used the old model list." });
-  });
-
-  it("never tests a model twice when two cron ticks overlap, and takes a stale claim again", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
-    const slow = { ...plugin, call: async (input: Parameters<TestPlugin["call"]>[0]) => (await held, plugin.call(input)) };
-    const first = runQueuedTests(env.DB, { openrouter: slow }, NOW);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(await runQueuedTests(env.DB, plugins(), NOW)).toBe(0);
-    release();
-    expect(await first).toBe(3);
-    expect(plugin.calls.length).toBe(3);
-    expect((await readTestAll(env.DB, userId, "openrouter"))!.finishedAt).toBe(NOW.toISOString());
-
-    await env.DB.prepare("UPDATE model_tests SET state = 'running', claimed_at = ?").bind(NOW.toISOString()).run();
-    await env.DB.prepare("UPDATE model_test_runs SET finished_at = NULL").run();
-    expect(await runQueuedTests(env.DB, plugins(), new Date("2026-11-27T10:05:00Z"))).toBe(0);
-    expect(await runQueuedTests(env.DB, plugins(), new Date("2026-11-27T10:11:00Z"))).toBe(3);
-  });
-
-  it("keeps one open run when two starts race", async () => {
-    const [a, b] = await Promise.all([startTestAll(env.DB, plugins(), userId, "openrouter", NOW), startTestAll(env.DB, plugins(), userId, "openrouter", NOW)]);
-    expect([a, b].filter((r) => "runId" in r)).toHaveLength(1);
-    expect([a, b].filter((r) => "problem" in r)).toEqual([{ problem: "A test of all models is running already." }]);
-    const { n } = (await env.DB.prepare("SELECT count(*) AS n FROM model_tests").first<{ n: number }>())!;
-    expect(n).toBe(3);
-  });
-
-  it("runs one at a time and at most every ten minutes", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    expect(await startTestAll(env.DB, plugins(), userId, "openrouter", NOW)).toEqual({ problem: "A test of all models is running already." });
-    await runQueuedTests(env.DB, plugins(), NOW);
-    expect(await startTestAll(env.DB, plugins(), userId, "openrouter", new Date("2026-11-27T10:05:00Z"))).toEqual({ problem: "You can test all models again from 10:10 UTC." });
-    expect(await startTestAll(env.DB, plugins(), userId, "openrouter", new Date("2026-11-27T10:10:00Z"))).toHaveProperty("runId");
-  });
-
-  it("takes at most a tick's share of tests at once", async () => {
-    expect(PER_TICK).toBeGreaterThan(0);
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    const before = (await readTestAll(env.DB, userId, "openrouter"))!;
-    expect(before.done).toBe(0);
-    expect(before.modelCount).toBe(3);
+  it("makes Refresh model list the next step while the list is stale, else Next", () => {
+    expect(nextStep({ connected: false, view: {}, catalogCurrent: true })).toBe("connect");
+    expect(nextStep({ connected: true, view: { cap: "openrouter/auto" }, catalogCurrent: true })).toBe("cap");
+    expect(nextStep({ connected: true, view: {}, catalogCurrent: false })).toBe("refresh");
+    expect(nextStep({ connected: true, view: {}, catalogCurrent: true })).toBe("next");
   });
 });
 
@@ -449,9 +322,8 @@ describe("the model for each task", () => {
         row("test-fee", "input", 0), row("test-fee", "output", 0),
       ],
     });
-  const passAll = async (...models: string[]) => { for (const m of models) await recordTest(userId, m); };
   const page = async (extra: Partial<PickerPageInput> = {}) => {
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
+    const { offered, routes } = await readTaskRoutes(env.DB, plugins(), userId);
     return renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false, nameOf: await readModelNames(env.DB), ...extra });
   };
   // A task's row, and the values its plain select offers for `role`.
@@ -461,24 +333,22 @@ describe("the model for each task", () => {
   const listOf = (html: string, role: string, task: string) =>
     [...html.match(new RegExp(`<ul role="listbox" id="pl-${role}-${task}"[^>]*>([\\s\\S]*?)</ul>`))![1]!.matchAll(/data-value="([^"]*)"/g)].map((m) => m[1]);
   const or = (m: string) => `openrouter|${m}`;
-  const m = (model: string, tier: Offered["tier"], inputUsd: number, free = false): Offered => ({
-    provider: "openrouter", model, location: "global", testedAt: "", test: { at: "", location: "global", status: 200, costUsd: 0 }, tier, inputUsd, free,
-  });
+  const m = (model: string, tier: Offered["tier"], inputUsd: number, free = false): Offered => ({ provider: "openrouter", model, location: "global", state: "ready", tier, inputUsd, free });
 
-  it("offers each task only the usable models whose strength chip is its own, the cheapest first", async () => {
+  it("offers each task every Ready model whose strength chip is its own, the cheapest first, with no test", async () => {
     await tieredPrices();
-    await passAll("test-luna", "test-mini", "test-mid", "test-mid2", "test-sonnet", "test-free:free", "test-fee");
-    // test-mini fails a later test: no longer usable, so offered nowhere.
-    await recordTest(userId, "test-mini", "failed", "2026-11-27T11:00:00.000Z");
-    const { offered } = await readTaskRoutes(env.DB, userId);
+    // test-mini's latest call failed: it stays Ready, offered all the same.
+    await recordTest(userId, "test-mini", "failed", "2026-11-27T09:00:00.000Z", true);
+    const { offered } = await readTaskRoutes(env.DB, plugins(), userId);
     expect(offered.find((x) => x.model === "test-fee")).toMatchObject({ otherFees: true });
     expect(offered.find((x) => x.model === "test-fee")).not.toHaveProperty("tier");
-    expect(offered.find((x) => x.model === "test-free:free")).toMatchObject({ tier: "Smallest", free: true, inputUsd: 0, outputUsd: 0, name: "Test Free" });
-    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-free:free", "test-luna"]);
+    expect(offered.find((x) => x.model === "test-free:free")).toMatchObject({ tier: "Smallest", free: true, inputUsd: 0, outputUsd: 0, name: "Test Free", state: "ready" });
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-free:free", "test-luna", "test-mini"]);
     expect(offeredFor(taskById("score")!, offered).map((x) => x.model)).toEqual(["test-mid", "test-mid2"]);
+    expect(plugin.calls).toEqual([]);
     const html = await page();
     for (const task of TASKS) {
-      const want = task.tier === "Smallest" ? [or("test-free:free"), or("test-luna")] : [or("test-mid"), or("test-mid2")];
+      const want = task.tier === "Smallest" ? [or("test-free:free"), or("test-luna"), or("test-mini")] : [or("test-mid"), or("test-mid2")];
       expect(listOf(html, "main", task.id)).toEqual(want);
       expect(listOf(html, "fallback", task.id)).toEqual(["", ...want]);
       expect(optionsOf(html, "main", task.id).filter(Boolean)).toEqual(want);
@@ -491,6 +361,21 @@ describe("the model for each task", () => {
     expect(html).not.toContain("test-fee");
   });
 
+  it("lists the paid models once credit is added, on the next visit, with no click", async () => {
+    await tieredPrices();
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], account: NO_CREDIT });
+    const visit = async () =>
+      (await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW })).text();
+    const before = await visit();
+    expect(listOf(before, "main", "match")).toEqual([or("test-free:free")]);
+    expect(rowOf(before, "score")).toContain("No Middle model is ready yet. Paid ones need credit.");
+    plugin.account = HAS_CREDIT;
+    const after = await visit();
+    expect(listOf(after, "main", "match")).toEqual([or("test-free:free"), or("test-luna"), or("test-mini")]);
+    expect(listOf(after, "main", "score")).toEqual([or("test-mid"), or("test-mid2")]);
+    expect(plugin.calls).toEqual([]);
+  });
+
   it("proposes the two cheapest models of the task's own strength, never another strength or a free model", () => {
     const models = [m("a", "Middle", 1), m("b", "Middle", 2), m("c", "Smallest", 0.1), m("s", "Strongest", 3), m("f", "Smallest", 0, true)];
     const route = proposeRoute(taskById("score")!, models);
@@ -501,35 +386,40 @@ describe("the model for each task", () => {
     expect(proposeRoute(taskById("score")!, [m("c", "Smallest", 0.1), m("d", "Smallest", 0.2)])).toBeUndefined();
     expect(proposeRoute(taskById("match")!, [m("f", "Smallest", 0, true)])).toBeUndefined();
     expect(proposeRoute(taskById("match")!, [m("f", "Smallest", 0, true), m("g", "Smallest", 0, true)], true)).toMatchObject({ main: { model: "f" }, fallback: { model: "g" } });
+    // A model that is not Ready is never proposed.
+    expect(proposeRoute(taskById("score")!, [{ ...m("a", "Middle", 1), state: "credit" }, m("b", "Middle", 2)])).toMatchObject({ main: { model: "b" } });
   });
 
   it("never proposes a free model, and saves one the user chooses for a task of its strength only", async () => {
     await tieredPrices();
-    await passAll("test-free:free");
-    expect(await routeTask(env.DB, userId, "match")).toBeUndefined();
-    const first = (await readTaskRoutes(env.DB, userId)).routes[0]!;
+    await accountList(["test-free:free"]);
+    expect(await routeTask(env.DB, plugins(), userId, "match")).toBeUndefined();
+    const first = (await readTaskRoutes(env.DB, plugins(), userId)).routes[0]!;
     expect([first.current, first.proposal, first.pending]).toEqual([undefined, undefined, false]);
-    expect(await changeTasks(env.DB, userId, [{ task: "score", main: or("test-free:free"), fallback: "" }], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
-    expect(await changeTasks(env.DB, userId, [{ task: "match", main: or("test-free:free"), fallback: "" }], NOW)).toBeUndefined();
-    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-free:free" } });
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "score", main: or("test-free:free"), fallback: "" }], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "match", main: or("test-free:free"), fallback: "" }], NOW)).toBeUndefined();
+    expect(await routeTask(env.DB, plugins(), userId, "match")).toMatchObject({ main: { model: "test-free:free" } });
   });
 
-  it("saves changes all or none, refuses a model of another strength, an untested one or the main as its own fallback, and calls the fallback on a 429", async () => {
+  it("saves changes all or none, refuses a model of another strength, one not Ready or the main as its own fallback, and calls the fallback on a 429", async () => {
     await tieredPrices();
-    await passAll("test-luna", "test-mini", "test-mid", "test-sonnet");
+    // test-mid2 is left out by the account's settings: not Ready. test-mid's last call failed: still Ready.
+    await accountList(["openrouter/auto", "test-luna", "test-mini", "test-mid", "test-sonnet", "test-free:free", "test-fee"]);
+    await recordTest(userId, "test-mid", "failed", "2026-11-27T09:00:00.000Z", true);
     const change = (task: string, main: string, fallback = "") => ({ task, main: main && or(main), fallback: fallback && or(fallback) });
-    expect(await changeTasks(env.DB, userId, [change("match", "test-luna", "test-luna")], NOW)).toEqual({ task: "match", problem: "same_model" });
-    expect(await changeTasks(env.DB, userId, [change("match", "test-mid2")], NOW)).toEqual({ task: "match", problem: "not_your_model" });
-    expect(await changeTasks(env.DB, userId, [change("score", "test-sonnet")], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
-    expect(await changeTasks(env.DB, userId, [change("score", "test-mid", "test-luna")], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
-    expect(await changeTasks(env.DB, userId, [change("match", "")], NOW)).toEqual({ task: "match", problem: "no_main" });
-    expect(await changeTasks(env.DB, userId, [change("nope", "test-luna")], NOW)).toEqual({ task: "nope", problem: "no_such_task" });
+    const save = (...changes: Array<ReturnType<typeof change>>) => changeTasks(env.DB, plugins(), userId, changes, NOW);
+    expect(await save(change("match", "test-luna", "test-luna"))).toEqual({ task: "match", problem: "same_model" });
+    expect(await save(change("score", "test-mid2"))).toEqual({ task: "score", problem: "not_your_model" });
+    expect(await save(change("score", "test-sonnet"))).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await save(change("score", "test-mid", "test-luna"))).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await save(change("match", ""))).toEqual({ task: "match", problem: "no_main" });
+    expect(await save(change("nope", "test-luna"))).toEqual({ task: "nope", problem: "no_such_task" });
     // One refused change saves none of them.
-    expect(await changeTasks(env.DB, userId, [change("extract", "test-luna"), change("score", "test-sonnet")], NOW)).toEqual({ task: "score", problem: "wrong_strength" });
-    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
-    expect(await changeTasks(env.DB, userId, [change("match", "test-luna", "test-mini"), change("score", "test-mid")], NOW)).toBeUndefined();
-    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" } });
-    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-mid" } });
+    expect(await save(change("extract", "test-luna"), change("score", "test-sonnet"))).toEqual({ task: "score", problem: "wrong_strength" });
+    expect(await routeTask(env.DB, plugins(), userId, "extract")).toBeUndefined();
+    expect(await save(change("match", "test-luna", "test-mini"), change("score", "test-mid"))).toBeUndefined();
+    expect(await routeTask(env.DB, plugins(), userId, "match")).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" } });
+    expect(await routeTask(env.DB, plugins(), userId, "score")).toMatchObject({ main: { model: "test-mid" } });
     await setBudget(env.DB, userId, "openrouter", 5, "typed", NOW);
     plugin.replies.push(refused(429), ok({ input: 1, output: 1 }));
     expect(await callTask(env.DB, plugins(), { userId, task: "match", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "answered", model: "test-mini", fallback: true });
@@ -537,9 +427,8 @@ describe("the model for each task", () => {
 
   it("keeps a saved choice of another strength running and shows it as it is, and lets one role change without the other", async () => {
     await tieredPrices();
-    await passAll("test-mid", "test-mid2", "test-sonnet");
     await env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, 'score', 'openrouter', 'test-sonnet', NULL, NULL, 'changed', ?)").bind(userId, NOW.toISOString()).run();
-    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-sonnet" } });
+    expect(await routeTask(env.DB, plugins(), userId, "score")).toMatchObject({ main: { model: "test-sonnet" } });
     const html = await page();
     const score = rowOf(html, "score");
     expect(score).toContain('<span class="ov-nm">Test Sonnet</span><span class="ov-pr num">$3.00 / $15.00</span></span><span class="ov-l2"><span class="ov-id">test-sonnet</span><span class="pill">Strongest</span>');
@@ -548,135 +437,91 @@ describe("the model for each task", () => {
     expect(optionsOf(html, "main", "score")).toEqual([or("test-sonnet"), or("test-mid"), or("test-mid2")]);
     expect(listOf(html, "main", "score")).toEqual([or("test-mid"), or("test-mid2")]);
     // A fallback added beside the kept main model saves; the kept model may not be chosen for another task.
-    expect(await changeTasks(env.DB, userId, [{ task: "score", main: or("test-sonnet"), fallback: or("test-mid") }], NOW)).toBeUndefined();
-    expect(await routeTask(env.DB, userId, "score")).toMatchObject({ main: { model: "test-sonnet" }, fallback: { model: "test-mid" } });
-    expect(await changeTasks(env.DB, userId, [{ task: "fill_form", main: or("test-sonnet"), fallback: "" }], NOW)).toEqual({ task: "fill_form", problem: "wrong_strength" });
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "score", main: or("test-sonnet"), fallback: or("test-mid") }], NOW)).toBeUndefined();
+    expect(await routeTask(env.DB, plugins(), userId, "score")).toMatchObject({ main: { model: "test-sonnet" }, fallback: { model: "test-mid" } });
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "fill_form", main: or("test-sonnet"), fallback: "" }], NOW)).toEqual({ task: "fill_form", problem: "wrong_strength" });
   });
 
   it("accepts every proposal with one tap, only where the task's own strength has models", async () => {
-    await passAll("test-luna", "test-mini");
     const smallest = TASKS.filter((t) => t.tier === "Smallest").length;
-    expect(await acceptProposals(env.DB, userId, NOW)).toBe(smallest);
-    const { routes } = await readTaskRoutes(env.DB, userId);
+    expect(await acceptProposals(env.DB, plugins(), userId, NOW)).toBe(smallest);
+    const { routes } = await readTaskRoutes(env.DB, plugins(), userId);
     expect(routes.find((r) => r.task.id === "match")?.current).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" }, setHow: "accepted" });
     expect(routes.find((r) => r.task.id === "score")).toMatchObject({ proposal: undefined, pending: false });
     expect(routes.find((r) => r.task.id === "score")!.current).toBeUndefined();
   });
 
-  it("keeps a task's model while its latest test passed; once it fails, the task runs on its named fallback, or has no model with none", async () => {
-    await passAll("test-luna", "test-mini");
-    await changeTasks(env.DB, userId, [{ task: "match", main: or("test-luna"), fallback: or("test-mini") }, { task: "extract", main: or("test-luna"), fallback: "" }], NOW);
-    await setBudget(env.DB, userId, "openrouter", 5, "typed", NOW);
-    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-luna" }, fallback: { model: "test-mini" } });
-    // test-luna fails a later test.
-    await recordTest(userId, "test-luna", "failed", "2026-11-27T11:00:00.000Z");
-    const { routes } = await readTaskRoutes(env.DB, userId);
-    const match = routes.find((r) => r.task.id === "match")!;
-    expect(match).toMatchObject({ stopped: { main: { provider: "openrouter", model: "test-luna" }, fallback: { model: "test-mini" } }, pending: false });
-    expect(match.current).toBeUndefined();
-    expect(routes.find((r) => r.task.id === "extract")).toMatchObject({ stopped: { main: { model: "test-luna" } }, pending: false });
-    expect(routes.find((r) => r.task.id === "extract")!.stopped!.fallback).toBeUndefined();
-    // The other Smallest task's proposal is taken first: Accept would be the one solid button.
-    await acceptProposals(env.DB, userId, NOW);
-    const html = await page({ nameOf: (x) => (x.model === "test-luna" ? "Test Luna" : undefined) });
-    // The saved model is still shown, marked, with why and the fix.
-    const fix = `<a class="btn small" href="/chief-of-staff/models/setup/providers?provider=openrouter#m-test-luna">Test it again</a>`;
-    expect(rowOf(html, "match")).toContain('<span class="ov-nm">Test Luna</span></span><span class="ov-l2"><span class="ov-id">test-luna</span><span class="pill bad">Not usable</span>');
-    expect(rowOf(html, "match")).toContain(`<p class="t-says"><span data-about="main">Test Luna failed its last test. Runs on its fallback for now.</span></p><span class="t-act" data-about="main">${fix}</span>`);
-    // With no fallback the task has no model: its fix is the page's one solid button.
-    expect(rowOf(html, "extract")).toContain(`<span data-about="main">Test Luna failed its last test. No model now: its calls are refused.</span></p><span class="t-act" data-about="main">${fix.replace('class="btn small"', 'class="btn small primary"')}</span>`);
-    // The save bar's Save, hidden until a row changes, aside.
-    expect(html.match(/class="btn[^"]* primary"(?! data-save)/g)).toHaveLength(1);
-    // A call goes to the saved fallback, never to another model.
-    expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
-    plugin.replies.push(ok({ input: 1, output: 1 }));
-    expect(await callTask(env.DB, plugins(), { userId, task: "match", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "answered", model: "test-mini" });
-    // With no usable fallback the call is refused with a plain reason, even
-    // though another model is usable.
-    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
-    const before = plugin.calls.length;
-    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toMatchObject({ kind: "no_model", task: "extract", detail: expect.stringMatching(/test its model again/) });
-    expect(plugin.calls.length).toBe(before);
-    // One tap never replaces the choice by itself.
-    await acceptProposals(env.DB, userId, NOW);
-    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
-    // It works again once its model passes again.
-    await recordTest(userId, "test-luna", "passed", "2026-11-27T12:00:00.000Z");
-    expect(await routeTask(env.DB, userId, "extract")).toMatchObject({ main: { model: "test-luna" } });
-  });
-
-  it("says why a saved model is no longer usable, by the same checks that decide it, with the action that fixes it", async () => {
-    await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 0.3, output: 1 }, NOW);
-    for (const model of ["test-luna", "test-mini", "openrouter/auto"]) await recordTest(userId, model);
+  it("says why a saved model is no longer offered, by the same checks that decide it, with the action that fixes it", async () => {
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], noToolUse: ["test-tl"] });
     const route = (task: string, main: string, fallback = "test-mini") =>
       env.DB.prepare("INSERT INTO task_routes (user_id, task, main_provider, main_model, fallback_provider, fallback_model, set_how, set_at) VALUES (?, ?, 'openrouter', ?, 'openrouter', ?, 'changed', ?)").bind(userId, task, main, fallback, NOW.toISOString());
     await env.DB.batch([
       route("match", "test-luna"),
       route("extract", "test-sonnet"),
       route("linkedin_message", "openrouter/auto"),
-      route("score", "test-new"),
-      // OpenRouter stops listing test-luna, and lists test-new, never tested.
-      env.DB.prepare("DELETE FROM model_price_caps"),
+      route("score", "test-noprice"),
+      route("fill_form", "test-tl"),
       env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?)")
-        .bind(userId, NOW.toISOString(), JSON.stringify(["openrouter/auto", "test-mini", "test-new"])),
+        .bind(userId, NOW.toISOString(), JSON.stringify(["openrouter/auto", "test-mini", "test-noprice", "test-tl"])),
     ]);
+    // OpenRouter stops listing test-luna; it lists test-noprice with no price yet, and test-tl with no tool use.
     await writeSnapshot(env.DB, {
       takenAt: "2026-11-27T11:00:00Z", status: "good", results: [],
-      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models.filter((x) => x.id !== "test-luna"), { id: "test-new", name: "Test New", tools: true }] },
-      rows: [row("test-mini", "input", 0.25), row("test-mini", "output", 1), row("test-new", "input", 0.1), row("test-new", "output", 0.5), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
+      catalog: { ...TEST_CATALOG, models: [...TEST_CATALOG.models.filter((x) => x.id !== "test-luna"), { id: "test-noprice", name: "Test No Price", tools: true }, { id: "test-tl", name: "Test Toolless", tools: false }] },
+      rows: [row("test-mini", "input", 0.25), row("test-mini", "output", 1), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15), row("test-tl", "input", 0.1), row("test-tl", "output", 0.1)],
     });
-    const { routes } = await readTaskRoutes(env.DB, userId);
+    const { routes } = await readTaskRoutes(env.DB, plugins(), userId);
     const why = (task: string) => routes.find((r) => r.task.id === task)!.stopped?.why;
-    expect([why("match"), why("extract"), why("linkedin_message"), why("score")]).toEqual(["not_listed", "left_out", "no_cap", "unknown"]);
-    const html = await page({ accountSettings: () => ({ label: "Privacy settings", href: "https://example.com/privacy" }) });
+    expect([why("match"), why("extract"), why("linkedin_message"), why("score"), why("fill_form")]).toEqual(["not_listed", "left_out", "no_cap", "unknown", "no_tools"]);
+    const html = await page({ accountSettings: () => SETTINGS });
     const says = (task: string) => rowOf(html, task).match(/<div class="t-note">([\s\S]*?)<button type="submit"/)![1]!;
     const on = (text: string, fix: string) => `<p class="t-says"><span data-about="main">${text} Runs on its fallback for now.</span></p><span class="t-act" data-about="main">${fix}</span>`;
     expect(says("match")).toBe(on("test-luna is no longer on OpenRouter&#39;s list.", `<a class="btn small" href="#main-match" data-open="main-match">Choose another</a>`));
     expect(says("extract")).toBe(on("Test Sonnet is left out by your OpenRouter settings.", `<a class="btn small ext" href="https://example.com/privacy" target="_blank" rel="noopener noreferrer">Privacy settings</a>`));
     expect(says("linkedin_message")).toBe(on("Auto router needs a price cap.", `<a class="btn small" href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;cap=openrouter%2Fauto#m-openrouter-auto">Set its price cap</a>`));
-    // A Middle task with a Smallest fallback kept from before still runs on it.
-    expect(says("score")).toContain("Test New is no longer usable.");
+    expect(says("score")).toContain("Test No Price is no longer offered.");
+    expect(says("fill_form")).toContain("Test Toolless lists no tool use.");
+    expect(rowOf(html, "match")).toContain('<span class="pill bad">Not offered</span>');
     // Each still answers on its fallback.
-    expect(await routeTask(env.DB, userId, "linkedin_message")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
+    expect(await routeTask(env.DB, plugins(), userId, "linkedin_message")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
   });
 
-  it("shows a saved fallback that is no longer usable, with why and its fix, while the main model runs alone", async () => {
-    await passAll("test-luna", "test-mini");
-    await changeTasks(env.DB, userId, [{ task: "match", main: or("test-luna"), fallback: or("test-mini") }], NOW);
-    await recordTest(userId, "test-mini", "failed", "2026-11-27T11:00:00.000Z");
-    const { routes } = await readTaskRoutes(env.DB, userId);
-    expect(routes[0]).toMatchObject({ current: { main: { model: "test-luna" }, fallback: undefined }, fallbackGone: { model: "test-mini", why: "failed" } });
-    expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-luna" }) });
-    const html = await page();
-    expect(rowOf(html, "match")).toContain('<span class="ov-id">test-mini</span><span class="pill bad">Not usable</span>');
-    expect(rowOf(html, "match")).toContain('<span data-about="fallback">Its fallback Test Mini failed its last test.</span></p><span class="t-act" data-about="fallback"><a class="btn small" href="/chief-of-staff/models/setup/providers?provider=openrouter#m-test-mini">Test it again</a>');
+  it("shows a saved fallback the provider no longer offers, with why and its fix, while the main model runs alone", async () => {
+    await changeTasks(env.DB, plugins(), userId, [{ task: "match", main: or("test-luna"), fallback: or("test-mini") }], NOW);
+    await accountList(["test-luna", "test-sonnet"]);
+    const { routes } = await readTaskRoutes(env.DB, plugins(), userId);
+    expect(routes[0]).toMatchObject({ current: { main: { model: "test-luna" }, fallback: undefined }, fallbackGone: { model: "test-mini", why: "left_out" } });
+    expect(await routeTask(env.DB, plugins(), userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-luna" }) });
+    const html = await page({ accountSettings: () => SETTINGS });
+    expect(rowOf(html, "match")).toContain('<span class="ov-id">test-mini</span><span class="pill bad">Not offered</span>');
+    expect(rowOf(html, "match")).toContain('<span data-about="fallback">Its fallback Test Mini is left out by your OpenRouter settings.</span></p><span class="t-act" data-about="fallback"><a class="btn small ext" href="https://example.com/privacy"');
   });
 
-  it("says in a strength's rows when it has no usable model, with a link to its models not tested yet on Providers", async () => {
+  it("says in a strength's rows when it has no Ready model, with Add credits where its paid models need credit", async () => {
     await tieredPrices();
-    await passAll("test-luna");
-    const toTest = { provider: "openrouter" as const, connected: true, untested: { Middle: 2 } };
-    const html = await page({ toTest });
-    const link = `href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle&amp;show=pending#test">Test Middle models</a>`;
-    expect(rowOf(html, "score")).toContain(`<p class="t-says"><span>No Middle model has passed a test yet.</span></p><span class="t-act"><a class="btn small" ${link}`);
+    plugin = withLinks(testPlugin("openrouter", { routers: ["openrouter/auto"], account: NO_CREDIT }));
+    await readAccountLive(env.DB, plugin, userId);
+    const toReady = (await readToReady(env.DB, plugins(), userId))!;
+    // Counted by the strength chips of the rows the strip counts as Needs credit.
+    expect(toReady).toEqual({ provider: "openrouter", connected: true, needCredit: { Smallest: 2, Middle: 2, Strongest: 1 }, credits: CREDITS });
+    const html = await page({ toReady });
+    const add = `<a class="btn small ext" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer">Add credits</a>`;
+    expect(rowOf(html, "score")).toContain(`<p class="t-says"><span>No Middle model is ready yet. Paid ones need credit.</span></p><span class="t-act">${add}</span>`);
     expect(rowOf(html, "score")).toContain('<button type="button" class="pick-btn" id="pb-main-score" aria-haspopup="listbox" aria-expanded="false" aria-controls="pl-main-score" aria-labelledby="lbl-main-score pb-main-score" disabled>');
-    // The tap comes first; once it is taken, the first such row's link is the one solid button.
-    expect(html).toContain('<button type="submit" class="btn primary">Accept all with one tap</button>');
-    await acceptProposals(env.DB, userId, NOW);
-    const after = await page({ toTest });
-    expect(rowOf(after, "score")).toContain(`<a class="btn small primary" ${link}`);
-    expect(rowOf(after, "fill_form")).toContain(`<a class="btn small" ${link}`);
-    // Every Middle model tested already: the link shows them all; not connected: Connect.
-    expect(await page({ toTest: { ...toTest, untested: {} } })).toContain('href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle#test">See Middle models</a>');
-    expect(await page({ toTest: { ...toTest, connected: false } })).toContain('href="/chief-of-staff/models/setup/providers">Connect OpenRouter</a>');
-    // The count comes from the strength chips of the models the user can still test.
-    expect(await readToTest(env.DB, plugins(), userId)).toEqual({ provider: "openrouter", connected: true, untested: { Smallest: 2, Middle: 2, Strongest: 1 } });
+    // The free tap comes first; once it is taken, the first such row's link is the one solid button.
+    expect(html).toContain("Use my free models for 3 tasks</button>");
+    await useFreeModels(env.DB, plugins(), userId, NOW);
+    const after = await page({ toReady });
+    expect(rowOf(after, "score")).toContain(add.replace('class="btn small ext"', 'class="btn small primary ext"'));
+    expect(rowOf(after, "fill_form")).toContain(add);
+    // No paid model to add credit for: the link shows the strength's models; not connected: Connect.
+    expect(await page({ toReady: { ...toReady, needCredit: {} } })).toContain('href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;strength=Middle#test">See Middle models</a>');
+    expect(await page({ toReady: { ...toReady, connected: false } })).toContain('href="/chief-of-staff/models/setup/providers">Connect OpenRouter</a>');
   });
 
-  it("gives a task with no saved choice no model, even with one usable model, and says to choose one", async () => {
-    await recordTest(userId, "test-luna");
-    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
-    const { routes } = await readTaskRoutes(env.DB, userId);
+  it("gives a task with no saved choice no model, even with Ready models, and says to choose one", async () => {
+    expect(await routeTask(env.DB, plugins(), userId, "extract")).toBeUndefined();
+    const { routes } = await readTaskRoutes(env.DB, plugins(), userId);
     const extract = routes.find((r) => r.task.id === "extract")!;
     expect(extract.current).toBeUndefined();
     expect(extract).toMatchObject({ proposal: { main: { model: "test-luna" } }, pending: true });
@@ -692,7 +537,6 @@ describe("the model for each task", () => {
   });
 
   it("saves in place with the page's <main> as JSON, or redirects back without the script, and keeps the choices on a refusal", async () => {
-    await passAll("test-luna", "test-mini");
     const post = (fields: Array<[string, string]>, json: boolean) =>
       handleTaskModels(
         new Request(`${ORIGIN}${TASK_MODELS_PATH}/change`, { method: "POST", headers: { origin: ORIGIN, ...(json ? { accept: "application/json" } : {}) }, body: new URLSearchParams(fields) }),
@@ -703,7 +547,7 @@ describe("the model for each task", () => {
     const body = (await inPlace.json()) as { main: string };
     expect(body.main).toContain('<div class="banner ok" role="status" tabindex="-1">Saved: 2 tasks.</div>');
     expect(body.main).not.toContain("<html");
-    expect(await routeTask(env.DB, userId, "match")).toMatchObject({ main: { model: "test-mini" }, fallback: { model: "test-luna" } });
+    expect(await routeTask(env.DB, plugins(), userId, "match")).toMatchObject({ main: { model: "test-mini" }, fallback: { model: "test-luna" } });
     const refused = await post([["task", "match"], ["main.match", or("test-luna")], ["fallback.match", or("test-luna")]], true);
     expect([refused.status, await refused.json()]).toEqual([400, { problem: "Matching questions: The fallback must be another model than the main one." }]);
     const plain = await post([["task", "extract"], ["main.extract", or("test-mini")], ["fallback.extract", ""]], false);
@@ -719,7 +563,6 @@ describe("the model for each task", () => {
   });
 
   it("saves the rows changed and not saved with a tap, as the user chose them, all or none, and taps only the others", async () => {
-    await passAll("test-luna", "test-mini");
     const post = (verb: string, fields: Array<[string, string]>, json: boolean) =>
       handleTaskModels(
         new Request(`${ORIGIN}${TASK_MODELS_PATH}/${verb}`, { method: "POST", headers: { origin: ORIGIN, ...(json ? { accept: "application/json" } : {}) }, body: new URLSearchParams(fields) }),
@@ -754,200 +597,99 @@ describe("the model for each task", () => {
   });
 });
 
-// A test counts only for the key that ran it (models/usable.ts onEarlierKey).
-// The live shape: a Test all run on an earlier key whose account had credit,
-// then Connect again with a key whose account has none.
-describe("tests made on an earlier key", () => {
+// The owner, 2026-11-28: when a task's real call fails, it falls to the
+// task's fallback model and the failed model's row shows "Failed when used ·
+// <reason> · Try again".
+describe("a task's own call that fails", () => {
+  const call = (at: Date) => callTask(env.DB, plugins(), { userId, task: "match", request: () => ({}) }, () => at);
+  const noEndpoints = () => ({ status: 404, body: { error: { code: 404, message: "No endpoints found matching your data policy" } }, error: { name: "HTTP 404", message: "No endpoints found matching your data policy" } });
+
+  beforeEach(async () => {
+    await changeTasks(env.DB, plugins(), userId, [{ task: "match", main: "openrouter|test-luna", fallback: "openrouter|test-mini" }], NOW);
+    await setBudget(env.DB, userId, "openrouter", 5, "typed", NOW);
+  });
+
+  it("falls to the fallback, marks the main model Failed when used with its plain reason, and takes that back once a call of it answers", async () => {
+    plugin.replies.push(noEndpoints(), ok({ input: 1, output: 1 }));
+    expect(await call(NOW)).toMatchObject({ kind: "answered", model: "test-mini", fallback: true });
+    expect(plugin.calls.map((c) => c.model)).toEqual(["test-luna", "test-mini"]);
+    const latest = (await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")!;
+    expect(latest).toMatchObject({ state: "failed", result: { reason: "refused", used: true, reply: { status: 404, message: "No endpoints found matching your data policy" } } });
+    // The mark is only a label: the model stays Ready.
+    expect(await stateOf("test-luna")).toBe("ready");
+    // The Providers row says so, with Try again.
+    const { rows } = modelParts(await tableInput());
+    expect(rowHtml(rows, "test-luna")).toContain('data-state="ready"');
+    expect(rowHtml(rows, "test-luna")).toContain('<span class="fw">Failed when used</span> · openrouter refused the call.');
+    expect(rowHtml(rows, "test-luna")).toContain('<span class="lbl">Try again</span>');
+    // The dropdowns keep it, and the task keeps it and tries it first.
+    const { offered, routes } = await readTaskRoutes(env.DB, plugins(), userId);
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-luna", "test-mini"]);
+    expect(routes[0]!.current).toMatchObject({ main: { model: "test-luna", state: "ready" }, fallback: { model: "test-mini" } });
+    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
+    expect(html).not.toContain('<span class="pill bad">Failed when used</span>');
+    expect(html).not.toContain("Its main model failed when used");
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "match", main: "openrouter|test-luna", fallback: "openrouter|test-mini" }], NOW)).toBeUndefined();
+    // The next call tries it first; it answers, and the mark is gone.
+    plugin.replies.push(ok({ input: 1, output: 1 }));
+    expect(await call(new Date("2026-11-27T10:05:00Z"))).toMatchObject({ kind: "answered", model: "test-luna", fallback: false });
+    expect(await markOf("test-luna")).toBe("passed");
+  });
+
+  it("marks nothing for a main model refused for credit, so the credit figure alone decides, and marks a fallback that failed too", async () => {
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], account: HAS_CREDIT });
+    plugin.replies.push(refused(402), refused(400));
+    expect(await call(NOW)).toMatchObject({ kind: "provider_error", model: "test-mini", fallback: true, status: 400 });
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toBeUndefined();
+    expect(await markOf("test-mini")).toBe("failed");
+    expect([await stateOf("test-luna"), await stateOf("test-mini")]).toEqual(["ready", "ready"]);
+    // The credit ran out, then credit is added: the next visit's live read flips it back to Ready, with no click.
+    plugin.account = NO_CREDIT;
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await stateOf("test-luna")).toBe("credit");
+    plugin.account = HAS_CREDIT;
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await stateOf("test-luna")).toBe("ready");
+    const { offered } = await readTaskRoutes(env.DB, plugins(), userId);
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toContain("test-luna");
+  });
+
+  it("marks nothing for a busy or unanswered call, and falls to the fallback all the same", async () => {
+    plugin.replies.push(refused(429), ok({ input: 1, output: 1 }));
+    expect(await call(NOW)).toMatchObject({ kind: "answered", model: "test-mini", fallback: true });
+    plugin.replies.push(new Error("network"), ok({ input: 1, output: 1 }));
+    expect(await call(NOW)).toMatchObject({ kind: "answered", model: "test-mini", fallback: true });
+    expect(await latestCount()).toBe(0);
+    expect(await stateOf("test-luna")).toBe("ready");
+  });
+
+  it("never falls back on a key removed on the provider's side: the fallback shares it", async () => {
+    plugin.replies.push(refused(401));
+    expect(await call(NOW)).toMatchObject({ kind: "provider_error", model: "test-luna", fallback: false, status: 401 });
+    expect(plugin.calls).toHaveLength(1);
+    expect(await latestCount()).toBe(0);
+  });
+});
+
+describe("calls made on an earlier key", () => {
   const RECONNECTED = new Date("2026-11-27T09:30:00Z");
-  const reconnect = () => writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "b".repeat(64) }, RECONNECTED);
 
-  it("leaves a model that passed only on an earlier key out of the usable set, the tasks, the budget basis and the proxy", async () => {
-    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
-    await changeTasks(env.DB, userId, [{ task: "match", main: "openrouter|test-luna", fallback: "openrouter|test-mini" }, { task: "extract", main: "openrouter|test-luna", fallback: "" }], NOW);
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    await reconnect();
-    expect(await usable()).toEqual([]);
-    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ state: "passed", earlierKey: true });
-    // test-mini passes on the current key; test-luna has not been tested on it.
-    await recordTest(userId, "test-mini", "passed", "2026-11-27T09:45:00.000Z");
-    expect(await usable()).toEqual(["test-mini"]);
-    const basis = await suggestionCandidates(env.DB, userId);
-    expect({ from: basis.from, models: basis.models.map((m) => m.model) }).toEqual({ from: "tasks", models: ["test-mini"] });
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
-    const match = routes.find((r) => r.task.id === "match")!;
-    expect(match).toMatchObject({ stopped: { main: { model: "test-luna" }, fallback: { model: "test-mini" }, why: "earlier_key" } });
-    expect(routes.find((r) => r.task.id === "extract")).toMatchObject({ stopped: { main: { model: "test-luna" }, why: "earlier_key" } });
-    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
-    const extract = html.match(/<li class="task" id="task-extract"[\s\S]*?<\/form><\/li>/)![0];
-    expect(extract).toMatch(
-      /<span data-about="main">test-luna needs a test on your new OpenRouter key\. No model now: its calls are refused\.<\/span><\/p><span class="t-act" data-about="main"><a class="btn small[^"]*" href="\/chief-of-staff\/models\/setup\/providers\?provider=openrouter&amp;confirm=test-all#ta">Test all models<\/a>/,
-    );
-    // The proxy: the call goes to the fallback, and a task with none is refused.
-    expect(await routeTask(env.DB, userId, "match")).toEqual({ main: expect.objectContaining({ model: "test-mini" }) });
-    expect(await routeTask(env.DB, userId, "extract")).toBeUndefined();
-    const before = plugin.calls.length;
-    expect(await callTask(env.DB, plugins(), { userId, task: "extract", request: () => ({}) }, () => NOW)).toEqual({
-      kind: "no_model",
-      task: "extract",
-      detail: "no usable model for this task: its model needs a test on the new key; run Test all models on Models › Setup › Providers and models (/chief-of-staff/models/setup/providers)",
-    });
-    expect(plugin.calls.length).toBe(before);
-    // A Test on its row, on the current key, puts it back.
-    plugin.replies.push(ok({ input: 1, output: 1 }, { model: "test-luna" }));
-    await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    expect(await routeTask(env.DB, userId, "extract")).toMatchObject({ main: { model: "test-luna" } });
-  });
-
-  // The owner's case: every pass came from the earlier key, so nothing is
-  // offered; the task's row still says its model needs a test on the new key.
-  it("says a task's model needs a test on the new key, with Test all, when no model is usable on it", async () => {
-    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
-    await changeTasks(env.DB, userId, [{ task: "extract", main: "openrouter|test-luna", fallback: "" }], NOW);
-    await reconnect();
-    const { offered, routes } = await readTaskRoutes(env.DB, userId);
-    expect(offered).toEqual([]);
-    const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
-    const extract = html.match(/<li class="task" id="task-extract"[\s\S]*?<\/form><\/li>/)![0];
-    expect(extract).toContain(
-      '<span data-about="main">test-luna needs a test on your new OpenRouter key. No model now: its calls are refused.</span></p><span class="t-act" data-about="main"><a class="btn small primary" href="/chief-of-staff/models/setup/providers?provider=openrouter&amp;confirm=test-all#ta">Test all models</a>',
-    );
-  });
-
-  it("keeps the tests and connected_at when Connect brings back the very same key, and moves them on for a different key", async () => {
-    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
+  it("keeps connected_at and the credit figure when Connect brings back the very same key, and moves them on for a different key", async () => {
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], account: HAS_CREDIT });
+    await recordTest(userId, "test-luna", "failed");
+    await readAccountLive(env.DB, plugin, userId);
     const first = await connectedAt(env.DB, userId, "openrouter");
     await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, RECONNECTED);
     expect(await connectedAt(env.DB, userId, "openrouter")).toEqual(first);
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).not.toHaveProperty("earlierKey");
-    await reconnect();
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(true);
+    expect(await markOf("test-luna")).toBe("failed");
+    await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "b".repeat(64) }, RECONNECTED);
     expect(await connectedAt(env.DB, userId, "openrouter")).toEqual(RECONNECTED);
-    expect(await usable()).toEqual([]);
+    // The new key's account is read again, live, by the first reader that needs it.
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBeUndefined();
     expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ earlierKey: true });
-  });
-
-  it("shows an earlier key's results as Not tested yet with a grey note, counts none of them, and offers Test all next", async () => {
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    await env.DB.prepare("UPDATE model_test_runs SET started_at = '2026-11-27T09:00:00.000Z'").run();
-    // test-luna passes, test-mini fails (a verdict), test-sonnet is busy.
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(400), refused(429));
-    await runQueuedTests(env.DB, plugins(), new Date("2026-11-27T09:05:00Z"));
-    await reconnect();
-    const input = await tableInput();
-    expect(input.run).toMatchObject({ earlierKey: true });
-    const { rows, strip, rail } = modelParts({ ...input, now: NOW });
-    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="pending"[^>]*><span class="nm"><span class="t" data-hl>Test Luna<\/span><\/span><span class="meta"><span class="ek">Passed on an earlier key<\/span> · /);
-    expect(rows).toMatch(/data-id="test-mini"[^>]*data-state="pending"[^>]*><span class="nm"><span class="t" data-hl>Test Mini<\/span><\/span><span class="meta"><span class="ek">Failed on an earlier key<\/span> · /);
-    // The busy refusal on the earlier key shows nowhere.
-    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="pending"[^>]*><span class="nm"><span class="t" data-hl>Test Sonnet<\/span><\/span><span class="meta"><span data-hl>/);
-    expect(rows).not.toContain("Doesn't work");
-    expect(rows).not.toContain("Busy");
-    expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num ">0<\/span>[\s\S]*?data-filter="fails"[\s\S]*?<span class="v num ">0<\/span>[\s\S]*?data-filter="pending"[\s\S]*?<span class="v num ">3<\/span>/);
-    expect(input.retest).toMatchObject({ models: [], wait: NOTHING_FAILED });
-    expect(rail).toContain("Tested 09:00 UTC on an earlier key");
-    expect(nextStep({ connected: true, view: {}, run: input.run, catalogCurrent: true, plan: input.plan })).toBe("test-all");
-    // Model for each task counts them as not tested yet too.
-    expect(await readToTest(env.DB, plugins(), userId)).toEqual({ provider: "openrouter", connected: true, untested: { Smallest: 2, Strongest: 1 } });
-  });
-
-  it("keeps the earlier key's note under a refusal on the current key, as on Nova Micro answering Needs credit", async () => {
-    await recordTest(userId, "test-luna");
-    await reconnect();
-    plugin.replies.push(refused(402));
-    const outcome = await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW });
-    expect(outcome).toMatchObject({ kind: "refused", reason: "no_credits" });
-    const { rows, strip } = modelParts(await tableInput({ view: { results: [{ model: "test-luna", reason: "no_credits" }] } }));
-    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="pending"/);
-    expect(rows).not.toContain('<span class="pill warn">Needs credit</span>');
-    expect(rows).toMatch(/<div class="later"><p><span class="ek">Passed on an earlier key<\/span>\. Tasks can use it once it passes on this key\.<\/p><\/div>/);
-    expect(strip).toMatch(/data-filter="works"[\s\S]*?<span class="v num ">0<\/span>/);
-    expect(await usable()).toEqual([]);
-  });
-  // The owner's live state, 2026-11-28: a new key with no credit, Test all
-  // answered Needs credit on most models, which then read Not tested yet with
-  // "Passed on an earlier key".
-  const needsCreditRun = async () => {
-    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
-    await reconnect();
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    // test-luna and test-mini answer Needs credit; test-sonnet fails (a verdict).
-    plugin.replies.push(refused(402), refused(402), refused(400));
-    await runQueuedTests(env.DB, plugins(), NOW);
-  };
-  const cellOf = (strip: string, k: string) => Number(strip.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]);
-
-  it("draws Needs credit's Add credits hidden while no model on the list needs credit", async () => {
-    const credits = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
-    const withCredits = { ...plugin, connect: { ...plugin.connect, guide: { ...plugin.connect.guide, credits } } };
-    const { strip } = modelParts(await tableInput({ plugin: withCredits }));
-    expect(cellOf(strip, "credit")).toBe(0);
-    expect(strip).toContain('<a class="cell-act ext" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer" data-credit-act hidden>Add credits</a>');
-  });
-
-  it("counts a Needs credit answer on this key in its own cell, out of the usable set and Doesn't work, with Add credits", async () => {
-    await needsCreditRun();
-    const credits = { label: "Add credits", href: "https://openrouter.ai/settings/credits" };
-    const withCredits = { ...plugin, connect: { ...plugin.connect, guide: { ...plugin.connect.guide, credits } } };
-    const { rows, strip } = modelParts(await tableInput({ plugin: withCredits }));
-    expect(rows).toMatch(/data-id="test-luna"[^>]*data-state="credit"/);
-    expect(rows).toMatch(/data-id="test-mini"[^>]*data-state="credit"/);
-    expect(rows).toMatch(/data-id="test-sonnet"[^>]*data-state="fails"/);
-    // The current key has a result for them now: no earlier key's note.
-    expect(rows).not.toContain("on an earlier key");
-    expect(strip).toMatch(/data-filter="credit"[^>]*><span class="l">Needs credit<\/span><span class="v num warn">2<\/span><\/button><a class="cell-act ext" href="https:\/\/openrouter.ai\/settings\/credits" target="_blank" rel="noopener noreferrer" data-credit-act>Add credits<\/a><\/div>/);
-    expect([cellOf(strip, "works"), cellOf(strip, "credit"), cellOf(strip, "fails"), cellOf(strip, "pending")]).toEqual([0, 2, 1, 0]);
-    // One count source: each cell is the sum of its rows' data-state, and the cells add up to the end label.
-    const states = [...rows.matchAll(/data-state="(\w+)"/g)].map((m) => m[1]);
-    for (const k of ["works", "credit", "fails", "pending"]) expect(cellOf(strip, k)).toBe(states.filter((x) => x === k).length);
-    expect(strip).toContain(`<span data-ends>${states.filter((x) => x !== "blocked").length} models</span>`);
-    expect(strip).toContain('aria-label="3 of 3 tested: 0 work, 2 need credit, 1 don\'t"');
-    expect(strip).toMatch(/<i class="w" style="width:0.000%"><\/i><i class="c" style="width:66.667%"><\/i><i class="f" style="width:33.333%"><\/i>/);
-    expect(await usable()).toEqual([]);
-    // Model for each task counts them as tested too: nothing is left to test.
-    expect(await readToTest(env.DB, plugins(), userId)).toEqual({ provider: "openrouter", connected: true, untested: {} });
-  });
-
-  it("offers the Needs credit models in Retest failed's confirm, each set with its own estimate, and retests them only when asked", async () => {
-    await needsCreditRun();
-    const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
-    expect(plan.models.map((m) => m.model)).toEqual(["test-sonnet"]);
-    expect(plan.credit.map((m) => m.model)).toEqual(["test-luna", "test-mini"]);
-    expect(plan.creditEstimateUsd).toBeCloseTo(plan.credit.reduce((sum, m) => sum + m.estimateUsd, 0), 12);
-    const later = new Date("2026-11-27T10:15:00Z");
-    const { rail } = modelParts(await tableInput());
-    expect(rail).toContain('Retest failed <span class="num">(1)</span>');
-    const confirm = modelParts(await tableInput({ view: { confirm: "retest" }, step: "confirm" })).rail;
-    expect(confirm).toContain(`Retest the 1 that failed for about ${formatCost(plan.estimateUsd)}?`);
-    expect(confirm).toContain(`<label class="also"><input type="checkbox" name="credit" value="1" form="rt-run-form" data-k="rt-credit"><span>Also the <span class="num">2</span> that needed credit, about <span class="num">${formatCost(plan.creditEstimateUsd)}</span> more. Add credits first.</span></label>`);
-    expect(confirm).toContain('id="rt-run-form"');
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", later)).toEqual({ count: 1, skipped: 0 });
-    expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "failed"], ["test-mini", "failed"], ["test-sonnet", "queued"]]);
-    plugin.replies.push(refused(400));
-    await runQueuedTests(env.DB, plugins(), later);
-    // Credit added: the Needs credit ones too.
-    const after = new Date("2026-11-27T10:20:00Z");
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", after, true)).toEqual({ count: 3, skipped: 0 });
-    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-mini" }), refused(400));
-    await runQueuedTests(env.DB, plugins(), after);
-    expect(await usable()).toEqual(["test-luna", "test-mini"]);
-    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).credit).toEqual([]);
-  });
-
-  it("names Retest for the Needs credit models when nothing failed, and its confirm retests them alone", async () => {
-    for (const model of ["test-luna", "test-mini"]) await recordTest(userId, model);
-    await reconnect();
-    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
-    plugin.replies.push(refused(402), refused(402), refused(402));
-    await runQueuedTests(env.DB, plugins(), NOW);
-    const plan = await planRetest(env.DB, plugins(), userId, "openrouter");
-    expect(plan).toMatchObject({ models: [], credit: [{ model: "test-luna" }, { model: "test-mini" }, { model: "test-sonnet" }] });
-    expect(plan.wait).toBeUndefined();
-    expect(modelParts(await tableInput()).rail).toContain('Retest needs credit <span class="num">(3)</span>');
-    const confirm = modelParts(await tableInput({ view: { confirm: "retest" }, step: "confirm" })).rail;
-    expect(confirm).toContain(`Retest the 3 that needed credit for about ${formatCost(plan.creditEstimateUsd)}?`);
-    expect(confirm).toContain('<input type="hidden" name="credit" value="1" form="rt-run-form">');
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", new Date("2026-11-27T10:15:00Z"))).toEqual({ problem: "No model's latest test failed." });
-    expect(await startRetest(env.DB, plugins(), userId, "openrouter", new Date("2026-11-27T10:15:00Z"), true)).toEqual({ count: 3, skipped: 0 });
+    plugin.account = NO_CREDIT;
+    expect(await stateOf("test-luna")).toBe("credit");
+    expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(false);
   });
 });

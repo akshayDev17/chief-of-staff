@@ -1,7 +1,9 @@
 // A small DOM built from a rendered page's own HTML, enough for a page script
 // that finds its elements with selectors and listens on the document: the
 // elements, their attributes and text, selectors (lists, descendants, tags,
-// classes, attributes and :not), and the properties a script sets. Tests run
+// classes, attributes and :not), the properties a script sets, and the calls
+// that swap parts of a page in place (a <template>'s content, replaceWith,
+// replaceChildren, cloneNode, remove, appendChild). Tests run
 // the page's real script against it (script-dom.ts runScript) and fire events
 // on its real elements.
 
@@ -28,6 +30,10 @@ export class El {
     this.tag = tag;
   }
   get id(): string { return this.attrs.id ?? ""; }
+  get tagName(): string { return this.tag.toUpperCase(); }
+  get action(): string { return this.attrs.action ?? ""; }
+  // A <template>'s content: its own children, moved out by whoever takes them.
+  get content(): El { return this; }
   get name(): string { return this.attrs.name ?? ""; }
   get className(): string { return this.attrs.class ?? ""; }
   set className(v: string) { this.attrs.class = v; }
@@ -68,6 +74,37 @@ export class El {
   toggleAttribute(n: string, on?: boolean): boolean { const want = on ?? !(n in this.attrs); if (want) this.attrs[n] = ""; else delete this.attrs[n]; return want; }
   focus() { this.focused++; activeElement = this; }
   scrollIntoView() {}
+  // The nodes `n` stands for: a template's content gives its children.
+  private static nodesOf(n: El): El[] { return n.tag === "template" ? [...n.children] : [n]; }
+  private static detach(n: El) { if (n.parent) n.parent.children = n.parent.children.filter((c) => c !== n); n.parent = null; }
+  replaceWith(n: El) {
+    const parent = this.parent;
+    if (!parent) return;
+    const nodes = El.nodesOf(n);
+    nodes.forEach(El.detach);
+    const at = parent.children.indexOf(this);
+    parent.children.splice(at, 1, ...nodes);
+    for (const c of nodes) c.parent = parent;
+    this.parent = null;
+  }
+  replaceChildren(...ns: El[]) {
+    const nodes = ns.flatMap(El.nodesOf);
+    nodes.forEach(El.detach);
+    for (const c of this.children) c.parent = null;
+    this.text = "";
+    this.children = nodes;
+    for (const c of nodes) c.parent = this;
+  }
+  appendChild(n: El): El { El.detach(n); n.parent = this; this.children.push(n); return n; }
+  remove() { El.detach(this); }
+  cloneNode(): El { const copy = parse(this.outerHTML).children[0]!; copy.parent = null; return copy; }
+  insertAdjacentHTML(where: string, html: string) {
+    const nodes = parse(html).children;
+    const into = where === "afterbegin" ? this : where === "beforebegin" ? this.parent : null;
+    if (!into) return;
+    into.children.splice(where === "afterbegin" ? 0 : into.children.indexOf(this), 0, ...nodes);
+    for (const c of nodes) c.parent = into;
+  }
   contains(other: unknown): boolean { for (let e = other as El | null; e; e = e.parent) if (e === this) return true; return false; }
   matches(sel: string): boolean { return matches(this, sel); }
   closest(sel: string): El | null { for (let e: El | null = this; e; e = e.parent) if (matches(e, sel)) return e; return null; }
@@ -121,7 +158,7 @@ function matchChain(e: El, tokens: string[]): boolean {
   return false;
 }
 function matchCompound(e: El, c: string): boolean {
-  const re = /^[a-z0-9-]+|\.[\w-]+|#[\w-]+|\[([\w-]+)(?:="([^"]*)")?\]|:not\(([^)]*)\)/gi;
+  const re = /^[a-z0-9-]+|\.[\w-]+|#[\w-]+|\[([\w-]+)(?:="([^"]*)"|=([\w-]+))?\]|:not\(([^)]*)\)/gi;
   let m: RegExpExecArray | null;
   let used = 0;
   while ((m = re.exec(c))) {
@@ -129,8 +166,8 @@ function matchCompound(e: El, c: string): boolean {
     const t = m[0];
     if (t.startsWith(".")) { if (!e.classList.contains(t.slice(1))) return false; }
     else if (t.startsWith("#")) { if (e.id !== t.slice(1)) return false; }
-    else if (t.startsWith("[")) { if (!(m[1]! in e.attrs) || (m[2] !== undefined && e.attrs[m[1]!] !== m[2])) return false; }
-    else if (t.startsWith(":not")) { if (matches(e, m[3]!)) return false; }
+    else if (t.startsWith("[")) { const want = m[2] ?? m[3]; if (!(m[1]! in e.attrs) || (want !== undefined && e.attrs[m[1]!] !== want)) return false; }
+    else if (t.startsWith(":not")) { if (matches(e, m[4]!)) return false; }
     else if (e.tag !== t.toLowerCase()) return false;
   }
   if (used !== c.length) throw new Error(`mini-dom: unsupported selector "${c}"`);
@@ -177,6 +214,7 @@ export function documentOf(html: string) {
   return Object.assign(doc, {
     documentElement: htmlEl,
     getElementById: (id: string) => doc.querySelector(`#${id}`),
+    createElement: (tag: string) => new El(tag),
     get activeElement() { return activeElement; },
   });
 }

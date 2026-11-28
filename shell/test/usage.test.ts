@@ -184,7 +184,7 @@ describe("the page", () => {
     const plugins = { openrouter: testPlugin() };
     const setup = [
       await (await handleProviders(new Request(`${ORIGIN}${PROVIDERS_PATH}`), { db: env.DB, plugins, readPlugins: async () => plugins, secrets: testSecrets(), userId, viewer: "owner", appOrigin: ORIGIN, now: NOW, fetcher: fakeFetch() })).text(),
-      await (await handleBudgets(new Request(`${ORIGIN}${BUDGETS_PATH}`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher: fakeFetch() })).text(),
+      await (await handleBudgets(new Request(`${ORIGIN}${BUDGETS_PATH}`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher: fakeFetch(), plugins })).text(),
       await (await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}`), { db: env.DB, plugins, userId, viewer: "owner", now: NOW })).text(),
     ];
     for (const s of setup) expect(s).toContain(`<nav class="subtabs" aria-label="Models"><span class="on" aria-current="page">Setup</span><a href="${USAGE_PATH}">Usage</a></nav>`);

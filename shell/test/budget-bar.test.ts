@@ -163,7 +163,7 @@ describe("the bar on the Models pages", () => {
   });
 
   const budgetsPage = () =>
-    handleBudgets(new Request(`${ORIGIN}/chief-of-staff/models/setup/budgets`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher });
+    handleBudgets(new Request(`${ORIGIN}/chief-of-staff/models/setup/budgets`), env.DB, userId, NOW, { secrets: testSecrets(), fetcher, plugins: { openrouter: testPlugin() } });
 
   it("is on Budgets once the budget is set, read from OpenRouter server side, the key never on the page", async () => {
     expect(await (await budgetsPage()).text()).not.toContain('<div class="bb" data-budget-bar>');

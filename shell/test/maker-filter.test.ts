@@ -275,37 +275,37 @@ describe("with the page's own controls", () => {
 });
 
 // Providers' rows with their rowState (data-state), as models-table.ts
-// renders them: 3 Anthropic, 3 OpenAI (one of them Needs credit) and one
-// blocked row, which the strip never counts.
+// renders them: 3 Anthropic (two Ready, Needs a step) and 4 OpenAI (two
+// Ready, two Needs credit). Every row is in one cell.
 const STATED: ListRow[] = [
-  { text: "anthropic: claude opus anthropic/claude-opus anthropic", maker: "anthropic", makerName: "Anthropic", state: "works", strength: "Strongest" },
-  { text: "anthropic: claude haiku anthropic/claude-haiku anthropic", maker: "anthropic", makerName: "Anthropic", state: "fails", strength: "Smallest" },
-  { text: "anthropic: claude sonnet anthropic/claude-sonnet anthropic", maker: "anthropic", makerName: "Anthropic", state: "pending", strength: "Middle" },
-  { text: "openai: gpt-4o openai/gpt-4o openai", maker: "openai", makerName: "OpenAI", state: "works", strength: "Middle" },
-  { text: "openai: gpt-4o mini openai/gpt-4o-mini openai", maker: "openai", makerName: "OpenAI", state: "works", strength: "Smallest" },
-  { text: "openai: o1 pro openai/o1-pro openai", maker: "openai", makerName: "OpenAI", state: "blocked", strength: "Strongest" },
+  { text: "anthropic: claude opus anthropic/claude-opus anthropic", maker: "anthropic", makerName: "Anthropic", state: "ready", strength: "Strongest" },
+  { text: "anthropic: claude haiku anthropic/claude-haiku anthropic", maker: "anthropic", makerName: "Anthropic", state: "ready", strength: "Smallest" },
+  { text: "anthropic: claude sonnet anthropic/claude-sonnet anthropic", maker: "anthropic", makerName: "Anthropic", state: "step", strength: "Middle" },
+  { text: "openai: gpt-4o openai/gpt-4o openai", maker: "openai", makerName: "OpenAI", state: "ready", strength: "Middle" },
+  { text: "openai: gpt-4o mini openai/gpt-4o-mini openai", maker: "openai", makerName: "OpenAI", state: "ready", strength: "Smallest" },
+  { text: "openai: o1 pro openai/o1-pro openai", maker: "openai", makerName: "OpenAI", state: "credit", strength: "Strongest" },
   { text: "openai: gpt-5 nano openai/gpt-5-nano openai", maker: "openai", makerName: "OpenAI", state: "credit", strength: "Smallest" },
 ];
 
-describe("on Providers, the Works / Needs credit / Doesn't work / Not tested yet strip", () => {
+describe("on Providers, the Ready / Needs credit / Needs a step strip", () => {
   const whole = {
-    works: "3", credit: "1", fails: "1", pending: "1", good: true, warn: true, bad: true,
-    bar: ["width:50.000%", "width:16.667%", "width:16.667%"], label: "5 of 6 tested: 3 work, 1 need credit, 1 don't", ends: "6 models", wholeList: false,
+    ready: "4", credit: "2", step: "1", good: true, warn: true,
+    bar: ["width:57.143%", "width:28.571%"], label: "4 of 7 ready: 2 need credit, 1 need a step", ends: "7 models",
   };
 
-  it("counts the whole list with no filter, in today's words", () => {
+  it("counts the whole list with no filter, every row in one cell, in today's words", () => {
     const p = providersTable(STATED);
     expect(p.strip()).toEqual(whole);
     expect(p.sent).toEqual([]);
   });
 
-  it("counts only the chosen maker's rows, says what it counts, and says Test all and Retest failed still cover the whole list", () => {
+  it("counts only the chosen maker's rows, and says what it counts", () => {
     const p = providersTable(STATED);
     p.dispatch("click", p.toggle);
     p.tick("OpenAI");
     expect(p.strip()).toEqual({
-      works: "2", credit: "1", fails: "0", pending: "0", good: true, warn: true, bad: false,
-      bar: ["width:66.667%", "width:33.333%", "width:0.000%"], label: "3 tested of 3 shown: 2 work, 1 need credit, 0 don't", ends: "3 shown", wholeList: true,
+      ready: "2", credit: "2", step: "0", good: true, warn: true,
+      bar: ["width:50.000%", "width:50.000%"], label: "2 of 4 shown ready: 2 need credit, 0 need a step", ends: "4 shown",
     });
     p.clearMakers();
     expect(p.strip()).toEqual(whole);
@@ -315,15 +315,15 @@ describe("on Providers, the Works / Needs credit / Doesn't work / Not tested yet
   it("counts only the rows the search shows, and both the search and the makers together", () => {
     const p = providersTable(STATED);
     p.type("claude");
-    expect(p.strip()).toMatchObject({ works: "1", credit: "0", warn: false, fails: "1", pending: "1", ends: "3 shown", wholeList: true });
+    expect(p.strip()).toMatchObject({ ready: "2", credit: "0", warn: false, step: "1", ends: "3 shown" });
     p.type("gpt-4o");
-    expect(p.strip()).toMatchObject({ works: "2", credit: "0", fails: "0", pending: "0", ends: "2 shown" });
+    expect(p.strip()).toMatchObject({ ready: "2", credit: "0", step: "0", ends: "2 shown" });
     p.dispatch("click", p.toggle);
     p.tick("Anthropic");
     expect(p.shown()).toEqual([]);
-    expect(p.strip()).toMatchObject({ works: "0", credit: "0", fails: "0", pending: "0", bar: ["width:0.000%", "width:0.000%", "width:0.000%"], ends: "0 shown", wholeList: true });
+    expect(p.strip()).toMatchObject({ ready: "0", credit: "0", step: "0", bar: ["width:0.000%", "width:0.000%"], ends: "0 shown" });
     p.type("");
-    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown" });
+    expect(p.strip()).toMatchObject({ ready: "2", step: "1", ends: "3 shown" });
     p.clearMakers();
     expect(p.strip()).toEqual(whole);
     expect(p.sent).toEqual([]);
@@ -332,11 +332,11 @@ describe("on Providers, the Works / Needs credit / Doesn't work / Not tested yet
   it("keeps its counts when a cell filters within the view", () => {
     const p = providersTable(STATED);
     p.type("claude");
-    p.press("fails");
-    expect(p.shown()).toEqual([1]);
-    expect(p.strip()).toMatchObject({ works: "1", fails: "1", pending: "1", ends: "3 shown" });
+    p.press("step");
+    expect(p.shown()).toEqual([2]);
+    expect(p.strip()).toMatchObject({ ready: "2", step: "1", ends: "3 shown" });
     p.type("");
-    p.press("fails");
+    p.press("step");
     expect(p.shown()).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(p.strip()).toEqual(whole);
   });
@@ -344,13 +344,13 @@ describe("on Providers, the Works / Needs credit / Doesn't work / Not tested yet
   it("shows only the Needs credit rows from its cell, and adds up in the filtered view", () => {
     const p = providersTable(STATED);
     p.press("credit");
-    expect(p.shown()).toEqual([6]);
+    expect(p.shown()).toEqual([5, 6]);
     expect(p.strip()).toEqual(whole);
     p.dispatch("click", p.toggle);
     p.tick("OpenAI");
-    expect(p.shown()).toEqual([6]);
+    expect(p.shown()).toEqual([5, 6]);
     const s = p.strip();
-    expect(Number(s.works) + Number(s.credit) + Number(s.fails) + Number(s.pending)).toBe(Number.parseInt(s.ends!, 10));
+    expect(Number(s.ready) + Number(s.credit) + Number(s.step)).toBe(Number.parseInt(s.ends!, 10));
     expect(p.sent).toEqual([]);
   });
 
@@ -374,6 +374,6 @@ describe("on Providers, the Works / Needs credit / Doesn't work / Not tested yet
 
   it("counts a strength's rows when the address asks for one", () => {
     const p = providersTable(STATED, "https://cos.example.com/chief-of-staff/models?strength=Smallest");
-    expect(p.strip()).toMatchObject({ works: "1", credit: "1", fails: "1", pending: "0", ends: "3 shown", wholeList: true });
+    expect(p.strip()).toMatchObject({ ready: "2", credit: "1", step: "0", ends: "3 shown" });
   });
 });
