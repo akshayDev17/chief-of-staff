@@ -17,6 +17,7 @@ import { sha256Hex } from "../src/providers/openrouter";
 import { vaultSecrets } from "../src/providers/secrets";
 import { setBudget } from "../src/proxy/budgets";
 import { readConnection } from "../src/proxy/connections";
+import { providersTable } from "./maker-dom";
 import { fakeFetch, ISSUED_KEY, keyReply, MODELS, type Overrides } from "./fake-sources";
 import { dumpEveryTable, userFor, VAULT_KEY } from "./test-plugin";
 
@@ -533,9 +534,19 @@ describe("the page's script", () => {
     for (const banned of ["location.reload", "location.assign", "location.replace", "location.href =", "pushState", "replaceState", "window.location ="]) {
       expect(PAGE_SCRIPT, banned).not.toContain(banned);
     }
-    // It asks for JSON, and polls for nothing: no run goes on in the background.
+    // It asks for JSON.
     expect(PAGE_SCRIPT).toContain('accept: "application/json"');
-    expect(PAGE_SCRIPT).not.toContain("setTimeout(function () {\n      if (S.busy");
-    expect(PAGE_SCRIPT).not.toContain("x-cos-poll");
+  });
+
+  it("polls for nothing: loaded and left idle, it schedules no timer and sends no request", () => {
+    vi.useFakeTimers();
+    try {
+      const p = providersTable([{ text: "openai: gpt-4o openai/gpt-4o openai", maker: "openai", makerName: "OpenAI" }]);
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(p.sent).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
