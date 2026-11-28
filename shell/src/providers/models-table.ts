@@ -306,7 +306,7 @@ function stripPart(input: ModelsTableInput): string {
 
 function refreshForm(input: ModelsTableInput, label: string, cls: string, k: string): string {
   const short = esc(input.plugin.connect.guide.short);
-  return `<form method="post" action="${action(input.plugin.provider, "refresh")}" data-fetch class="inline"><button type="submit" class="${cls}" data-k="${k}" data-busy="Reading ${short}'s list…">${label}</button></form>`;
+  return `<form method="post" action="${action(input.plugin.provider, "refresh")}" data-fetch data-busy-list class="inline"><button type="submit" class="${cls}" data-k="${k}" data-busy="Reading ${short}'s list…">${label}</button></form>`;
 }
 
 function headPart(input: ModelsTableInput): string {

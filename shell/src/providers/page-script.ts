@@ -11,7 +11,8 @@
 //   confirm, the cap editor, Cancel) is sent in place, asking for JSON: the
 //   server answers with the page's <main> rendered for that view, and only
 //   the parts that changed are swapped in. Requests go one at a time, in
-//   order; a button waiting shows it is busy. A request that fails (no
+//   order; a button waiting shows it is busy, and Refresh dims the strip and
+//   the rows until its answer is in. A request that fails (no
 //   answer, or an error status) reads the page again, so whatever the server
 //   saved shows, and says so with Try again, which sends it once more.
 // - Back from the provider's consent page (main is marked data-land), the
@@ -244,7 +245,7 @@ export const PAGE_SCRIPT = String.raw`
         each(fresh, function (p, i) {
           if (p.hasAttribute("data-keep")) return;
           var name = p.getAttribute("data-part"), outer = p.outerHTML;
-          if (S.last[name] !== outer || live[i].querySelector('[aria-busy="true"]')) live[i].replaceWith(p);
+          if (S.last[name] !== outer || live[i].getAttribute("aria-busy") === "true" || live[i].querySelector('[aria-busy="true"]')) live[i].replaceWith(p);
           S.last[name] = outer;
         });
       }
@@ -279,6 +280,7 @@ export const PAGE_SCRIPT = String.raw`
     if (b && b.name) data.append(b.name, b.value);
     var k = b && b.getAttribute("data-k");
     if (b) busy(b);
+    if (form.hasAttribute("data-busy-list")) each(main.querySelectorAll('[data-part="strip"], [data-part="rows"]'), function (p) { p.setAttribute("aria-busy", "true"); });
     send(form.action, { method: "POST", body: data }, k);
   });
   document.addEventListener("click", function (e) {

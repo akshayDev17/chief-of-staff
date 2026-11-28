@@ -141,6 +141,7 @@ ${MAKER_FILTER_CSS}
 .cell .v.warn { color: var(--caution); }
 .cell[aria-pressed="true"] { border-bottom-color: var(--text); }
 .cell[aria-pressed="true"] .l { color: var(--text); }
+[data-part="strip"][aria-busy="true"], [data-part="rows"][aria-busy="true"] { opacity: 0.45; cursor: progress; transition: opacity 120ms; }
 .bar { margin-top: 10px; height: 8px; border-radius: 999px; background: var(--active); display: flex; overflow: hidden; }
 .bar i { display: block; height: 100%; transition: width 200ms linear; }
 .bar i.w { background: var(--positive); }

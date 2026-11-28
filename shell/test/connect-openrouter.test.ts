@@ -82,13 +82,15 @@ const PATH = new URL(BASE).pathname;
 // sends is recorded and answered by the app at `now`; `settle` waits for the
 // answers to be swapped in. `failNextPost`: the next form's request runs on
 // the app, which saves what it does, but its answer is a 503, as when the
-// Worker runs past its limits.
+// Worker runs past its limits. `holdNextPost`: the next form's answer waits
+// until the function it returns is called, as a slow request does.
 async function inPlace(now: Date) {
   const html = await (await get()).text();
   const doc = documentOf(html);
   const sent: Sent = [];
   let answered: Promise<unknown> = Promise.resolve();
   let failing = false;
+  let held: Promise<void> | undefined;
   runScript(pageScripts(html), doc, `${BASE}?provider=openrouter`, sent, {
     window: { addEventListener: () => {}, fetch: () => {}, history: {} },
     // The browser's FormData of a stand-in form: its named inputs.
@@ -101,6 +103,11 @@ async function inPlace(now: Date) {
     fetch: (url, init) => {
       const post = init?.method === "POST";
       const answer = handle(new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }), { now }).then((r) => {
+        if (post && held) {
+          const wait = held;
+          held = undefined;
+          return wait.then(() => r);
+        }
         if (!post || !failing) return r;
         failing = false;
         return new Response("Worker exceeded resource limits", { status: 503 });
@@ -118,7 +125,12 @@ async function inPlace(now: Date) {
     } while (seen !== answered);
   };
   const failNextPost = () => { failing = true; };
-  return { doc, sent, settle, failNextPost };
+  const holdNextPost = () => {
+    let release = () => {};
+    held = new Promise<void>((r) => { release = r; });
+    return () => release();
+  };
+  return { doc, sent, settle, failNextPost, holdNextPost };
 }
 
 // Connect, then come back from OpenRouter's page as it would send the user.
@@ -376,6 +388,26 @@ describe("Connect OpenRouter", () => {
     expect(sent.at(-1)).toBe(`fetch ${PATH}/openrouter/refresh`);
     expect(sent).toHaveLength(3);
     expect(doc.querySelector('[data-part="err"]')!.textContent).not.toContain("Couldn't reach the app");
+  });
+
+  it("shows Refresh busy on its button, the strip and the rows for the whole of a slow request, then redraws in place", async () => {
+    await connect();
+    const { doc, sent, settle, holdNextPost } = await inPlace(new Date("2026-11-27T10:05:00Z"));
+    const stamp = () => doc.querySelector('[data-part="head"] .src')!.textContent;
+    const part = (name: string) => doc.querySelector(`[data-part="${name}"]`)!;
+    const release = holdNextPost();
+    doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    // Still waiting for the answer.
+    const refresh = doc.querySelector('[data-part="head"] button[data-k="refresh"]')!;
+    expect([refresh.disabled, refresh.getAttribute("aria-busy"), refresh.textContent.trim()]).toEqual([true, "true", "Reading OpenRouter's list…"]);
+    expect([part("strip").getAttribute("aria-busy"), part("rows").getAttribute("aria-busy")]).toEqual(["true", "true"]);
+    expect(stamp()).toContain("06:00 UTC");
+    release();
+    await settle();
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`]);
+    expect(stamp()).toContain("10:05 UTC");
+    expect(doc.querySelectorAll('[aria-busy="true"]')).toEqual([]);
   });
 
   it("gives Refresh back once its answer is in, even when the list it shows has not changed", async () => {
