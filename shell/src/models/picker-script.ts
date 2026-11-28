@@ -189,15 +189,20 @@ export const PICKER_SCRIPT = String.raw`
     banner.firstChild.textContent = text;
     banner.firstChild.focus({ preventScroll: true });
   }
-  function send(action, body, onProblem) {
-    if (busy) return;
+  function send(action, body, answered) {
+    if (busy) return false;
     busy = true;
     main.setAttribute("aria-busy", "true");
     fetch(action, { method: "POST", body: body, headers: { accept: "application/json" }, credentials: "same-origin" })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (j.main) swap(j.main); else if (j.said) say(j.said, "ok", "status"); else onProblem(j.problem || "Couldn't save. Try again."); })
-      .catch(function () { onProblem("Couldn't reach the app. Try again."); })
+      .then(function (j) {
+        if (j.main) swap(j.main);
+        else if (j.said) { say(j.said, "ok", "status"); answered(); }
+        else answered(j.problem || "Couldn't save. Try again.");
+      })
+      .catch(function () { answered("Couldn't reach the app. Try again."); })
       .then(function () { busy = false; main.removeAttribute("aria-busy"); });
+    return true;
   }
   // The changed rows, in /change's fields.
   function changedRows() {
@@ -212,11 +217,11 @@ export const PICKER_SCRIPT = String.raw`
     if (!dirtyRows().length) return;
     var body = changedRows();
     var btn = main.querySelector("[data-save]");
-    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-    send(main.querySelector(".task-f").getAttribute("action"), body, function (problem) {
+    var sent = send(main.querySelector(".task-f").getAttribute("action"), body, function (problem) {
       if (btn) { btn.disabled = false; btn.textContent = "Save"; }
       bar(problem);
     });
+    if (sent && btn) { btn.disabled = true; btn.textContent = "Saving…"; }
   }
 
   // ---------- events ----------
@@ -257,14 +262,15 @@ export const PICKER_SCRIPT = String.raw`
     if (!main.contains(f) || !f.hasAttribute("data-fetch")) return;
     e.preventDefault();
     var b = f.querySelector('button[type="submit"]');
-    if (b) b.disabled = true;
     var rows = f.hasAttribute("data-rows");
-    send(f.getAttribute("action"), rows ? changedRows() : new FormData(), function (problem) {
+    var sent = send(f.getAttribute("action"), rows ? changedRows() : new FormData(), function (problem) {
       if (b) b.disabled = false;
+      if (!problem) return;
       // A refused change shows in the bar, beside the rows it is about.
       if (rows && dirtyRows().length) bar(problem);
       else say(problem, "warn", "alert");
     });
+    if (sent && b) b.disabled = true;
   });
   window.addEventListener("beforeunload", function (e) { if (dirtyRows().length) { e.preventDefault(); e.returnValue = ""; } });
 

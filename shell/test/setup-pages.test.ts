@@ -189,6 +189,42 @@ describe("Models › Setup", () => {
     expect([bar.hidden, bar.querySelector(".sb-n")!.textContent]).toEqual([false, "1 task changed"]);
   });
 
+  it("leaves no button disabled with nothing in flight: a tap while help is waiting sends nothing, and help's answer gives both back", async () => {
+    const plugins = { openrouter: testPlugin() };
+    const handle = (req: Request) => handleTaskModels(req, { db: env.DB, plugins, userId, viewer: "friend", now: NOW });
+    const html = await (await handle(new Request(`${ORIGIN}${TASK_MODELS_PATH}`))).text();
+    const doc = documentOf(html);
+    const sent: Sent = [];
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => { release = r; });
+    runScript(pageScripts(html), doc, `${ORIGIN}${TASK_MODELS_PATH}`, sent, {
+      window: { addEventListener: () => {}, FormData },
+      fetch: async (url, init) => {
+        if (url.endsWith("/help")) await held;
+        return handle(new Request(new URL(url, ORIGIN), { method: init?.method, body: init?.body, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }));
+      },
+    });
+    doc.fire("click", doc.getElementById("pb-main-match")!);
+    doc.fire("click", doc.querySelector('#pl-main-match li[data-value="openrouter|test-mini"]')!);
+    const button = (action: string) => doc.querySelector(`form[action="${TASK_MODELS_PATH}/${action}"] button`)!;
+    doc.fire("submit", doc.querySelector(`form[action="${TASK_MODELS_PATH}/help"]`)!);
+    expect(button("help").disabled).toBe(true);
+    // Accept, tapped while help waits for its answer, sends nothing and stays tappable.
+    doc.fire("submit", doc.querySelector(`form[action="${TASK_MODELS_PATH}/accept"]`)!);
+    expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/help`]);
+    expect(button("accept").disabled).toBe(false);
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(doc.querySelector('[data-part="banner"]')!.textContent).toBe("Sent to Admin: this item's name and its reason only.");
+    expect([button("help").disabled, button("accept").disabled]).toEqual([false, false]);
+    // The row is still changed, and Accept now saves it with the tap.
+    doc.fire("submit", doc.querySelector(`form[action="${TASK_MODELS_PATH}/accept"]`)!);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/help`, `fetch ${TASK_MODELS_PATH}/accept`]);
+    const { routes } = await readTaskRoutes(env.DB, userId);
+    expect(routes.find((r) => r.task.id === "match")!.current!.main.model).toBe("test-mini");
+  });
+
   it("opens Providers showing one strength's models not tested yet when the address asks, as an empty strength's link does, with Show all", async () => {
     const html = (await screens())[PROVIDERS_PATH]!;
     // Every row carries its strength chip.
