@@ -210,6 +210,9 @@ export interface ConnectMethod {
   locations(model: string): string[];
   // The test call: the smallest request that proves the connection.
   testRequest(model: string): ModelRequest;
+  // One short text prompt as the provider's own request, its reply capped at
+  // `maxTokens` tokens: Try it on Model for each task (models/try-task.ts).
+  promptRequest(prompt: string, maxTokens: number): ModelRequest;
   // The text of a passed test call's reply ("OK").
   replyText(body: unknown): string | undefined;
   // The plain reason for a failure, and its fix with the pages to open.

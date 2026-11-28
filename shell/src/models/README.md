@@ -238,6 +238,39 @@ on Model for each task; so does a task whose saved main model and fallback
 the provider both no longer offers, saying to choose another. Every query is
 scoped to the signed-in user.
 
+## Try it
+
+Each row with a saved model has **Try it** (`try-task.ts` `tryTask`,
+`POST /chief-of-staff/models/setup/tasks/try`, field `task`). It proves the
+pipeline every task's own calls will use, never a task's quality (the
+owner, 2026-11-28: "the pipeline that each task will eventually have to
+subscribe to and use is the one being tested"):
+
+- it reads the task's saved main model and fallback, and never writes them;
+  while the row has changes not saved it waits ("Save first"), since it
+  calls the saved models only;
+- it checks the month's budget at the main model's provider first: none
+  set, or spent, is refused with no request to the provider at all;
+- it sends the task's one short fixed sample prompt (`Task.sample` in
+  `tasks.ts`: made up, with no job data and nothing about the user) as the
+  provider's own request (`connect.promptRequest`), the reply capped at
+  `TRY_MAX_TOKENS`, through `callTask`, so the proxy routes it to the saved
+  model only, carries a router's price cap, retries a failed main call once
+  on the fallback (the main's row then reads Failed when used), and writes
+  one ledger row per call sent;
+- under the row, in place and with no reload, it shows the reply (a long
+  one collapsed after its start), the model that answered and whether it
+  was the main model or the fallback (a router's, with the model it picked),
+  the input, cached and output tokens, the cost, the call's time and the
+  month's spend after it, the same ledger figure as the budget bar and
+  Models › Usage. The tokens and cost are OpenRouter's own, from its reply
+  (`usage.prompt_tokens`, `prompt_tokens_details.cached_tokens`,
+  `completion_tokens` and `usage.cost`; `src/providers/openrouter.ts`
+  `usageFromReply`); one with no reported cost is marked "est.". The call's
+  OpenRouter ID, to find it on OpenRouter's Activity page, is under "What
+  this proves". Without scripts it posts, and the page comes back with the
+  result under the row.
+
 # Models › Usage (design-v3 10.1)
 
 `/chief-of-staff/models/usage` (`usage-page.ts`, figures in `usage.ts`) shows

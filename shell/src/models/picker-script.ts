@@ -19,8 +19,13 @@
 //   chosen in the same request, so the answer never drops a choice (a tap
 //   leaves those rows as chosen). Help carries none and saves nothing: its
 //   answer shows in the banner only, and the rows stay as they are.
+// - Try it sends its row's task alone, asking for JSON, and puts the answer
+//   under the row, in place: the button reads "Trying…" and is disabled while
+//   the call runs, and the rest of the page is left as it is. It waits while
+//   its row has changes not saved, since it calls the saved models only.
 // Without the script, the plain selects show, each row has its own Save, and
-// every form posts and redirects back.
+// every form posts and redirects back (Try it posts and gets the page back
+// with its result).
 
 export const PICKER_SCRIPT = String.raw`
 (function () {
@@ -84,6 +89,12 @@ export const PICKER_SCRIPT = String.raw`
       var s = row.querySelector('[data-pick][data-role="' + n.getAttribute("data-about") + '"]');
       n.hidden = !!s && selectOf(s).value !== (selectOf(s).getAttribute("data-orig") || "");
     });
+    // Try it calls the saved models only: it waits for the row's changes to be saved.
+    var tb = row.querySelector("[data-try]");
+    if (tb && !tb.hasAttribute("aria-busy")) {
+      tb.disabled = changed(row);
+      if (tb.disabled) tb.title = "Save first: Try it uses the saved models"; else tb.removeAttribute("title");
+    }
     var note = row.querySelector(".t-note");
     if (note) note.toggleAttribute("data-quiet", !Array.prototype.some.call(note.querySelectorAll("[data-about], .t-says span:not([data-about]), .t-act:not([data-about])"), function (c) { return !c.hidden; }));
     bar();
@@ -224,9 +235,40 @@ export const PICKER_SCRIPT = String.raw`
     if (sent && btn) { btn.disabled = true; btn.textContent = "Saving…"; }
   }
 
+  // ---------- Try it ----------
+  // The answer goes under its row, found again by its task once it comes
+  // back, in case the page's <main> was swapped meanwhile.
+  function tryIt(btn) {
+    if (btn.disabled || btn.hasAttribute("aria-busy")) return;
+    var id = rowOf(btn).getAttribute("data-task");
+    var body = new FormData();
+    body.append("task", id);
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.innerHTML = '<span class="spin" aria-hidden="true"></span>Trying…';
+    var out = $("try-" + id);
+    if (out) out.innerHTML = '<p class="tr-wait">Sending the sample prompt…</p>';
+    function put(html) { var o = $("try-" + id); if (o) o.innerHTML = html; }
+    fetch(btn.getAttribute("formaction"), { method: "POST", body: body, headers: { accept: "application/json" }, credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { put(j.tried || '<p class="tr-wait">No answer came back. Try again.</p>'); })
+      .catch(function () { put('<p class="tr-wait">Couldn\'t reach the app. Try again.</p>'); })
+      .then(function () {
+        var b = $("try-btn-" + id);
+        if (!b) return;
+        b.removeAttribute("aria-busy");
+        b.textContent = "Try it";
+        b.disabled = false;
+        var row = rowOf(b);
+        if (row) mark(row);
+      });
+  }
+
   // ---------- events ----------
   document.addEventListener("click", function (e) {
     var t = e.target;
+    var tb = t.closest("[data-try]");
+    if (tb && main.contains(tb)) { e.preventDefault(); tryIt(tb); return; }
     var btn = t.closest(".pick-btn");
     if (btn && main.contains(btn)) { var p = pickOf(btn); if (open === p) closePick(true); else openPick(p); return; }
     var o = t.closest('li[role="option"]');
