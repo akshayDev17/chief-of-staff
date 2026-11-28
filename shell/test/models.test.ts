@@ -346,6 +346,24 @@ describe("Test all models", () => {
     expect((await readTestAll(env.DB, userId, "openrouter"))!.tests.map((t) => [t.model, t.state])).toEqual([["test-luna", "passed"], ["test-mini", "passed"], ["test-sonnet", "queued"]]);
   });
 
+  it("stops counting a failed model the list dropped once a fresh Test all has no failures", async () => {
+    await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), refused(400), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
+    await runQueuedTests(env.DB, plugins(), NOW);
+    await writeSnapshot(env.DB, {
+      takenAt: "2026-11-27T10:05:00Z", status: "good", results: [],
+      catalog: { ...TEST_CATALOG, models: TEST_CATALOG.models.filter((m) => m.id !== "test-mini") },
+      rows: [row("test-luna", "input", 0.1), row("test-luna", "output", 0.5), row("test-sonnet", "input", 3), row("test-sonnet", "output", 15)],
+    });
+    expect((await planRetest(env.DB, plugins(), userId, "openrouter")).skipped).toBe(1);
+    const later = new Date("2026-11-27T10:20:00Z");
+    await startTestAll(env.DB, plugins(), userId, "openrouter", later);
+    plugin.replies.push(ok({ input: 9, output: 1 }, { model: "test-luna" }), ok({ input: 9, output: 1 }, { model: "test-sonnet" }));
+    await runQueuedTests(env.DB, plugins(), later);
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-mini")?.state).toBe("failed");
+    expect(await planRetest(env.DB, plugins(), userId, "openrouter")).toMatchObject({ models: [], skipped: 0, wait: NOTHING_FAILED });
+  });
+
   it("offers no Retest failed on a run made on an older model list", async () => {
     await startTestAll(env.DB, plugins(), userId, "openrouter", NOW);
     plugin.replies.push(refused(429), refused(429), refused(429));

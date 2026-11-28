@@ -327,8 +327,8 @@ export async function readTestAll(db: D1Database, userId: string, provider: Prov
 }
 
 // Retest failed: the models the strip counts as Doesn't work (failedModels),
-// their estimate, and how many failed models are no longer on the model
-// list. `wait` says why it cannot start now, if it cannot.
+// their estimate, and how many of the latest run's failed models are no
+// longer on the model list. `wait` says why it cannot start now, if it cannot.
 export interface RetestPlan {
   models: TestAllPlan["models"];
   estimateUsd: number;
@@ -346,7 +346,10 @@ export async function planRetest(db: D1Database, plugins: PluginRegistry, userId
   offers ??= await listOffer(db, plugins, userId, provider);
   const failed = new Set(failedModels(offers, shownTests(run, latest)));
   const listed = new Set(offers.map((r) => r.model));
-  const skipped = [...latest.values()].filter((l) => l.state === "failed" && !l.earlierKey && !listed.has(l.model)).length;
+  const skipped = (run?.tests ?? []).filter((t) => {
+    const l = latest.get(t.model);
+    return l?.state === "failed" && !l.earlierKey && !listed.has(t.model);
+  }).length;
   const models = estimateTests(offers.filter((r) => failed.has(r.model)), plugin, await measuredTestCosts(db, userId, provider));
   const plan = { models, estimateUsd: models.reduce((sum, m) => sum + m.estimateUsd, 0), skipped };
   let wait: string | undefined;
