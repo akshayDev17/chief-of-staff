@@ -11,7 +11,9 @@
 //   confirm, the cap editor, Cancel) is sent in place, asking for JSON: the
 //   server answers with the page's <main> rendered for that view, and only
 //   the parts that changed are swapped in. Requests go one at a time, in
-//   order; a button waiting shows it is busy.
+//   order; a button waiting shows it is busy. A request that fails (no
+//   answer, or an error status) reads the page again, so whatever the server
+//   saved shows, and says so with Try again, which sends it once more.
 // - Back from the provider's consent page (main is marked data-land), the
 //   search field takes focus once.
 // - An address with strength=<Smallest|Middle|Strongest> (and show=<ready|
@@ -23,6 +25,7 @@
 // back (page.ts), and every link is a plain address.
 
 import { MAKER_FILTER_JS } from "../models/maker-filter";
+import { ICON } from "./models-table";
 
 export const PAGE_SCRIPT = String.raw`
 (function () {
@@ -31,6 +34,7 @@ export const PAGE_SCRIPT = String.raw`
   if (!main || !window.fetch || !window.history) return;
   var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
+  var BAD = ${JSON.stringify(ICON.bad)};
   var STATES = ["ready", "credit", "step"];
   var NOUN = { ready: "ready", credit: "that need credit", step: "that need a step" };
   var TONE = { ready: "good", credit: "warn" };
@@ -163,9 +167,20 @@ export const PAGE_SCRIPT = String.raw`
     if (lbl) { lbl.textContent = label; if (ico) ico.innerHTML = SPIN; else lbl.insertAdjacentHTML("beforebegin", SPIN); }
     else b.innerHTML = SPIN + (label ? " " + esc(label) : "");
   }
-  function say(text) {
-    var box = main.querySelector('[data-part="err"]') || main.querySelector('[data-part="banner"]');
-    if (box) box.innerHTML = '<div class="err" role="alert"><div><p>' + esc(text) + "</p></div></div>";
+  // A request that failed: the page as the server has it now, then the
+  // failure, with Try again sending the same request.
+  function failed(job) {
+    S.retry = job;
+    fetch(location.pathname + "?" + S.view, { headers: { accept: "application/json" }, credentials: "same-origin" })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(function (j) { swap(j.main); }, function () { swap(null); })
+      .then(function () {
+        var box = main.querySelector('[data-part="err"]') || main.querySelector('[data-part="banner"]');
+        if (!box) return;
+        box.innerHTML = '<div class="err" role="alert">' + BAD + '<div><p>Couldn&#39;t reach the app just now.</p><div class="acts"><button type="button" class="btn small outline" data-retry data-k="retry">Try again</button></div></div></div>';
+        delete S.last[box.getAttribute("data-part")];
+      })
+      .then(next);
   }
   // opens: a view link, whose answer may open a confirm or an editor: focus
   // goes to what it marks data-autofocus.
@@ -190,12 +205,10 @@ export const PAGE_SCRIPT = String.raw`
         if (typeof j.view === "string") S.view = j.view;
         swap(j.main, j.focus, job.opens);
       })
-      .catch(function () {
+      .then(next, function () {
         if (job.k) delete S.waiting[job.k];
-        swap(null);
-        say("Couldn't reach the app just now. Try again.");
-      })
-      .then(next);
+        failed(job);
+      });
   }
 
   // ---------- swapping the parts that changed ----------
@@ -279,6 +292,7 @@ export const PAGE_SCRIPT = String.raw`
     }
     var allow = t.closest("a[data-allow]");
     if (allow) { var id = allow.getAttribute("data-allow"); S.allowed[id] = true; setTimeout(function () { showCheck(id); var f = main.querySelector('form[data-check-for="' + cssq(id) + '"] button'); if (f) f.focus({ preventScroll: true }); }, 0); return; }
+    if (t.closest("[data-retry]")) { var again = S.retry; S.retry = null; if (again) send(again.url, again.init, again.k, again.opens); return; }
     var hide = t.closest("[data-hide]");
     if (hide) {
       var more = hide.closest(".more"), gone = hide.getAttribute("data-hide");

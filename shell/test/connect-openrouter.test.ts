@@ -80,12 +80,15 @@ const rowOf = (html: string, model: string) => html.match(new RegExp(`<li class=
 const PATH = new URL(BASE).pathname;
 // The page as the browser has it, its own script running: every request it
 // sends is recorded and answered by the app at `now`; `settle` waits for the
-// answer to be swapped in.
+// answers to be swapped in. `failNextPost`: the next form's request runs on
+// the app, which saves what it does, but its answer is a 503, as when the
+// Worker runs past its limits.
 async function inPlace(now: Date) {
   const html = await (await get()).text();
   const doc = documentOf(html);
   const sent: Sent = [];
   let answered: Promise<unknown> = Promise.resolve();
+  let failing = false;
   runScript(pageScripts(html), doc, `${BASE}?provider=openrouter`, sent, {
     window: { addEventListener: () => {}, fetch: () => {}, history: {} },
     // The browser's FormData of a stand-in form: its named inputs.
@@ -96,16 +99,26 @@ async function inPlace(now: Date) {
       }
     },
     fetch: (url, init) => {
-      const answer = handle(new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }), { now });
+      const post = init?.method === "POST";
+      const answer = handle(new Request(`${ORIGIN}${url}`, { method: init?.method, body: init?.body as FormData, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }), { now }).then((r) => {
+        if (!post || !failing) return r;
+        failing = false;
+        return new Response("Worker exceeded resource limits", { status: 503 });
+      });
       answered = answer;
       return answer;
     },
   });
   const settle = async () => {
-    await answered;
-    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    let seen: Promise<unknown>;
+    do {
+      seen = answered;
+      await seen;
+      for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    } while (seen !== answered);
   };
-  return { doc, sent, settle };
+  const failNextPost = () => { failing = true; };
+  return { doc, sent, settle, failNextPost };
 }
 
 // Connect, then come back from OpenRouter's page as it would send the user.
@@ -330,10 +343,10 @@ describe("Connect OpenRouter", () => {
     expect(checked.focus).toBe("t-anthropic/claude-sonnet-5.5");
   });
 
-  it("redraws Refresh in place: the read stamp, the rows and the strip change with no reload", async () => {
+  it("shows what Refresh saved even when its answer fails: the read stamp, the rows and the strip, with no reload, and Try again", async () => {
     await connect();
     const later = new Date("2026-11-27T10:05:00Z");
-    const { doc, sent, settle } = await inPlace(later);
+    const { doc, sent, settle, failNextPost } = await inPlace(later);
     const stamp = () => doc.querySelector('[data-part="head"] .src')!.textContent;
     const stateOf = (model: string) => doc.querySelector(`li.row[data-id="${model}"]`)!.getAttribute("data-state");
     const cells = () => ["ready", "credit", "step"].map((k) => Number(doc.querySelector(`.cell[data-filter="${k}"] .v`)!.textContent));
@@ -342,14 +355,27 @@ describe("Connect OpenRouter", () => {
     const before = cells();
     // The owner's settings on OpenRouter now leave out GPT-6 Luna too.
     fetcher = fakeFetch({ userModels: () => Response.json({ data: MODELS.data.filter((m) => m.id !== "anthropic/claude-sonnet-5.5" && m.id !== "openai/gpt-6-luna") }) });
+    // The app reads and saves both lists, then its answer fails.
+    failNextPost();
     doc.fire("submit", doc.querySelector('[data-part="head"] form')!);
     await settle();
-    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`]);
+    // The page reads itself again, in place, and shows what was saved.
+    expect(sent).toEqual([`fetch ${PATH}/openrouter/refresh`, `fetch ${PATH}?provider=openrouter`]);
     expect(stamp()).toContain("10:05 UTC");
     expect(stateOf("openai/gpt-6-luna")).toBe("step");
     expect(doc.querySelector('li.row[data-id="openai/gpt-6-luna"] .meta')!.textContent).toContain("Your OpenRouter settings leave it out");
     expect(cells()).toEqual([before[0]! - 1, before[1]!, before[2]! + 1]);
     expect(doc.querySelector("[data-ends]")!.textContent).toBe(`${before.reduce((a, b) => a + b, 0)} models`);
+    const refresh = doc.querySelector('[data-part="head"] button[data-k="refresh"]')!;
+    expect([refresh.disabled, refresh.textContent]).toEqual([false, "Refresh"]);
+    // It says the request failed, with Try again, which sends the same request once more.
+    const err = doc.querySelector('[data-part="err"]')!;
+    expect(err.textContent).toContain("Couldn't reach the app just now.");
+    doc.fire("click", err.querySelector("[data-retry]")!);
+    await settle();
+    expect(sent.at(-1)).toBe(`fetch ${PATH}/openrouter/refresh`);
+    expect(sent).toHaveLength(3);
+    expect(doc.querySelector('[data-part="err"]')!.textContent).not.toContain("Couldn't reach the app");
   });
 
   it("gives Refresh back once its answer is in, even when the list it shows has not changed", async () => {
