@@ -93,8 +93,11 @@ router at the user's price cap on it), and the design's tokens per
 application (`TOKENS_PER_APPLICATION` in `budgets.ts`, from design-v3 12.2)
 at the applications a day the user plans (5 until they type another; the
 page works the figure out again as it is typed, with no request), marked
-"estimate" with the date its prices were read. The user sets it with one tap
-or types their own, and may change it later. Each happens in place (the
+"estimate" with the date its prices were read. When that dearest model is
+free, every model it was chosen among is, so the suggestion is instead the
+floor: $1, the least budget that switches calls on, marked "floor", with no
+volume field and no date. The user sets it with one tap or types their own,
+and may change it later. Each happens in place (the
 page's script posts with `Accept: application/json` and swaps in the page's
 `<main>`); without the script the form posts and redirects back, with any
 problem in a flash cookie.
