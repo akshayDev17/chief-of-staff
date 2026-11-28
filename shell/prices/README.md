@@ -31,8 +31,8 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   On 2026-11-27 the API listed 477 models, 434 of them choosable.
 - **Refresh.** Cron `0 6 * * *`, and Refresh model list on the Connect screen
   (at most once a minute); a second Cron Trigger, `* * * * *`, runs the
-  background host read (below), which does nothing when no hosts wait. Each stores a dated snapshot; the newest 14 are
-  kept. A failed read keeps the last good rows with their own date read,
+  background host read (below), which does nothing when no hosts wait. Each
+  stores a dated snapshot; the newest 14 are kept. A failed read keeps the last good rows with their own date read,
   marked stale, and the last model list, and raises a refresh-failed alert. A
   read that answers stores what OpenRouter lists: a model no longer listed has
   no price yet, and the page shows how many rows were added and dropped against
@@ -64,8 +64,9 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   free model is Smallest; a router's figure is the same blend of its cap. The
   figures are stored beside each snapshot (`model_price_figures`,
   `migrations/0016_add_strength_figures.sql`) and each month's lines in
-  `strength_lines`, worked out at the month's first daily refresh (or the
-  first refresh of all). Every reader goes through `src/prices/strength.ts`;
+  `strength_lines`, worked out at the month's first daily refresh (before
+  any month has them, at the first refresh that leaves no hosts waiting, or
+  by the background read's last batch). Every reader goes through `src/prices/strength.ts`;
   a snapshot with no figures takes its headline prices until the background
   host read stores them.
 - **Host reads.** The daily refresh reads every tiered model's endpoints list,
@@ -79,8 +80,8 @@ rows, `model_price_rows`, and OpenRouter's model list, `openrouter_catalogs`).
   (one a previous Worker wrote), it takes them under a 15-minute lease, reads
   at most `HOST_READS_PER_RUN` (60) endpoints lists and stores those figures
   beside the same snapshot; the run that tries the last draws the first lines
-  when no month has them. About 290 take five minutes. While hosts wait, Providers, Model for each task
-  and the price table say so; Providers shows the count read and redraws in
+  when no month has them. About 290 take five minutes. While hosts wait,
+  Providers, Model for each task and the price table say so; Providers shows the count read and redraws in
   place when they land. A list that cannot be read gives the model its
   headline price.
 - **Admin · Price table** is at `GET /chief-of-staff/admin/price-table`, owner
