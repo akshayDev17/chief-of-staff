@@ -26,7 +26,7 @@ import {
   type Host,
   type Lines,
 } from "../src/prices/tiers";
-import { modelParts, priceText } from "../src/providers/models-table";
+import { modelParts, priceText, usd } from "../src/providers/models-table";
 import { savePriceCap } from "../src/models/price-caps";
 import { setBudget } from "../src/proxy/budgets";
 import { writeConnection } from "../src/proxy/connections";
@@ -414,5 +414,15 @@ describe("a row's price", () => {
     expect(priceText({ input: 0.1, output: 0.5 })).toBe("$0.10 / $0.50");
     expect(priceText({ input: 0.07, output: 1.4 }, { input: { min: 0.07, max: 1.2 }, output: { min: 1.4, max: 4.4 } })).toBe("$0.07–$1.20 in · $1.40–$4.40 out");
     expect(priceText({ input: 1, output: 2 }, { input: { min: 1, max: 1 }, output: { min: 1.5, max: 2 } })).toBe("$1.00 in · $1.50–$2.00 out");
+  });
+
+  it("rounds a range like every other price: at most four significant figures, never fewer than the cents, no trailing zeros", () => {
+    // DeepSeek V4 Pro 0813 on the live walk, 2026-11-28: "$1.97604–$5.00 out".
+    expect(priceText({ input: 0.0999, output: 5 }, { input: { min: 0.0999, max: 1.65 }, output: { min: 1.97604, max: 5 } })).toBe("$0.0999–$1.65 in · $1.976–$5.00 out");
+    expect([1.97604, 0.125, 2, 0.0699, 0.1, 0.029, 1.4, 123.45, 0.000123456, 0].map(usd)).toEqual([
+      "$1.976", "$0.125", "$2.00", "$0.0699", "$0.10", "$0.029", "$1.40", "$123.45", "$0.0001235", "$0.00",
+    ]);
+    // The single prices the rows show keep their form.
+    expect(priceText({ input: 0.0699, output: 1.4 })).toBe("$0.0699 / $1.40");
   });
 });

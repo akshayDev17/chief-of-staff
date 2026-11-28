@@ -18,16 +18,26 @@
 // daily refresh reads every model's (a Cron Trigger has 15 minutes and, on
 // Workers Paid, 10,000 subrequests,
 // https://developers.cloudflare.com/workers/platform/limits/, read
-// 2026-11-28). Refresh model list, which the user waits on, reads only the
+// 2026-11-28). Refresh model list, which the user waits on, needs only the
 // models that are new, whose headline price changed or whose hosts were last
-// not read; every other model keeps its last figure. A list that cannot be
-// read gives the model its headline price. The daily refresh also works out the
-// month's lines, once, at the month's first good read; a refresh before any
-// month has lines works them out then, and none ever replaces a month's.
+// not read; every other model keeps its last figure. It reads them while the
+// user waits only when they are at most HOST_READS_NOW; with more (the first
+// Refresh after a release, when no figure is stored yet), it reads none, stores
+// those models at their headline price, and leaves their hosts to the
+// background read (src/prices/host-reads.ts), a Cron Trigger that reads a
+// fixed batch of them each minute and stores their figures beside this same
+// snapshot. A Refresh never reads
+// hundreds of lists inside one request: at the live walk's pace (2026-11-28)
+// that ran past a minute, and Cloudflare's proxy ends a request at 100 s.
+// A list that cannot be read gives the model its headline price. The daily
+// refresh also works out the month's lines, once, at the month's first good
+// read; a refresh before any month has lines works them out then, unless
+// hosts are left waiting (the lines are drawn from host figures, and the
+// background read draws them), and none ever replaces a month's.
 
-import { readAllHosts, readOpenRouter } from "./openrouter";
+import { HOST_READS_AT_ONCE, readAllHosts, readOpenRouter } from "./openrouter";
 import { headlineFigure, headlineFigures, headlinePrices, linesOver, strengthKey, tieredModels } from "./strength";
-import { addAlert, currentSnapshot, readFigures, readLatestLines, readSnapshotRows, readStoredCatalog, writeSnapshot, type StoredFigure } from "./store";
+import { addAlert, currentSnapshot, readFigures, readHostReads, readLatestLines, readSnapshotRows, readStoredCatalog, writeSnapshot, type StoredFigure } from "./store";
 import { figureOf, type Lines } from "./tiers";
 import { rowKey, type PriceRow, type SourceId, type SourceResult } from "./types";
 
@@ -57,25 +67,34 @@ export function mergeRows(rows: PriceRow[]): { rows: PriceRow[]; disagreements: 
   return { rows: [...byKey.values()], disagreements };
 }
 
+// The most endpoints lists Refresh model list reads while the user waits:
+// five rounds of HOST_READS_AT_ONCE, a few seconds even at the live walk's
+// pace, against the minute and more of about 280.
+export const HOST_READS_NOW = 5 * HOST_READS_AT_ONCE;
+
 export interface RefreshInput {
   db: D1Database;
   fetcher: typeof fetch;
   now: Date;
   // The daily refresh (the Cron Trigger), not Refresh model list.
   daily?: boolean;
+  // Refresh model list: the most endpoints lists to read now (HOST_READS_NOW).
+  // With more needed, none is read, and they are left for the background read.
+  hostReadsNow?: number;
   // The pause before a busy endpoints list is read again.
   hostRetryPauseMs?: number;
 }
 
-// The figures for a snapshot of `rows` (src/prices/strength.ts). `previous`:
-// the last snapshot's figures; `before`: its headline prices.
+// The figures for a snapshot of `rows` (src/prices/strength.ts), and how
+// many models' hosts are left for the background read. `previous`: the last
+// snapshot's figures; `before`: its headline prices.
 async function figuresFor(
   input: RefreshInput,
   rows: PriceRow[],
   catalog: Parameters<typeof tieredModels>[1],
   previous: Map<string, StoredFigure>,
   before: Map<string, { input: number; output: number }>,
-): Promise<StoredFigure[]> {
+): Promise<{ figures: StoredFigure[]; waiting: number }> {
   const readAt = input.now.toISOString();
   const targets = tieredModels(rows, catalog);
   const kept = (t: (typeof targets)[number]): StoredFigure | undefined => {
@@ -85,16 +104,22 @@ async function figuresFor(
     const holds = b !== undefined && b.input === t.headline.input && b.output === t.headline.output;
     return p && p.basis !== "unread" && holds ? p : undefined;
   };
-  const toRead = targets.filter((t) => !t.free && !kept(t));
+  const needed = targets.filter((t) => !t.free && !kept(t));
+  const waiting = input.hostReadsNow !== undefined && needed.length > input.hostReadsNow ? needed.length : 0;
+  const toRead = waiting ? [] : needed;
   const hosts = await readAllHosts(input.fetcher, toRead.map((t) => t.model), input.hostRetryPauseMs);
-  return targets.map((t) => {
+  const figures = targets.map((t) => {
     if (t.free) return headlineFigure(t, readAt);
     const k = kept(t);
     if (k) return k;
     const read = hosts.get(t.model);
     return read ? { provider: t.provider, model: t.model, free: false, ...figureOf(read, t.headline, readAt) } : headlineFigure(t, readAt);
   });
+  return { figures, waiting };
 }
+
+// Figures with the paid ones still at the headline counted as waiting.
+const withWaiting = (figures: StoredFigure[]): { figures: StoredFigure[]; waiting: number } => ({ figures, waiting: figures.filter((f) => !f.free && f.basis === "unread").length });
 
 export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: number; results: SourceResult[] }> {
   const { db, fetcher, now } = input;
@@ -133,12 +158,19 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
   const catalog = catalogRead ?? (last ? await readStoredCatalog(db, last.id) : undefined);
   // A failed read keeps the last snapshot's figures with its rows.
   const previous = last ? await readFigures(db, last.id) : [];
-  const figures = read.ok
+  // A failed read keeps whatever of them still waited for its hosts waiting;
+  // with no figures to keep (a snapshot the previous Worker wrote), every
+  // paid model's hosts wait.
+  const lastReads = last && !read.ok ? await readHostReads(db, last.id) : undefined;
+  const lastWaits = lastReads !== undefined && lastReads.finishedAt === undefined;
+  const { figures, waiting } = read.ok
     ? await figuresFor(input, merged.rows, catalog, new Map(previous.map((f) => [strengthKey(f), f])), headlinePrices(lastRows))
-    : previous.length ? previous : headlineFigures(merged.rows, catalog, now.toISOString());
+    : previous.length
+      ? lastWaits ? withWaiting(previous) : { figures: previous, waiting: 0 }
+      : withWaiting(headlineFigures(merged.rows, catalog, now.toISOString()));
   const latestLines = await readLatestLines(db);
   const lines: Lines | undefined =
-    read.ok && (!latestLines || (input.daily && latestLines.month < now.toISOString().slice(0, 7))) ? linesOver(figures, now) : undefined;
+    read.ok && !waiting && (!latestLines || (input.daily && latestLines.month < now.toISOString().slice(0, 7))) ? linesOver(figures, now) : undefined;
   let snapshotId: number;
   try {
     snapshotId = await writeSnapshot(db, {
@@ -149,6 +181,7 @@ export async function refreshPrices(input: RefreshInput): Promise<{ snapshotId: 
       catalog,
       figures,
       ...(lines ? { lines } : {}),
+      ...(waiting ? { hostsWaiting: waiting } : {}),
     });
   } catch (error) {
     const detail = `could not store the snapshot, the previous one stays current: ${error instanceof Error ? error.message : String(error)}`;

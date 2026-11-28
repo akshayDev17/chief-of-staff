@@ -21,6 +21,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM model_test_runs"),
     env.DB.prepare("DELETE FROM provider_model_lists"),
     env.DB.prepare("DELETE FROM task_routes"),
+    env.DB.prepare("DELETE FROM price_host_reads"),
     env.DB.prepare("DELETE FROM model_price_figures"),
     env.DB.prepare("DELETE FROM strength_lines"),
     env.DB.prepare("DELETE FROM model_price_rows"),

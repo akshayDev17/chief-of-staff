@@ -39,6 +39,7 @@ import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { esc } from "../prices/page";
 import type { Dropped } from "../prices/openrouter";
 import { makerKey, makerRowAttrs, nameMakers } from "../models/maker-filter";
+import type { HostsWaiting } from "../prices/host-reads";
 import { strengthChip, strengthSentence, type Lines, type Range } from "../prices/tiers";
 import { DEFAULT_CAP } from "../models/price-caps";
 import { blockedReason, blockKind, MODEL_HELP_REASONS, refusalFix, refusalText, type Refused, type TestRefusal } from "../models/test-model";
@@ -145,6 +146,9 @@ export interface ModelsTableInput {
   problem?: { text: string; details?: string };
   // The strength lines the rows' chips go by (prices/tiers.ts).
   lines?: Lines;
+  // Hosts the rows' figures still wait for (prices/host-reads.ts): until
+  // they land, those rows' strengths are from their headline price.
+  hosts?: HostsWaiting;
   now: Date;
 }
 
@@ -157,10 +161,13 @@ const hhmm = (iso: string): string => `${iso.slice(11, 16)} UTC`;
 const stamp = (iso: string, now: Date): string => (iso.slice(0, 10) === now.toISOString().slice(0, 10) ? hhmm(iso) : `${hhmm(iso)} on ${iso.slice(0, 10)}`);
 export const rowAnchor = (model: string): string => `m-${model.replace(/[^A-Za-z0-9]+/g, "-")}`;
 
-// Exact to the vendor's precision, at least two decimals: $0.125, $2.00.
+// Every price on the page: at most four significant figures, never fewer
+// than the cents, and no zeros after them: $0.125, $2.00, $0.0699, $1.976
+// (a host's $1.97604), $123.45.
 export const usd = (n: number): string => {
-  const [whole, frac = ""] = String(Number(n.toPrecision(12))).split(".");
-  return `$${whole}.${frac.padEnd(2, "0")}`;
+  const places = n > 0 ? Math.max(2, 3 - Math.floor(Math.log10(n))) : 2;
+  const [whole, frac = ""] = n.toFixed(places).split(".");
+  return `$${whole}.${frac.replace(/0+$/, "").padEnd(2, "0")}`;
 };
 
 // A model's price per million tokens as its row shows it: input / output,
@@ -328,17 +335,28 @@ function headPart(input: ModelsTableInput): string {
   return `<div class="src"><span><span class="w">From ${short}, read</span><span class="n">Read</span> ${read}</span> · ${refreshForm(input, "Refresh", "link", "refresh")}</div><p class="unit">In / out per M tokens</p>`;
 }
 
-// A problem from the last request; and a list stored under older rules,
-// which waits for a fresh read: the next step.
+// Hosts the rows' figures still wait for, read in the background
+// (prices/host-reads.ts): the page says so, and its script reads the page
+// again in place until they land (data-reading).
+function readingNote(input: ModelsTableInput): string {
+  const h = input.hosts;
+  if (!h) return "";
+  const count = h.started && h.waiting ? `: <span class="num">${h.done}</span> of <span class="num">${h.waiting}</span>` : "";
+  return `<div class="reading" role="status" data-reading><span class="spin" aria-hidden="true"></span><p>Reading each model's hosts on ${esc(input.plugin.connect.guide.short)}${count}. Strengths may change.</p></div>`;
+}
+
+// A problem from the last request; a list stored under older rules, which
+// waits for a fresh read: the next step; and hosts still being read.
 function errPart(input: ModelsTableInput): string {
   const p = input.problem;
   const short = esc(input.plugin.connect.guide.short);
   const stale = input.catalog && !input.catalog.current
     ? `<div class="stale" role="status"><p>This list follows older rules. Read ${short}'s list again.</p>${refreshForm(input, "Refresh model list", `btn ${primaryIf(input, "refresh")} small`, "refresh-list")}</div>`
     : "";
-  if (!p) return stale;
+  const reading = readingNote(input);
+  if (!p) return stale + reading;
   const details = p.details ? `<details><summary>Details</summary><p class="small">${esc(p.details)}</p></details>` : "";
-  return `<div class="err" role="alert">${ICON.bad}<div><p>${esc(p.text)}</p>${details}</div></div>${stale}`;
+  return `<div class="err" role="alert">${ICON.bad}<div><p>${esc(p.text)}</p>${details}</div></div>${stale}${reading}`;
 }
 
 // ---------- the rows ----------

@@ -1,4 +1,5 @@
 import { parseSort, renderPriceTablePage } from "./prices/page";
+import { readHostsWaiting, readWaitingHosts } from "./prices/host-reads";
 import { refreshPrices } from "./prices/refresh";
 import { readStrength } from "./prices/strength";
 import { currentSnapshot, readSnapshotRows, readStoredCatalog, recentAlerts } from "./prices/store";
@@ -25,6 +26,10 @@ export interface Env extends ProvidersEnv {
   ACCESS_AUD?: string;
   DB: D1Database;
 }
+
+// The Cron Triggers in wrangler.jsonc: 06:00 UTC daily, and every minute.
+export const DAILY_CRON = "0 6 * * *";
+export const HOST_READ_CRON = "* * * * *";
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -108,14 +113,23 @@ export default {
         alerts: await recentAlerts(env.DB),
         sort: parseSort(url.searchParams),
         strength: await readStrength(env.DB, snapshot, { rows, ...(catalog ? { catalog } : {}) }),
+        hosts: await readHostsWaiting(env.DB),
       });
       return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     return json({ error: "not found" }, 404);
   },
 
+  // Two Cron Triggers (wrangler.jsonc): the daily refresh, and every minute
+  // one batch of any hosts the current snapshot's figures still wait for
+  // (src/prices/host-reads.ts), which reads once and does nothing when none wait.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = new Date(controller.scheduledTime);
+    if (controller.cron === HOST_READ_CRON) {
+      const batch = await readWaitingHosts({ db: env.DB, fetcher: fetch, now });
+      if (batch) console.log(`host read: ${JSON.stringify(batch)}`);
+      return;
+    }
     const { results } = await refreshPrices({ db: env.DB, fetcher: fetch, now, daily: true });
     console.log(`price refresh: ${JSON.stringify(results)}`);
   },

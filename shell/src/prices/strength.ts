@@ -8,8 +8,9 @@
 //   strengthTier(strength, m) -> Tier | undefined            one model's tier, from them
 //   readModelStrength(db, m) -> { tier?, figure? }           one model's, read on its own (the proxy)
 //
-// A snapshot the previous Worker wrote has no figures: until the next
-// refresh stores them, its models' figures are their headline prices, the
+// A snapshot the previous Worker wrote has no figures: until the background
+// host read (host-reads.ts, a batch a minute) or another refresh stores
+// them, its models' figures are their headline prices, the
 // rule's own fallback, and the lines, before any month has them, are drawn
 // from those figures. Nothing else ever tiers a model.
 

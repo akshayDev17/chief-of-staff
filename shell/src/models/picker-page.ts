@@ -65,6 +65,7 @@
 // page comes back with the result under the row.
 
 import { esc } from "../prices/page";
+import { readHostsWaiting } from "../prices/host-reads";
 import { readLinesInForce } from "../prices/strength";
 import { strengthSentence, type Lines, type Tier } from "../prices/tiers";
 import type { Provider } from "../prices/types";
@@ -131,6 +132,9 @@ export interface PickerPageInput {
   toReady?: ToReady;
   // The strength lines in force (prices/tiers.ts), for How it works.
   lines?: Lines;
+  // Each model's hosts are still being read (prices/host-reads.ts): the
+  // strengths, and so the lists, may still change.
+  hostsReading?: boolean;
   problem?: string;
   said?: string;
   // A Try it's result, shown under its task's row.
@@ -480,6 +484,7 @@ ${tabsLine()}
 <div data-part="banner">${banner}</div>
 <section class="block" aria-labelledby="h-tasks">
 <div class="block-head"><h2 id="h-tasks">Model for each task</h2><p class="sub">${esc(finding(input))}</p>${accept ? `<div class="head-act">${accept}</div>` : ""}</div>
+${input.hostsReading ? `<div class="reading tasks-reading" role="status"><span class="spin" aria-hidden="true"></span><p>Reading each model's hosts on ${esc(input.providerName(PROVIDERS[0]!))}. Strengths and lists may change.</p></div>` : ""}
 ${freeTap(input, free && !pending)}
 <div class="panel">
 <div class="tasks-head" aria-hidden="true"><span>Task</span><span>Main model</span><span>Fallback</span><span></span></div>
@@ -574,6 +579,7 @@ html:not(.js) .t-note { display: flex; }
 .tasks-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px var(--card-pad) 16px; border-top: 1px solid var(--border); }
 .tasks-foot details { font-size: var(--fs-small); color: var(--muted); }
 .tasks-foot details ul { margin-top: 8px; padding-left: 18px; list-style: disc; display: grid; gap: 4px; max-width: 70ch; }
+.tasks-reading { margin: 0 0 16px; }
 .free-tap { margin: 0 0 16px; display: grid; gap: 10px; }
 .free-tap form { display: block; }
 .free-tap details ul { margin-top: 6px; padding-left: 18px; list-style: disc; }
@@ -684,8 +690,8 @@ export async function handleTaskModels(
     const credits = (p: Provider) => plugins[p]?.connect.guide.credits;
     // Only a strength with fewer than two Ready models links to what makes more Ready.
     const short = TASKS.some((t) => offeredFor(t, offered).length < 2);
-    const [nameOf, toReady, lines] = await Promise.all([readModelNames(db), short ? readToReady(db, plugins, userId) : undefined, readLinesInForce(db)]);
-    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, credits, nameOf, toReady, ...(lines ? { lines } : {}), ...flash };
+    const [nameOf, toReady, lines, hosts] = await Promise.all([readModelNames(db), short ? readToReady(db, plugins, userId) : undefined, readLinesInForce(db), readHostsWaiting(db)]);
+    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, credits, nameOf, toReady, ...(lines ? { lines } : {}), ...(hosts ? { hostsReading: true } : {}), ...flash };
   };
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
   // After an action: in place, the page's <main> with what it said; without

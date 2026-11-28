@@ -92,12 +92,17 @@ strength's models (in that state), as Model for each task links a strength
 with no Ready model; the count line names it, with Show all. None of these
 sends a request. Each row shows the model's name and maker, its input and
 output list price per million tokens (each side's range where its standard
-tool hosts' prices differ), its strength (Smallest, Middle, Strongest) from
+tool hosts' prices differ; every price at most four significant figures,
+never fewer than the cents), its strength (Smallest, Middle, Strongest) from
 its typical price, input and output blended 10:1 at its middle host, against
 the month's two lines (`prices/tiers.ts`; the sentence under the table states
 them), a Free label on a free model and "Other fees"
 on one at $0 a token that is not free, Needs credit or Failed when used
-where it is so, and **Test**. Test is optional: it runs the model's own test
+where it is so, and **Test**. While each model's hosts are still being read
+in the background (`prices/host-reads.ts`), a line above the strip says so
+with the count read, and the page reads itself again every few seconds,
+keeping the provider card, until they land and the rows redraw in place.
+Test is optional: it runs the model's own test
 call once through the proxy (`sendTestCall`, task `test_call`), capped at 16
 reply tokens, and the result opens under the row. The call passes when it
 answers and its reply names that model (`namesPickedModel`: the same ID, or

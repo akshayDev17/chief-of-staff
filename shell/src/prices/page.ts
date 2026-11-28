@@ -11,6 +11,7 @@
 
 import { SOURCES } from "./sources";
 import type { Snapshot } from "./store";
+import type { HostsWaiting } from "./host-reads";
 import { strengthTier, type Strength } from "./strength";
 import { strengthSentence } from "./tiers";
 import type { PriceRow, Provider } from "./types";
@@ -157,6 +158,9 @@ export interface PageInput {
   sort: { column: SortColumn; dir: SortDir };
   // The current snapshot's strength figures and lines (strength.ts).
   strength: Strength;
+  // Hosts its figures still wait for (host-reads.ts): those models'
+  // strengths are from their headline price until they land.
+  hosts?: HostsWaiting;
 }
 
 function refreshBanner(snapshot: Snapshot | undefined): string {
@@ -214,7 +218,7 @@ export function renderPriceTablePage(input: PageInput): string {
 <main class="screen">
 <h1>Admin</h1>
 <h2>Price table</h2>
-${refreshBanner(input.snapshot)}
+${refreshBanner(input.snapshot)}${input.hosts ? `<div class="banner" role="status">Reading each model's hosts on OpenRouter${input.hosts.started && input.hosts.waiting ? ` (${input.hosts.done} of ${input.hosts.waiting})` : ""}. Strengths may change.</div>` : ""}
 <form class="sort-by" method="get">
 <label class="small" for="price-sort">Sort by</label>
 <select id="price-sort" name="sort">${options}</select>

@@ -53,7 +53,8 @@ import { isVerdict, MODEL_HELP_REASONS, PRECHECK_REFUSALS, refusalFix, refusalTe
 import { BUDGETS_PATH, PROVIDERS_PATH } from "../paths";
 import { isCurrentCatalog } from "../prices/openrouter";
 import { esc, nbDate } from "../prices/page";
-import { refreshPrices } from "../prices/refresh";
+import { readHostsWaiting } from "../prices/host-reads";
+import { HOST_READS_NOW, refreshPrices } from "../prices/refresh";
 import { currentSnapshot, readCurrentCatalog } from "../prices/store";
 import { isProvider, PROVIDERS, type Provider } from "../prices/types";
 import { readBudget } from "../proxy/budgets";
@@ -258,7 +259,7 @@ export async function readPageState(
   if (connection && connected) {
     // The live read first: its credit figure is the one the rows' Ready rule takes.
     if (!state.keepCard) state.account = (await readAccountLive(db, plugin, userId)) ?? "unread";
-    const [{ rows, lines }, catalog] = await Promise.all([readTable(db, plugins, userId, provider), readCurrentCatalog(db)]);
+    const [{ rows, lines }, catalog, hosts] = await Promise.all([readTable(db, plugins, userId, provider), readCurrentCatalog(db), readHostsWaiting(db)]);
     state.ready = rows.filter((r) => r.state === "ready").length;
     // A failed result under a row names the tasks that fall to their fallback.
     const failed = (view.results ?? []).filter((res) => rows.find((r) => r.model === res.model)?.latest?.state === "failed");
@@ -274,6 +275,7 @@ export async function readPageState(
       view,
       problem: flash.problem ? { text: flash.problem, details: flash.details } : undefined,
       ...(lines ? { lines } : {}),
+      ...(hosts ? { hosts } : {}),
       now,
     };
     state.step = nextStep({ connected: true, view, catalogCurrent });
@@ -368,13 +370,15 @@ export async function handleProviders(
     return new Response(null, { status: 303, headers });
   };
   // The price table and the provider's model list, read now when there is
-  // none yet or it is over a minute old.
+  // none yet or it is over a minute old. Only a few models' hosts are read
+  // while the user waits; more are left to the background read
+  // (prices/refresh.ts HOST_READS_NOW, prices/host-reads.ts).
   const refreshCatalog = async (force: boolean): Promise<void> => {
     const snapshot = await currentSnapshot(db);
     const catalog = await readCurrentCatalog(db);
     if (!force && catalog) return;
     if (snapshot && catalog && now.getTime() - Date.parse(snapshot.takenAt) < REFRESH_GAP_MS) return;
-    await refreshPrices({ db, fetcher: input.fetcher ?? fetch, now });
+    await refreshPrices({ db, fetcher: input.fetcher ?? fetch, now, hostReadsNow: HOST_READS_NOW });
     plugins = await input.readPlugins();
   };
 
@@ -383,9 +387,10 @@ export async function handleProviders(
     const asked = url.searchParams.get("provider") ?? "";
     const provider = registered.find((p) => p === asked) ?? registered[0]!;
     const flash = wantsJson ? undefined : readFlash(request);
-    // Every visit, and every view, reads the account line live.
+    // Every visit, and every view, reads the account line live; the page's
+    // own read while hosts are being read (x-cos-poll) keeps its card.
     const view = parseView(url.searchParams);
-    return show(provider, view, flash ?? {}, { clearFlash: flash !== undefined });
+    return show(provider, view, flash ?? {}, { clearFlash: flash !== undefined, keepCard: request.headers.get("x-cos-poll") === "1" });
   }
   if (!isProvider(providerPart ?? "") || !plugins[providerPart as Provider]) return new Response(null, { status: 404 });
   const provider = providerPart as Provider;
