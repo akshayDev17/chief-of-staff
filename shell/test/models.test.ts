@@ -671,4 +671,32 @@ describe("the model for each task", () => {
     const foreign = await handleTaskModels(new Request(`${ORIGIN}${TASK_MODELS_PATH}/change`, { method: "POST", headers: { origin: "https://evil.example" }, body: new URLSearchParams([["task", "match"]]) }), { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW });
     expect(foreign.status).toBe(403);
   });
+
+  it("saves the rows changed and not saved with a tap, as the user chose them, all or none, and taps only the others", async () => {
+    await passAll("test-luna", "test-mini");
+    const post = (verb: string, fields: Array<[string, string]>, json: boolean) =>
+      handleTaskModels(
+        new Request(`${ORIGIN}${TASK_MODELS_PATH}/${verb}`, { method: "POST", headers: { origin: ORIGIN, ...(json ? { accept: "application/json" } : {}) }, body: new URLSearchParams(fields) }),
+        { db: env.DB, plugins: plugins(), userId, viewer: "owner", now: NOW },
+      );
+    const saved = async () => (await env.DB.prepare("SELECT task, main_model, fallback_model, set_how FROM task_routes WHERE user_id = ? ORDER BY task").bind(userId).all()).results;
+    // A refused change saves nothing, and takes no proposal either.
+    for (const verb of ["accept", "use-free"]) {
+      const refused = await post(verb, [["task", "match"], ["main.match", or("test-mini")], ["fallback.match", ""], ["task", "score"], ["main.score", or("test-luna")], ["fallback.score", ""]], true);
+      expect([refused.status, await refused.json()]).toEqual([400, { problem: "Scoring roles: This task takes only Middle models. Choose one from its list." }]);
+    }
+    expect(await saved()).toEqual([]);
+    // Matching questions is proposed test-luna with test-mini; the user chose test-mini alone.
+    const res = await post("accept", [["task", "match"], ["main.match", or("test-mini")], ["fallback.match", ""]], true);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { main: string }).main).toContain("Saved: Matching questions. Accepted: 2 tasks use their proposed models.");
+    expect(await saved()).toEqual([
+      { task: "extract", main_model: "test-luna", fallback_model: "test-mini", set_how: "accepted" },
+      { task: "linkedin_message", main_model: "test-luna", fallback_model: "test-mini", set_how: "accepted" },
+      { task: "match", main_model: "test-mini", fallback_model: null, set_how: "changed" },
+    ]);
+    // Without the script a tap posts no rows, and says what it did in the address.
+    const plain = await post("accept", [], false);
+    expect([plain.status, plain.headers.get("location")]).toEqual([303, `${ORIGIN}${TASK_MODELS_PATH}?accepted=0`]);
+  });
 });

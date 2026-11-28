@@ -7,6 +7,10 @@
 //   POST /chief-of-staff/models/setup/tasks/use-free  the one tap for free models, where nothing is proposed
 //   POST /chief-of-staff/models/setup/tasks/help      friends only: "Ask Admin for help"
 //
+// Each of the last three also takes the fields of /change for the rows the
+// user changed and has not saved, saved as chosen (all or none) with it in
+// one request, the tap leaving those rows as the user chose them.
+//
 // One row per task: its suggested strength, and a dropdown for its main model
 // and one for its fallback. Each dropdown lists only the user's usable models
 // (models/usable.ts: each model whose latest test passed, that the provider
@@ -62,6 +66,7 @@ import { FREE_NOTE } from "./test-model";
 import {
   acceptProposals,
   changeTasks,
+  type ChangeRefusal,
   freeRoutes,
   modelKey,
   offeredFor,
@@ -315,7 +320,7 @@ export function renderMain(input: PickerPageInput): string {
   const pending = input.routes.some((r) => r.pending);
   const free = freeRoutes(input.offered, input.routes).length > 0;
   // The one solid blue button: Accept, else the free tap, else the first
-  // row's fix for a task with no model, else Next.
+  // row's fix for a task with no model, else Next where there is one.
   const fixAt = pending || free ? -1 : input.routes.findIndex((r) => {
     const need = rowNeed(r, offeredFor(r.task, input.offered), shownFor(r), input);
     return need.blocked && need.action?.("btn") ;
@@ -486,12 +491,17 @@ function flashFrom(params: URLSearchParams): { said?: string; problem?: string }
   const problem = params.get("problem") ?? "";
   if (PROBLEMS.has(problem)) return { problem: problemText(taskById(params.get("task") ?? ""), problem as ChangeProblem) };
   const saved = (params.get("saved") ?? "").split(",").map((t) => taskById(t)).filter((t): t is Task => t !== undefined);
-  if (saved.length) return { said: `Saved: ${saved.length === 1 ? saved[0]!.label : `${saved.length} tasks`}.` };
+  const said = [saved.length ? `Saved: ${saved.length === 1 ? saved[0]!.label : `${saved.length} tasks`}.` : "", tapSaid(params)].filter(Boolean).join(" ");
+  return said ? { said } : {};
+}
+
+// What a tap says it did, read from the address.
+function tapSaid(params: URLSearchParams): string {
   const n = (k: string) => Number.parseInt(params.get(k) ?? "", 10);
-  if (params.has("accepted")) return { said: n("accepted") > 0 ? `Accepted: ${n("accepted")} ${n("accepted") === 1 ? "task uses its" : "tasks use their"} proposed models.` : "There was nothing to accept." };
-  if (params.has("free")) return { said: n("free") > 0 ? `${n("free")} ${n("free") === 1 ? "task now uses a free model" : "tasks now use your free models"}. Change any task below.` : "There was nothing to set." };
-  if (params.get("asked") === "1") return { said: "Sent to Admin: this item's name and its reason only." };
-  return {};
+  if (params.has("accepted")) return n("accepted") > 0 ? `Accepted: ${n("accepted")} ${n("accepted") === 1 ? "task uses its" : "tasks use their"} proposed models.` : "There was nothing to accept.";
+  if (params.has("free")) return n("free") > 0 ? `${n("free")} ${n("free") === 1 ? "task now uses a free model" : "tasks now use your free models"}. Change any task below.` : "There was nothing to set.";
+  if (params.get("asked") === "1") return "Sent to Admin: this item's name and its reason only.";
+  return "";
 }
 
 // Every route is scoped to the signed-in user.
@@ -509,7 +519,10 @@ export async function handleTaskModels(
     const noToolUse = (m: Ref) => plugins[m.provider]?.connect.noToolUse?.(m.model) !== undefined;
     const freeTerms = offered.filter((m) => m.free).map((m) => plugins[m.provider]?.connect.freeModelTerms).find(Boolean);
     const accountSettings = (p: Provider) => plugins[p]?.connect.guide.accountSettings;
-    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, nameOf: await readModelNames(db), toTest: await readToTest(db, plugins, userId), ...flash };
+    // Only a strength with fewer than two models links to its models to test.
+    const short = TASKS.some((t) => offeredFor(t, offered).length < 2);
+    const [nameOf, toTest] = await Promise.all([readModelNames(db), short ? readToTest(db, plugins, userId) : undefined]);
+    return { viewer, offered, routes, providerName, noToolUse, freeTerms, accountSettings, nameOf, toTest, ...flash };
   };
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
   // After an action: in place, the page's <main> with what it said; without
@@ -533,26 +546,31 @@ export async function handleTaskModels(
     return typeof v === "string" ? v : "";
   };
 
+  // The rows the user changed: /change's own, and those sent with a tap.
+  const changes: TaskChange[] = [...new Set(form.getAll("task").filter((t): t is string => typeof t === "string"))].map((task) => ({ task, main: field(`main.${task}`), fallback: field(`fallback.${task}`) }));
+  const saved: Record<string, string> = changes.length ? { saved: changes.map((c) => c.task).join(",") } : {};
+  const refuse = (r: ChangeRefusal) => done({ problem: problemText(taskById(r.task), r.problem) }, { problem: r.problem, task: r.task }, 400);
+  const said = (query: Record<string, string>) => done(flashFrom(new URLSearchParams(query)), query);
+
   if (verb === "accept") {
-    const n = await acceptProposals(db, userId, now);
-    return done(flashFrom(new URLSearchParams({ accepted: String(n) })), { accepted: String(n) });
+    const n = await acceptProposals(db, userId, now, changes);
+    return typeof n === "number" ? said({ ...saved, accepted: String(n) }) : refuse(n);
   }
   if (verb === "use-free") {
-    const set = await useFreeModels(db, userId, now);
-    return done(flashFrom(new URLSearchParams({ free: String(set.length) })), { free: String(set.length) });
+    const set = await useFreeModels(db, userId, now, changes);
+    return Array.isArray(set) ? said({ ...saved, free: String(set.length) }) : refuse(set);
   }
   if (verb === "change") {
-    const tasks = [...new Set(form.getAll("task").filter((t): t is string => typeof t === "string"))];
-    const changes: TaskChange[] = tasks.map((task) => ({ task, main: field(`main.${task}`), fallback: field(`fallback.${task}`) }));
     const refused = changes.length ? await changeTasks(db, userId, changes, now) : { task: "", problem: "no_such_task" as const };
-    if (refused) return done({ problem: problemText(taskById(refused.task), refused.problem) }, { problem: refused.problem, task: refused.task }, 400);
-    return done(flashFrom(new URLSearchParams({ saved: tasks.join(",") })), { saved: tasks.join(",") });
+    return refused ? refuse(refused) : said(saved);
   }
   // "Ask Admin for help": the item's name only.
   if (viewer !== "friend") return new Response(null, { status: 403 });
+  const refused = changes.length ? await changeTasks(db, userId, changes, now) : undefined;
+  if (refused) return refuse(refused);
   await db
     .prepare("INSERT INTO help_requests (user_id, item, reason, at) VALUES (?, ?, ?, ?)")
     .bind(userId, "Model for each task", "asked for help choosing a model for each task", now.toISOString())
     .run();
-  return done(flashFrom(new URLSearchParams({ asked: "1" })), { asked: "1" });
+  return said({ ...saved, asked: "1" });
 }

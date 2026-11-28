@@ -14,7 +14,9 @@
 //   in the bar for a few seconds, or a problem shown in the bar with the
 //   choices kept.
 // - Accept all, Use my free models and Ask Admin for help (forms marked
-//   data-fetch) are sent in place the same way.
+//   data-fetch, with no fields of their own) are sent in place the same way,
+//   with the changed rows, which are saved as chosen in the same request, so
+//   the answer never drops a choice (a tap leaves those rows as chosen).
 // Without the script, the plain selects show, each row has its own Save, and
 // every form posts and redirects back.
 
@@ -188,15 +190,18 @@ export const PICKER_SCRIPT = String.raw`
       .catch(function () { onProblem("Couldn't reach the app. Try again."); })
       .then(function () { busy = false; main.removeAttribute("aria-busy"); });
   }
-  function save() {
-    var rows = dirtyRows();
-    if (!rows.length) return;
+  // The changed rows, in /change's fields.
+  function changedRows() {
     var body = new FormData();
-    each(rows, function (row) {
-      var id = row.getAttribute("data-task");
-      body.append("task", id);
+    each(dirtyRows(), function (row) {
+      body.append("task", row.getAttribute("data-task"));
       each(row.querySelectorAll("select.nsel"), function (s) { body.append(s.name, s.value); });
     });
+    return body;
+  }
+  function save() {
+    if (!dirtyRows().length) return;
+    var body = changedRows();
     var btn = main.querySelector("[data-save]");
     if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
     send(main.querySelector(".task-f").getAttribute("action"), body, function (problem) {
@@ -244,8 +249,10 @@ export const PICKER_SCRIPT = String.raw`
     e.preventDefault();
     var b = f.querySelector('button[type="submit"]');
     if (b) b.disabled = true;
-    send(f.getAttribute("action"), new FormData(f), function (problem) {
+    send(f.getAttribute("action"), changedRows(), function (problem) {
       if (b) b.disabled = false;
+      // A refused change shows in the bar, beside the rows it is about.
+      if (dirtyRows().length) { bar(problem); return; }
       var banner = main.querySelector('[data-part="banner"]');
       if (banner) banner.innerHTML = '<div class="banner warn" role="alert"></div>', banner.firstChild.textContent = problem;
     });

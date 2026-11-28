@@ -103,11 +103,6 @@ export const MODEL_HELP_REASONS: ReadonlySet<string> = new Set<TestRefusal>([
 export const FREE_NOTE = "free: rate-limited, and the provider may log prompts";
 export const NOT_FREE_NOTE = "not free: OpenRouter lists other fees for it";
 
-// The free models of the current model list, by ID.
-export async function readFreeModels(db: D1Database): Promise<Set<string>> {
-  return new Set(((await readCurrentCatalog(db))?.models ?? []).filter((m) => m.free).map((m) => m.id));
-}
-
 export interface Refused {
   kind: "refused";
   model: string;

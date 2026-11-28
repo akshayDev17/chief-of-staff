@@ -9,6 +9,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleTaskModels } from "../src/models/picker-page";
+import { readTaskRoutes } from "../src/models/tasks";
 import { SETUP_TABS } from "../src/models/setup-tabs";
 import { handleProviders } from "../src/providers/page";
 import { handleBudgets } from "../src/proxy/budgets-page";
@@ -126,6 +127,36 @@ describe("Models › Setup", () => {
     // The swapped-in page's bar says it too, where the user is looking.
     expect(doc.getElementById("savebar")!.hidden).toBe(false);
     expect(doc.getElementById("savebar")!.querySelector(".sb-n")!.textContent).toBe("Saved: Matching questions.");
+  });
+
+  it("keeps a row the user changed as they chose it when Accept all is tapped, saved with the tap in one request", async () => {
+    const html = (await screens())[TASK_MODELS_PATH]!;
+    const doc = documentOf(html);
+    const sent: Sent = [];
+    const plugins = { openrouter: testPlugin() };
+    // The page's own handler answers the script's request.
+    runScript(pageScripts(html), doc, `${ORIGIN}${TASK_MODELS_PATH}`, sent, {
+      window: { addEventListener: () => {}, FormData },
+      fetch: (url, init) =>
+        handleTaskModels(new Request(new URL(url, ORIGIN), { method: init?.method, body: init?.body, headers: { ...(init?.headers as Record<string, string>), origin: ORIGIN } }), { db: env.DB, plugins, userId, viewer: "owner", now: NOW }),
+    });
+    // Matching questions waits for its proposal, test-luna with test-mini; the user chooses test-mini as its main model.
+    expect(doc.querySelector("#task-match .pill:not([title])")!.textContent).toBe("Proposed");
+    doc.fire("click", doc.getElementById("pb-main-match")!);
+    doc.fire("click", doc.querySelector('#pl-main-match li[data-value="openrouter|test-mini"]')!);
+    expect(doc.getElementById("savebar")!.querySelector(".sb-n")!.textContent).toBe("1 task changed");
+    const accept = doc.querySelector(`form[action="${TASK_MODELS_PATH}/accept"]`)!;
+    expect(doc.fire("submit", accept)).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent).toEqual([`fetch ${TASK_MODELS_PATH}/accept`]);
+    const { routes } = await readTaskRoutes(env.DB, userId);
+    const now = (task: string) => { const c = routes.find((r) => r.task.id === task)!.current!; return [c.main.model, c.fallback?.model, c.setHow]; };
+    expect(now("match")).toEqual(["test-mini", "test-luna", "changed"]);
+    expect(now("extract")).toEqual(["test-luna", "test-mini", "accepted"]);
+    expect(now("linkedin_message")).toEqual(["test-luna", "test-mini", "accepted"]);
+    // The answer, in place, shows the user's choice and says both.
+    expect(doc.getElementById("main-match")!.value).toBe("openrouter|test-mini");
+    expect(doc.getElementById("savebar")!.querySelector(".sb-n")!.textContent).toBe("Saved: Matching questions. Accepted: 2 tasks use their proposed models.");
   });
 
   it("opens Providers showing one strength's models not tested yet when the address asks, as an empty strength's link does, with Show all", async () => {

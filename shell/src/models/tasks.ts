@@ -3,8 +3,8 @@
 //
 //   readTaskRoutes(db, userId) -> TaskRoute[]     one per task, in TASKS order
 //   routeTask(db, userId, task) -> Route | undefined
-//   acceptProposals(db, userId, now)              the one tap
-//   useFreeModels(db, userId, now)                the one tap for free models, where nothing is proposed
+//   acceptProposals(db, userId, now, changes?)    the one tap
+//   useFreeModels(db, userId, now, changes?)      the one tap for free models, where nothing is proposed
 //   changeTasks(db, userId, changes, now)        the user's own choices, all or none
 //   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
 //
@@ -273,22 +273,33 @@ function prepareChoiceWrite(db: D1Database, userId: string, task: string, route:
     .bind(userId, task, route.main.provider, route.main.model, route.fallback?.provider ?? null, route.fallback?.model ?? null, setHow, now.toISOString());
 }
 
-// The one tap: every pending task takes its proposal, all or none. A task
-// the user changed is kept. Returns how many were set.
-export async function acceptProposals(db: D1Database, userId: string, now: Date): Promise<number> {
-  const { routes } = await readTaskRoutes(db, userId);
-  const pending = routes.filter((r) => r.pending);
-  if (pending.length) await db.batch(pending.map((r) => prepareChoiceWrite(db, userId, r.task.id, r.proposal!, "accepted", now)));
+// The one tap: every pending task takes its proposal, all or none, with
+// `changes`, the user's own choices for other rows, saved as they chose them
+// in the same write (changeTasks): a task the user changed, now or before,
+// is kept. Returns how many took their proposal, or the refused change.
+export async function acceptProposals(db: D1Database, userId: string, now: Date, changes: TaskChange[] = []): Promise<number | ChangeRefusal> {
+  const { offered, routes } = await readTaskRoutes(db, userId);
+  const writes = await changeWrites(db, userId, offered, changes, now);
+  if (!Array.isArray(writes)) return writes;
+  const changed = new Set(changes.map((c) => c.task));
+  const pending = routes.filter((r) => r.pending && !changed.has(r.task.id));
+  const all = [...writes, ...pending.map((r) => prepareChoiceWrite(db, userId, r.task.id, r.proposal!, "accepted", now))];
+  if (all.length) await db.batch(all);
   return pending.length;
 }
 
 // The one tap for free models: every task with no model and no proposal
 // takes the user's free models by the proposal's rule, saved as the user's
-// own choice (a later proposal never overwrites it). Returns the tasks set.
-export async function useFreeModels(db: D1Database, userId: string, now: Date): Promise<Array<{ task: Task; route: Route }>> {
+// own choice (a later proposal never overwrites it), with `changes` saved as
+// acceptProposals saves them. Returns the tasks set, or the refused change.
+export async function useFreeModels(db: D1Database, userId: string, now: Date, changes: TaskChange[] = []): Promise<Array<{ task: Task; route: Route }> | ChangeRefusal> {
   const { offered, routes } = await readTaskRoutes(db, userId);
-  const set = freeRoutes(offered, routes);
-  if (set.length) await db.batch(set.map((s) => prepareChoiceWrite(db, userId, s.task.id, s.route, "changed", now)));
+  const writes = await changeWrites(db, userId, offered, changes, now);
+  if (!Array.isArray(writes)) return writes;
+  const changed = new Set(changes.map((c) => c.task));
+  const set = freeRoutes(offered, routes).filter((s) => !changed.has(s.task.id));
+  const all = [...writes, ...set.map((s) => prepareChoiceWrite(db, userId, s.task.id, s.route, "changed", now))];
+  if (all.length) await db.batch(all);
   return set;
 }
 
@@ -307,15 +318,19 @@ const parseKey = (key: string): ModelRef | undefined => {
   return at > 0 && at < key.length - 1 ? { provider: key.slice(0, at) as Provider, model: key.slice(at + 1) } : undefined;
 };
 
-// Sets each task to the models the user chose, all or none: each one of
-// their usable models of the task's strength, the fallback another model or
-// none. A model the task's saved choice already names in that role may stay
-// as it is, whatever it is now (one of another strength saved before the
-// rule, or one no longer usable, which then still reads as it does), so a
-// change to one role never forces the other. Returns the first refused
-// change and why, or undefined once all are saved.
-export async function changeTasks(db: D1Database, userId: string, changes: TaskChange[], now: Date): Promise<{ task: string; problem: ChangeProblem } | undefined> {
-  const offered = await readOffered(db, userId);
+export interface ChangeRefusal {
+  task: string;
+  problem: ChangeProblem;
+}
+
+// The writes that set each task to the models the user chose, among
+// `offered` (their usable models): each one of the task's strength, the
+// fallback another model or none. A model the task's saved choice already
+// names in that role may stay as it is, whatever it is now (one of another
+// strength saved before the rule, or one no longer usable, which then still
+// reads as it does), so a change to one role never forces the other. Returns
+// the first refused change and why instead, so nothing is written.
+async function changeWrites(db: D1Database, userId: string, offered: Offered[], changes: TaskChange[], now: Date): Promise<D1PreparedStatement[] | ChangeRefusal> {
   const byKey = new Map(offered.map((m) => [modelKey(m), m]));
   const writes: D1PreparedStatement[] = [];
   for (const c of changes) {
@@ -341,6 +356,14 @@ export async function changeTasks(db: D1Database, userId: string, changes: TaskC
     if (fallback && modelKey(fallback) === modelKey(main)) return { task: c.task, problem: "same_model" };
     writes.push(prepareChoiceWrite(db, userId, c.task, { main, fallback }, "changed", now));
   }
+  return writes;
+}
+
+// Sets each task to the models the user chose, all or none (changeWrites).
+// Returns the first refused change and why, or undefined once all are saved.
+export async function changeTasks(db: D1Database, userId: string, changes: TaskChange[], now: Date): Promise<ChangeRefusal | undefined> {
+  const writes = await changeWrites(db, userId, await readOffered(db, userId), changes, now);
+  if (!Array.isArray(writes)) return writes;
   if (writes.length) await db.batch(writes);
   return undefined;
 }
