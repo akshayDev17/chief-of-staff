@@ -261,7 +261,7 @@ export async function readPageState(
     const [{ rows }, catalog] = await Promise.all([readTable(db, plugins, userId, provider), readCurrentCatalog(db)]);
     state.ready = rows.filter((r) => r.state === "ready").length;
     // A failed result under a row names the tasks that fall to their fallback.
-    const failed = (view.results ?? []).filter((res) => rows.find((r) => r.model === res.model)?.state === "failed");
+    const failed = (view.results ?? []).filter((res) => rows.find((r) => r.model === res.model)?.latest?.state === "failed");
     const usedBy = await tasksUsing(db, plugins, userId, provider, failed.map((r) => r.model));
     const catalogCurrent = isCurrentCatalog(catalog);
     const noToolUse = (catalog?.models ?? []).filter((m) => plugin.connect.noToolUse?.(m.id) !== undefined).length;

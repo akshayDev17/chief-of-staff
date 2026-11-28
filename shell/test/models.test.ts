@@ -38,6 +38,8 @@ beforeEach(async () => {
 
 const ready = async () => (await readReadyModels(env.DB, plugins(), userId)).map((m) => m.model);
 const stateOf = async (model: string) => (await readTable(env.DB, plugins(), userId, "openrouter")).rows.find((r) => r.model === model)?.state;
+// The row's mark: its latest call on the current key, passed or failed.
+const markOf = async (model: string) => (await readTable(env.DB, plugins(), userId, "openrouter")).rows.find((r) => r.model === model)?.latest?.state;
 const accountList = (models: string[]) =>
   env.DB.prepare("INSERT INTO provider_model_lists (user_id, provider, read_at, models) VALUES (?, 'openrouter', ?, ?) ON CONFLICT (user_id, provider) DO UPDATE SET models = excluded.models")
     .bind(userId, NOW.toISOString(), JSON.stringify(models))
@@ -86,7 +88,10 @@ describe("the model list", () => {
   it("fails a reply that names another model, but takes a variant or a dated ID as the same", async () => {
     plugin.replies.push(ok({ input: 1, output: 1 }, { model: "test-sonnet" }));
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW })).toMatchObject({ kind: "refused", reason: "wrong_model" });
-    expect(await stateOf("test-luna")).toBe("failed");
+    // A failed Test marks the row and nothing else: the model stays Ready.
+    expect(await markOf("test-luna")).toBe("failed");
+    expect(await stateOf("test-luna")).toBe("ready");
+    expect(await ready()).toContain("test-luna");
     expect(namesPickedModel("openai/gpt-oss-20b", "openai/gpt-oss-20b:batch")).toBe(true);
     expect(namesPickedModel("anthropic/claude-haiku-5.5-20261001", "anthropic/claude-haiku-5.5")).toBe(true);
     expect(namesPickedModel("openai/gpt-6-luna-pro", "openai/gpt-6-luna")).toBe(false);
@@ -136,21 +141,23 @@ describe("Ready, with no test call", () => {
     await savePriceCap(env.DB, userId, "openrouter", "openrouter/auto", { input: 1, output: 2 }, NOW);
     expect(await ready()).toEqual(["openrouter/auto", "test-luna", "test-sonnet"]);
     const offer = (await listOffer(env.DB, plugins(), userId, "openrouter")).find((r) => r.model === "test-luna")!;
-    expect(rowState({ ...offer, price: undefined }, undefined, true)).toBe("step");
+    expect(rowState({ ...offer, price: undefined }, true)).toBe("step");
   });
 
-  it("marks a model whose latest call on this key failed as Failed until a later call works, and ignores one on an earlier key", async () => {
+  it("marks the row of a model whose latest call on this key failed until a later call works, keeps it Ready, and ignores one on an earlier key", async () => {
     await recordTest(userId, "test-luna", "failed", "2026-11-27T09:00:00.000Z", true);
-    expect(await stateOf("test-luna")).toBe("failed");
-    expect(await ready()).toEqual(["test-mini", "test-sonnet"]);
-    await recordTest(userId, "test-luna", "passed", "2026-11-27T09:30:00.000Z");
+    expect(await markOf("test-luna")).toBe("failed");
     expect(await stateOf("test-luna")).toBe("ready");
+    expect(await ready()).toEqual(["test-luna", "test-mini", "test-sonnet"]);
+    await recordTest(userId, "test-luna", "passed", "2026-11-27T09:30:00.000Z");
+    expect(await markOf("test-luna")).toBe("passed");
     // A failure made before the current key marks nothing.
     await recordTest(userId, "test-mini", "failed", "2026-11-27T07:00:00.000Z");
+    expect(await markOf("test-mini")).toBeUndefined();
     expect(await stateOf("test-mini")).toBe("ready");
   });
 
-  it("marks a model Failed when its Test gets a verdict, and leaves it Ready after a refusal that says nothing about it", async () => {
+  it("marks a model's row Failed when its Test gets a verdict, records nothing for a refusal that says nothing about it, and leaves it Ready either way", async () => {
     plugin.replies.push(ok({ input: 9, output: 1, reportedCostUsd: 0.02 }, { model: "test-luna" }));
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: NOW })).toMatchObject({ kind: "passed", test: { status: 200, costUsd: 0.02 } });
     const passed = (await readLatestTests(env.DB, userId, "openrouter")).get("test-luna");
@@ -169,7 +176,7 @@ describe("Ready, with no test call", () => {
     plugin.replies.push(refused(400));
     expect(await testOne(env.DB, plugins(), { userId, provider: "openrouter", model: "test-luna", now: at(30) })).toMatchObject({ kind: "refused", reason: "refused" });
     expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toMatchObject({ state: "failed", result: { reason: "refused", reply: { status: 400 } } });
-    expect(await stateOf("test-luna")).toBe("failed");
+    expect(await stateOf("test-luna")).toBe("ready");
   });
 });
 
@@ -216,16 +223,20 @@ const rowHtml = (rows: string, model: string) => rows.split("\n").find((l) => l.
 describe("the Providers table", () => {
   it("puts every row in exactly one strip cell, so the cells add up to the list's own count", async () => {
     await accountList(["openrouter/auto", "test-luna", "test-sonnet"]);
+    // A failed call marks its row and leaves it Ready: it is no strip cell of its own.
     await recordTest(userId, "test-sonnet", "failed", "2026-11-27T09:00:00.000Z", true);
     const input = await tableInput();
     const { strip, rows } = modelParts(input);
     const c = stripCounts(input.rows);
-    expect(c).toEqual({ ready: 1, credit: 0, failed: 1, step: 2, total: 4 });
-    expect(c.ready + c.credit + c.failed + c.step).toBe(input.rows.length);
-    expect([cellOf(strip, "ready"), cellOf(strip, "credit"), cellOf(strip, "failed"), cellOf(strip, "step")]).toEqual([1, 0, 1, 2]);
+    expect(c).toEqual({ ready: 2, credit: 0, step: 2, total: 4 });
+    expect(c.ready + c.credit + c.step).toBe(input.rows.length);
+    expect([cellOf(strip, "ready"), cellOf(strip, "credit"), cellOf(strip, "step")]).toEqual([2, 0, 2]);
+    expect(strip).not.toContain('data-filter="failed"');
+    expect(rowHtml(rows, "test-sonnet")).toContain('data-state="ready"');
+    expect(rowHtml(rows, "test-sonnet")).toContain('<span class="fw">Failed when used</span>');
     expect(strip).toContain("<span data-ends>4 models</span>");
     expect(rows.split("\n")).toHaveLength(4);
-    expect(barLabel(c)).toBe("1 of 4 ready: 0 need credit, 1 failed when used, 2 need a step");
+    expect(barLabel(c)).toBe("2 of 4 ready: 0 need credit, 2 need a step");
   });
 
   it("labels the strip Ready, never Works, and offers no Test all or Retest", async () => {
@@ -241,7 +252,7 @@ describe("the Providers table", () => {
     await recordTest(userId, "test-mini", "failed", "2026-11-27T09:00:00.000Z");
     const { rows } = modelParts(await tableInput());
     const luna = rowHtml(rows, "test-luna");
-    expect(luna).toContain('data-state="failed"');
+    expect(luna).toContain('data-state="ready"');
     expect(luna).toContain('<span class="meta why"><span class="fw">Failed when used</span> · No such model. · <button type="button" class="link" data-det="m-test-luna"');
     expect(luna).toMatch(/<button type="submit" class="btn tbtn again" data-k="t-test-luna" data-busy="Trying…"[^>]*aria-label="Try again Test Luna"[^>]*><span class="ico">.*?<\/span><span class="lbl">Try again<\/span><\/button>/);
     expect(rowHtml(rows, "test-mini")).toContain('<span class="fw">Failed when tested</span> · No such model.');
@@ -326,18 +337,18 @@ describe("the model for each task", () => {
 
   it("offers each task every Ready model whose strength chip is its own, the cheapest first, with no test", async () => {
     await tieredPrices();
-    // test-mini's latest call failed: not Ready, so offered nowhere.
+    // test-mini's latest call failed: it stays Ready, offered all the same.
     await recordTest(userId, "test-mini", "failed", "2026-11-27T09:00:00.000Z", true);
     const { offered } = await readTaskRoutes(env.DB, plugins(), userId);
     expect(offered.find((x) => x.model === "test-fee")).toMatchObject({ otherFees: true });
     expect(offered.find((x) => x.model === "test-fee")).not.toHaveProperty("tier");
     expect(offered.find((x) => x.model === "test-free:free")).toMatchObject({ tier: "Smallest", free: true, inputUsd: 0, outputUsd: 0, name: "Test Free", state: "ready" });
-    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-free:free", "test-luna"]);
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-free:free", "test-luna", "test-mini"]);
     expect(offeredFor(taskById("score")!, offered).map((x) => x.model)).toEqual(["test-mid", "test-mid2"]);
     expect(plugin.calls).toEqual([]);
     const html = await page();
     for (const task of TASKS) {
-      const want = task.tier === "Smallest" ? [or("test-free:free"), or("test-luna")] : [or("test-mid"), or("test-mid2")];
+      const want = task.tier === "Smallest" ? [or("test-free:free"), or("test-luna"), or("test-mini")] : [or("test-mid"), or("test-mid2")];
       expect(listOf(html, "main", task.id)).toEqual(want);
       expect(listOf(html, "fallback", task.id)).toEqual(["", ...want]);
       expect(optionsOf(html, "main", task.id).filter(Boolean)).toEqual(want);
@@ -392,7 +403,9 @@ describe("the model for each task", () => {
 
   it("saves changes all or none, refuses a model of another strength, one not Ready or the main as its own fallback, and calls the fallback on a 429", async () => {
     await tieredPrices();
-    await recordTest(userId, "test-mid2", "failed", "2026-11-27T09:00:00.000Z", true);
+    // test-mid2 is left out by the account's settings: not Ready. test-mid's last call failed: still Ready.
+    await accountList(["openrouter/auto", "test-luna", "test-mini", "test-mid", "test-sonnet", "test-free:free", "test-fee"]);
+    await recordTest(userId, "test-mid", "failed", "2026-11-27T09:00:00.000Z", true);
     const change = (task: string, main: string, fallback = "") => ({ task, main: main && or(main), fallback: fallback && or(fallback) });
     const save = (...changes: Array<ReturnType<typeof change>>) => changeTasks(env.DB, plugins(), userId, changes, NOW);
     expect(await save(change("match", "test-luna", "test-luna"))).toEqual({ task: "match", problem: "same_model" });
@@ -602,29 +615,43 @@ describe("a task's own call that fails", () => {
     expect(plugin.calls.map((c) => c.model)).toEqual(["test-luna", "test-mini"]);
     const latest = (await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")!;
     expect(latest).toMatchObject({ state: "failed", result: { reason: "refused", used: true, reply: { status: 404, message: "No endpoints found matching your data policy" } } });
-    expect(await stateOf("test-luna")).toBe("failed");
+    // The mark is only a label: the model stays Ready.
+    expect(await stateOf("test-luna")).toBe("ready");
     // The Providers row says so, with Try again.
     const { rows } = modelParts(await tableInput());
+    expect(rowHtml(rows, "test-luna")).toContain('data-state="ready"');
     expect(rowHtml(rows, "test-luna")).toContain('<span class="fw">Failed when used</span> · openrouter refused the call.');
     expect(rowHtml(rows, "test-luna")).toContain('<span class="lbl">Try again</span>');
-    // The dropdowns leave it out, while the task keeps it and tries it first.
+    // The dropdowns keep it, and the task keeps it and tries it first.
     const { offered, routes } = await readTaskRoutes(env.DB, plugins(), userId);
-    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-mini"]);
-    expect(routes[0]!.current).toMatchObject({ main: { model: "test-luna", state: "failed" }, fallback: { model: "test-mini" } });
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toEqual(["test-luna", "test-mini"]);
+    expect(routes[0]!.current).toMatchObject({ main: { model: "test-luna", state: "ready" }, fallback: { model: "test-mini" } });
     const html = renderPickerPage({ viewer: "owner", offered, routes, providerName: () => "OpenRouter", noToolUse: () => false });
-    expect(html).toContain('<span class="pill bad">Failed when used</span>');
-    expect(html).toContain("Its main model failed when used. Calls fall to its fallback meanwhile.");
+    expect(html).not.toContain('<span class="pill bad">Failed when used</span>');
+    expect(html).not.toContain("Its main model failed when used");
+    expect(await changeTasks(env.DB, plugins(), userId, [{ task: "match", main: "openrouter|test-luna", fallback: "openrouter|test-mini" }], NOW)).toBeUndefined();
     // The next call tries it first; it answers, and the mark is gone.
     plugin.replies.push(ok({ input: 1, output: 1 }));
     expect(await call(new Date("2026-11-27T10:05:00Z"))).toMatchObject({ kind: "answered", model: "test-luna", fallback: false });
-    expect(await stateOf("test-luna")).toBe("ready");
+    expect(await markOf("test-luna")).toBe("passed");
   });
 
-  it("marks a paid main model that was refused for credit, and a fallback that failed too", async () => {
+  it("marks nothing for a main model refused for credit, so the credit figure alone decides, and marks a fallback that failed too", async () => {
+    plugin = testPlugin("openrouter", { routers: ["openrouter/auto"], account: HAS_CREDIT });
     plugin.replies.push(refused(402), refused(400));
     expect(await call(NOW)).toMatchObject({ kind: "provider_error", model: "test-mini", fallback: true, status: 400 });
-    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")?.result).toMatchObject({ reason: "no_credits", used: true });
-    expect([await stateOf("test-luna"), await stateOf("test-mini")]).toEqual(["failed", "failed"]);
+    expect((await readLatestTests(env.DB, userId, "openrouter")).get("test-luna")).toBeUndefined();
+    expect(await markOf("test-mini")).toBe("failed");
+    expect([await stateOf("test-luna"), await stateOf("test-mini")]).toEqual(["ready", "ready"]);
+    // The credit ran out, then credit is added: the next visit's live read flips it back to Ready, with no click.
+    plugin.account = NO_CREDIT;
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await stateOf("test-luna")).toBe("credit");
+    plugin.account = HAS_CREDIT;
+    await readAccountLive(env.DB, plugin, userId);
+    expect(await stateOf("test-luna")).toBe("ready");
+    const { offered } = await readTaskRoutes(env.DB, plugins(), userId);
+    expect(offeredFor(taskById("match")!, offered).map((x) => x.model)).toContain("test-luna");
   });
 
   it("marks nothing for a busy or unanswered call, and falls to the fallback all the same", async () => {
@@ -655,7 +682,7 @@ describe("calls made on an earlier key", () => {
     await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "a".repeat(64) }, RECONNECTED);
     expect(await connectedAt(env.DB, userId, "openrouter")).toEqual(first);
     expect(await readHasCredit(env.DB, userId, "openrouter")).toBe(true);
-    expect(await stateOf("test-luna")).toBe("failed");
+    expect(await markOf("test-luna")).toBe("failed");
     await writeConnection(env.DB, userId, plugin, { method: "oauth_pkce", key_hash: "b".repeat(64) }, RECONNECTED);
     expect(await connectedAt(env.DB, userId, "openrouter")).toEqual(RECONNECTED);
     // The new key's account is read again, live, by the first reader that needs it.

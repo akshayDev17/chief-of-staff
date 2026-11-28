@@ -28,7 +28,7 @@ const rows = (model: string, extra: Partial<TableRow>, view: ModelsTableInput["v
   modelParts({ plugin, viewer: "owner", rows: [listOfferRow(model, extra)], usedBy: new Map(), view, now: NOW }).rows;
 // The row of a model whose latest call failed with `o`.
 const failed = (o: Refused): Partial<TableRow> => ({
-  state: "failed",
+  state: "ready",
   latest: { model: o.model, state: "failed", testedAt: NOW.toISOString(), result: { reason: o.reason, text: refusalText(o, plugin), fix: refusalFix(o, plugin), ...(o.reply ? { reply: o.reply } : {}) } },
 });
 

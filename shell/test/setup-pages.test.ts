@@ -80,7 +80,7 @@ describe("Models › Setup", () => {
     expect(toolbar).toContain('<input type="search" id="pick-q"');
     const strip = html.match(/<div class="strip-wrap" data-part="strip">[\s\S]*?<\/div>\n<div class="list-head"/)![0];
     expect(strip).not.toContain("<form");
-    expect([...strip.matchAll(/<button type="button" class="cell" data-filter="(\w+)"/g)].map((m) => m[1])).toEqual(["ready", "credit", "failed", "step"]);
+    expect([...strip.matchAll(/<button type="button" class="cell" data-filter="(\w+)"/g)].map((m) => m[1])).toEqual(["ready", "credit", "step"]);
   });
 
   it("sends nothing and loads nothing when a task's model is chosen, and Save sends the changed rows once, in place", async () => {

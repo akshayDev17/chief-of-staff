@@ -223,7 +223,7 @@ describe("Connect OpenRouter", () => {
     const page = await (await follow(tested)).text();
     expect(fetcher.sent.filter((s) => s.url.endsWith("/chat/completions"))).toEqual([]);
     const row = rowOf(page, "openai/gpt-6-luna");
-    expect(row).toContain('data-state="failed"');
+    expect(row).toContain('data-state="ready"');
     expect(row).toContain("<strong>Failed when tested · ");
     expect(row).toContain('<span class="lbl">Try again</span>');
     expect(row).toContain("OpenRouter replied: 404");
@@ -358,12 +358,12 @@ describe("Connect OpenRouter", () => {
     const html = await (await get()).text();
     const count = Number(html.match(/<p class="count" id="pick-count" aria-live="polite"><span class="num">(\d+)<\/span> models<\/p>/)![1]);
     const ends = Number(html.match(/<span data-ends>(\d+) models<\/span>/)![1]);
-    const cells = ["ready", "credit", "failed", "step"].map((k) => Number(html.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]));
+    const cells = ["ready", "credit", "step"].map((k) => Number(html.match(new RegExp(`data-filter="${k}"[\\s\\S]*?<span class="v num[^"]*">(\\d+)</span>`))![1]));
     expect(ends).toBe(count);
     expect(cells.reduce((a, b) => a + b, 0)).toBe(count);
     expect(count).toBe([...html.matchAll(/<li class="row"/g)].length);
     // The router with no cap and the model the account leaves out are counted, in Needs a step.
-    expect(cells[3]).toBeGreaterThanOrEqual(2);
+    expect(cells[2]).toBeGreaterThanOrEqual(2);
   });
 
   it("says the app's own side is not set up without the vault key, and stores nothing", async () => {

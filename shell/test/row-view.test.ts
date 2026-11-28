@@ -63,16 +63,17 @@ function render(c: Case, viewer: "owner" | "friend"): string {
   const offer = listOfferRow(MODEL, c.blocked ? { accountLeftOut: true } : {});
   const latest = latestOf(c);
   const current = latest && !latest.earlierKey ? latest : undefined;
-  const row = { ...offer, state: rowState(offer, latest, c.credit), ...(current ? { latest: current } : {}) };
+  const row = { ...offer, state: rowState(offer, c.credit), ...(current ? { latest: current } : {}) };
   const view: ModelsTableInput["view"] = c.test === "none" ? {} : { results: [{ model: MODEL, ...(c.test === "recorded" ? {} : { reason: c.test }) }] };
   return modelParts({ plugin, viewer, rows: [row], usedBy: new Map(), view, now: NOW }).rows;
 }
 
 // What the rule says each case shows.
 function expected(c: Case) {
-  const state = c.blocked ? "step" : c.latest === "failed-used" || c.latest === "failed-tested" ? "failed" : !c.credit ? "credit" : "ready";
+  const state = c.blocked ? "step" : !c.credit ? "credit" : "ready";
   const refusal = c.test !== "none" && c.test !== "recorded" ? record(c.test) : undefined;
-  const failed = !refusal && state === "failed" ? (c.latest === "failed-used" ? "Failed when used" : "Failed when tested") : undefined;
+  const failedNow = !c.blocked && (c.latest === "failed-used" || c.latest === "failed-tested");
+  const failed = !refusal && failedNow ? (c.latest === "failed-used" ? "Failed when used" : "Failed when tested") : undefined;
   const lead = refusal?.text ?? (failed ? FAILED.text : undefined);
   const tag = refusal
     ? refusal.reason === "no_credits" ? "Needs credit" : state !== "ready" ? undefined : refusal.reason === "busy" ? "Busy" : "Couldn't test"
@@ -81,7 +82,7 @@ function expected(c: Case) {
   const passed = c.test === "recorded" && c.latest === "passed";
   const askReason = refusal?.reason ?? (failed ? FAILED.reason : undefined);
   const ask = lead && askReason && MODEL_HELP_REASONS.has(askReason) ? askReason : undefined;
-  return { state, lead, failed, tag, actions, passed, ask, again: state === "failed" };
+  return { state, lead, failed, tag, actions, passed, ask, again: failedNow };
 }
 
 const label = (c: Case) => `${c.latest} latest, ${c.credit ? "credit" : "no credit"}, ${c.blocked ? "blocked" : "open"} row, test ${c.test}`;

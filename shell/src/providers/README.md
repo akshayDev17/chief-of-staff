@@ -125,8 +125,8 @@ Statuses from https://openrouter.ai/docs/api_reference/errors-and-debugging.md
   and its search field focused, once: a flash cookie carries the landing, so
   a refresh focuses nothing.
 - The model table lists OpenRouter's live list with tool use (the app holds
-  no model ID of its own), each row Ready, Needs credit, Failed when used or
-  Needs a step by the one rule (`src/models/ready.ts`), with an optional Test
+  no model ID of its own), each row Ready, Needs credit or Needs a step by
+  the one rule (`src/models/ready.ts`), with an optional Test
   on every row and the routers' price caps (`src/models/README.md`). There is
   no Add and no Test all: a model is Ready for tasks with no test when the
   account's own list has it, nothing blocks it, and it is free or the account

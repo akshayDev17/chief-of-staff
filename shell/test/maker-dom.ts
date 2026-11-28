@@ -123,7 +123,7 @@ function drive(script: string, document: Record<string, unknown>, m: ReturnType<
 export interface ListRow { text: string; maker: string; makerName: string; state?: string; strength?: string }
 
 // The strip's cells, in its order (models-table.ts STRIP_CELLS).
-const STATES = ["ready", "credit", "failed", "step"] as const;
+const STATES = ["ready", "credit", "step"] as const;
 
 // Usage's Per model box for `rows`, its script run on it.
 export function perModelBox(rows: ListRow[]) {
@@ -162,8 +162,7 @@ export function providersTable(rows: ListRow[], href = "https://cos.example.com/
   const bar = node({ class: "bar" }, main);
   const barW = node({ class: "w" }, bar);
   const barC = node({ class: "c" }, bar);
-  const barF = node({ class: "f" }, bar);
-  Object.assign(bar.q, { "i.w": barW, "i.c": barC, "i.f": barF });
+  Object.assign(bar.q, { "i.w": barW, "i.c": barC });
   const ends = node({ "data-ends": "" }, main);
   const act = node({ class: "cell-act ext", "data-credit-act": "" }, main);
   const cells = STATES.map((k) => node({ class: "cell", "data-filter": k, "aria-pressed": "false" }, main));
@@ -188,12 +187,10 @@ export function providersTable(rows: ListRow[], href = "https://cos.example.com/
   const strip = () => ({
     ready: cellV.ready!.textContent,
     credit: cellV.credit!.textContent,
-    failed: cellV.failed!.textContent,
     step: cellV.step!.textContent,
     good: cellV.ready!.classList.contains("good"),
     warn: cellV.credit!.classList.contains("warn"),
-    bad: cellV.failed!.classList.contains("bad"),
-    bar: [barW.getAttribute("style"), barC.getAttribute("style"), barF.getAttribute("style")],
+    bar: [barW.getAttribute("style"), barC.getAttribute("style")],
     label: bar.getAttribute("aria-label"),
     ends: ends.textContent,
   });

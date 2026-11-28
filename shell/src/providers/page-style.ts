@@ -145,7 +145,6 @@ ${MAKER_FILTER_CSS}
 .bar i { display: block; height: 100%; transition: width 200ms linear; }
 .bar i.w { background: var(--positive); }
 .bar i.c { background: var(--caution); }
-.bar i.f { background: var(--negative); }
 .bar i + i { border-left: 2px solid var(--surface); }
 .bar i[style^="width:0.000"] { border-left: 0; }
 .ends { display: flex; justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--muted); }

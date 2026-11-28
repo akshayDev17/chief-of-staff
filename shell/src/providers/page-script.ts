@@ -2,8 +2,7 @@
 // or changes its address (the owner, 2026-11-28):
 //
 // - Search, the Maker filter (models/maker-filter.ts: its find box and chips)
-//   and the strip's Ready / Needs credit / Failed when used / Needs a step
-//   cells only show and hide rows: no request. The strip and its bar count
+//   and the strip's Ready / Needs credit / Needs a step cells only show and hide rows: no request. The strip and its bar count
 //   the rows search, the Maker filter and a strength show (each row's
 //   data-state, its rowState), the end label then reading "N shown". A strip
 //   cell filters within that view and leaves the counts as they are.
@@ -16,7 +15,7 @@
 // - Back from the provider's consent page (main is marked data-land), the
 //   search field takes focus once.
 // - An address with strength=<Smallest|Middle|Strongest> (and show=<ready|
-//   credit|failed|step>) opens the table showing only that strength's models (in
+//   credit|step>) opens the table showing only that strength's models (in
 //   that state), as Model for each task links a strength with no Ready model;
 //   the count line names it, and its Show all shows every model again.
 // Focus, the table's scroll position, typed cap values and the open details
@@ -32,9 +31,9 @@ export const PAGE_SCRIPT = String.raw`
   if (!main || !window.fetch || !window.history) return;
   var S = { q: "", filter: null, view: main.getAttribute("data-view") || "", last: {}, queue: [], busy: false, waiting: {}, det: {}, allowed: {}, built: false };
   var SPIN = '<span class="spin" aria-hidden="true"></span>';
-  var STATES = ["ready", "credit", "failed", "step"];
-  var NOUN = { ready: "ready", credit: "that need credit", failed: "that failed when used", step: "that need a step" };
-  var TONE = { ready: "good", credit: "warn", failed: "bad" };
+  var STATES = ["ready", "credit", "step"];
+  var NOUN = { ready: "ready", credit: "that need credit", step: "that need a step" };
+  var TONE = { ready: "good", credit: "warn" };
   var asked = new URLSearchParams(location.search);
   S.tier = ["Smallest", "Middle", "Strongest"].indexOf(asked.get("strength")) !== -1 ? asked.get("strength") : null;
   if (S.tier && NOUN[asked.get("show")]) S.filter = asked.get("show");
@@ -61,7 +60,7 @@ export const PAGE_SCRIPT = String.raw`
   function matches(li, t) { return inView(li, t) && (!S.filter || li.getAttribute("data-state") === S.filter); }
   // The strip, its bar and its end label, from the rows in view.
   function recount(all, t) {
-    var c = { ready: 0, credit: 0, failed: 0, step: 0 }, total = 0;
+    var c = { ready: 0, credit: 0, step: 0 }, total = 0;
     each(all, function (li) {
       if (!inView(li, t)) return;
       total++;
@@ -79,8 +78,8 @@ export const PAGE_SCRIPT = String.raw`
     var bar = main.querySelector(".bar");
     if (bar) {
       // The same words as models-table.ts barLabel.
-      bar.setAttribute("aria-label", c.ready + " of " + total + (narrowed ? " shown" : "") + " ready: " + c.credit + " need credit, " + c.failed + " failed when used, " + c.step + " need a step");
-      each([["w", "ready"], ["c", "credit"], ["f", "failed"]], function (seg) {
+      bar.setAttribute("aria-label", c.ready + " of " + total + (narrowed ? " shown" : "") + " ready: " + c.credit + " need credit, " + c.step + " need a step");
+      each([["w", "ready"], ["c", "credit"]], function (seg) {
         var i = bar.querySelector("i." + seg[0]);
         if (i) i.setAttribute("style", "width:" + pct(c[seg[1]]) + "%");
       });

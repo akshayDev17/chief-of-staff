@@ -8,14 +8,14 @@
 //
 // One table lists every model the provider lists with tool use
 // (models/test-model.ts listOffer), each row in one state by the one rule
-// (models/ready.ts rowState): Ready, Needs credit, Failed when used, or Needs
-// a step. A Ready model is one the user's tasks can use with no test (the
+// (models/ready.ts rowState): Ready, Needs credit, or Needs a step. A Ready
+// model is one the user's tasks can use with no test (the
 // owner, 2026-11-28: "why would i as a user wanna waste my money on testing
 // models i dont wish to test"); Test on a row stays, optional, and runs the
 // model's test call once, its result under the row. Search matches any part
 // of a model's name, maker or ID; the Maker filter, its own find box and its
-// chips narrow the table; the Ready / Needs credit / Failed when used / Needs
-// a step strip filters it too, over a bar of the true ratios, and counts only
+// chips narrow the table; the Ready / Needs credit / Needs a step strip
+// filters it too, over a bar of the true ratios, and counts only
 // the rows search, the Maker filter and a strength show. Its cells add up to
 // the list's own count. Needs credit carries Add credits, the provider's
 // credits page. None of these sends a request: the page's script shows and
@@ -26,7 +26,7 @@
 // account's list; a router (priced per call by the model it picks) gets "Set
 // price cap" (models/price-caps.ts). A row whose latest call failed, a task's
 // own or a Test, reads "Failed when used" (or "Failed when tested") with its
-// plain reason, and Try again in place of Test.
+// plain reason, and Try again in place of Test; it stays in its state.
 //
 // Exactly one button is solid app blue in any state, and it is the next step
 // (the owner, 2026-11-28): Refresh model list while the list is stale, then
@@ -230,7 +230,7 @@ const askable = (reason: TestRefusal | undefined): TestRefusal | undefined => (r
 
 // This page's refusal that recorded nothing leads, with a tag on a row that
 // is otherwise Ready; else a failed latest call leads, as Failed when used
-// (or tested). A Needs credit row says so in a tag.
+// (or tested), on a row nothing blocks. A Needs credit row says so in a tag.
 export function describeRow(f: RowFacts): RowView {
   const { state } = f;
   if (f.refusal) {
@@ -239,11 +239,12 @@ export function describeRow(f: RowFacts): RowView {
     const ask = askable(reason);
     return { state, ...(tag ? { tag } : {}), lead: shownOf(f.refusal), passed: false, ...(ask ? { ask } : {}) };
   }
-  if (state === "failed" && f.latest?.state === "failed") {
+  const tag = state === "credit" ? { tag: "needs-credit" as const } : {};
+  if (state !== "step" && f.latest?.state === "failed") {
     const ask = askable(f.latest.result.reason);
-    return { state, lead: shownOf(f.latest.result), failed: f.latest.result.used ? "used" : "tested", passed: false, ...(ask ? { ask } : {}) };
+    return { state, ...tag, lead: shownOf(f.latest.result), failed: f.latest.result.used ? "used" : "tested", passed: false, ...(ask ? { ask } : {}) };
   }
-  return { state, ...(state === "credit" ? { tag: "needs-credit" as const } : {}), passed: Boolean(f.tested && f.latest?.state === "passed") };
+  return { state, ...tag, passed: Boolean(f.tested && f.latest?.state === "passed") };
 }
 
 // The facts of `r`'s row, from its state and the view.
@@ -268,9 +269,9 @@ export type StripCounts = Record<RowState, number> & { total: number };
 // those over the rows the search, the Maker filter and a strength show
 // (page-script.ts), so the strip counts the view; these whole-list counts are
 // what it shows unfiltered, and without the script. Ready + Needs credit +
-// Failed when used + Needs a step = the total, the list's own count.
+// Needs a step = the total, the list's own count.
 export function stripCounts(rows: Pick<TableRow, "state">[]): StripCounts {
-  const n: StripCounts = { ready: 0, credit: 0, failed: 0, step: 0, total: rows.length };
+  const n: StripCounts = { ready: 0, credit: 0, step: 0, total: rows.length };
   for (const r of rows) n[r.state]++;
   return n;
 }
@@ -279,12 +280,11 @@ export function stripCounts(rows: Pick<TableRow, "state">[]): StripCounts {
 
 // The words of the bar's label; the page's script writes the same words.
 export const barLabel = (c: StripCounts, narrowed = false): string =>
-  `${c.ready} of ${c.total}${narrowed ? " shown" : ""} ready: ${c.credit} need credit, ${c.failed} failed when used, ${c.step} need a step`;
+  `${c.ready} of ${c.total}${narrowed ? " shown" : ""} ready: ${c.credit} need credit, ${c.step} need a step`;
 
 export const STRIP_CELLS: ReadonlyArray<readonly [RowState, string, string]> = [
   ["ready", "Ready", "good"],
   ["credit", "Needs credit", "warn"],
-  ["failed", "Failed when used", "bad"],
   ["step", "Needs a step", ""],
 ];
 
@@ -299,7 +299,7 @@ function stripPart(input: ModelsTableInput): string {
   const cells = STRIP_CELLS.map(([key, label, tone]) => (key === "credit" ? `<div class="cellx">${cell(key, label, tone)}${add}</div>` : cell(key, label, tone))).join("");
   const pct = (n: number) => (c.total ? (n / c.total) * 100 : 0).toFixed(3);
   return `<div class="strip" role="group" aria-label="Show models">${cells}</div>
-<div class="bar" role="img" aria-label="${barLabel(c)}"><i class="w" style="width:${pct(c.ready)}%"></i><i class="c" style="width:${pct(c.credit)}%"></i><i class="f" style="width:${pct(c.failed)}%"></i></div>
+<div class="bar" role="img" aria-label="${barLabel(c)}"><i class="w" style="width:${pct(c.ready)}%"></i><i class="c" style="width:${pct(c.credit)}%"></i></div>
 <div class="ends num"><span>0</span><span data-ends>${c.total} models</span></div>`;
 }
 
@@ -366,14 +366,14 @@ const BLOCK_TITLE: Record<string, string> = {
   no_price: "No price yet",
 };
 
-function rowActions(r: TableRow, input: ModelsTableInput, v: RowView): string {
+function rowActions(r: TableRow, input: ModelsTableInput): string {
   const { plugin } = input;
   const p = plugin.provider;
   const id = esc(r.model);
   const name = esc(shortName(r));
   const kind = blockKind(r);
   // Try again on a row whose latest call failed: the same one test call.
-  const again = v.state === "failed";
+  const again = !kind && r.latest?.state === "failed";
   const title = kind ? BLOCK_TITLE[kind]! : again ? "Try it again now: one test call" : "Optional: one test call now";
   const test = `<form method="post" action="${action(p, "test")}" data-fetch class="inline"><input type="hidden" name="model" value="${id}"><button type="submit" class="btn tbtn${again ? " again" : ""}" data-k="t-${id}" data-busy="${again ? "Trying…" : "Testing…"}" title="${esc(title)}" aria-label="${again ? "Try again" : "Test"} ${name}"${kind ? " disabled" : ""}><span class="ico">${again ? ICON.redo : ICON.play}</span><span class="lbl">${again ? "Try again" : "Test"}</span></button></form>`;
   if (kind !== "account") return `<span class="acts-row">${test}</span>`;
@@ -495,7 +495,7 @@ function rowHtml(r: TableRow, input: ModelsTableInput, makerNames: Map<string, s
     extra = `<div class="det" id="det-${esc(anchor)}" data-det-panel hidden>${det}</div>`;
   }
   const hay = esc(`${r.name ?? ""} ${name} ${maker} ${makerId} ${r.model}`.toLowerCase());
-  return `<li class="row" id="${esc(anchor)}" data-id="${id}"${makerRowAttrs(r.model, maker)} data-hay="${hay}" data-state="${v.state}" data-strength="${esc(chipOf(r))}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(chipOf(r))}</span>${rowActions(r, input, v)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
+  return `<li class="row" id="${esc(anchor)}" data-id="${id}"${makerRowAttrs(r.model, maker)} data-hay="${hay}" data-state="${v.state}" data-strength="${esc(chipOf(r))}"${kind ? " data-blocked" : ""}><span class="nm"><span class="t" data-hl>${esc(name)}</span>${tags}</span>${meta}${priceHtml(r, input)}<span class="tier">${esc(chipOf(r))}</span>${rowActions(r, input)}${extra ? `<div class="more">${extra}</div>` : ""}</li>`;
 }
 
 function rowsPart(input: ModelsTableInput): string {
@@ -527,7 +527,7 @@ function footPart(input: ModelsTableInput): string {
 ${dropped}
 <li>Ready needs no test: your ${short} account's own list has the model, nothing blocks it, and it is free or your account has credit. Tasks choose among the Ready models.</li>
 <li>Credit is the account line's: credit bought, and the key's limit not used up. Add credits on ${short} and its paid models are Ready on your next visit.</li>
-<li>Test is optional: one call, to see a model answer now. A failed call, a task's own or a test's, marks its row until a later call works; Try again tests it once.</li>
+<li>Test is optional: one call, to see a model answer now. A failed call, a task's own or a test's, marks its row until a later call works, and the model stays Ready; Try again tests it once.</li>
 <li>A model your ${short} settings leave out links those settings; Check again reads your account's list.</li>
 <li>A router priced per call by the model it picks takes a price cap, which gives it a price the budget stop can use: ${short} then picks only models at or under the cap, and none with a fee per search or per request.</li>
 <li>Strength comes from the input price per million tokens: Smallest under $0.50, Middle to $2.50, Strongest above.</li>

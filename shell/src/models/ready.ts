@@ -5,7 +5,7 @@
 // read, so credit added on the provider makes its paid models Ready on the
 // next visit, with no click.
 //
-//   rowState(row, latest, credit) -> RowState      the one rule: the strip, its filters, the dropdowns
+//   rowState(row, credit) -> RowState              the one rule: the strip, its filters, the dropdowns
 //   readTable(db, plugins, userId, provider) -> Table   every row of the model list, with its state
 //   readReadyModels(db, plugins, userId) -> TableRow[]  the Ready rows at every provider a plug-in serves
 //   readAccountLive(db, plugin, userId) -> AccountInfo | undefined   the account line's live read, its credit kept
@@ -15,17 +15,18 @@
 // listOffer: OpenRouter lists it with tool use among its parameters; one
 // without tool use never reaches the list), nothing blocks it (the account's
 // own list includes it, a router has the user's price cap, it has a price,
-// the app can call it), its latest real call did not fail on the current key,
-// and it is free or the account has credit left. No test decides it, and the
-// label is Ready, never Works: no call was made.
+// the app can call it), and it is free or the account has credit left. No
+// call decides it, and the label is Ready, never Works: no call was made. A
+// failed call, a task's own or a Test, only marks its row (Failed when used,
+// or when tested); the model stays Ready and choosable.
 //
 // The credit figure is the account line's (OpenRouter's GET /api/v1/key, read
 // live with the user's key): credit bought at all (`is_free_tier` false), and
 // the key's own limit not used up where it has one. The app cannot read the
 // balance itself (that needs a management key), so an account whose bought
 // credit ran out reads as having credit: its paid model's call is refused
-// with no credit, its task falls to the fallback, and the model's row shows
-// Failed when used, Needs credit, until a later call works. The figure is
+// with no credit and its task falls to the fallback, with nothing kept, so
+// the credit figure alone says Needs credit or Ready. The figure is
 // kept on the connection (has_credit) so every reader takes the same one;
 // a key with no figure yet (just connected) is read live once, by whichever
 // reader comes first. A provider whose plug-in cannot read it counts as
@@ -38,17 +39,14 @@ import { PROVIDERS, type Provider } from "../prices/types";
 import { latestTestWrite, readLatestTests, type LatestTest } from "./latest-tests";
 import { blockKind, listOffer, testRecord, type OfferRow, type Refused } from "./test-model";
 
-// A row's place in the strip: Ready, Needs credit, Failed when used, or
-// Needs a step (the settings leave it out, a router needs its cap, it has no
+// A row's place in the strip: Ready, Needs credit, or Needs a step (the settings leave it out, a router needs its cap, it has no
 // price, the app can't call it). Every row is in exactly one, so the strip's
 // cells add up to the list's count.
-export type RowState = "ready" | "credit" | "failed" | "step";
+export type RowState = "ready" | "credit" | "step";
 
-// The one rule. `latest`: the model's latest real call; `credit`: the account
-// has credit left.
-export function rowState(row: OfferRow, latest: LatestTest | undefined, credit: boolean): RowState {
+// The one rule. `credit`: the account has credit left.
+export function rowState(row: OfferRow, credit: boolean): RowState {
   if (blockKind(row)) return "step";
-  if (latest && !latest.earlierKey && latest.state === "failed") return "failed";
   if (!row.free && !credit) return "credit";
   return "ready";
 }
@@ -102,7 +100,7 @@ export async function readTable(db: D1Database, plugins: PluginRegistry, userId:
   const rows = offers.map((r): TableRow => {
     const l = latest.get(r.model);
     const current = l && !l.earlierKey ? l : undefined;
-    return { ...r, provider, state: rowState(r, l, credit), ...(current ? { latest: current } : {}) };
+    return { ...r, provider, state: rowState(r, credit), ...(current ? { latest: current } : {}) };
   });
   return { rows, credit };
 }
@@ -118,9 +116,9 @@ export async function readReadyModels(db: D1Database, plugins: PluginRegistry, u
 }
 
 // The refusals a task's call can meet that say nothing about its model: the
-// provider busy or not answering, the key gone. Every other refusal marks
-// the model Failed when used.
-const SAYS_NOTHING = new Set(["busy", "no_reply", "not_set_up"]);
+// provider busy or not answering, the key gone, no credit (the credit figure
+// says that). Every other refusal marks the model Failed when used.
+const SAYS_NOTHING = new Set(["busy", "no_reply", "not_set_up", "no_credits"]);
 
 // What a task's own call showed about its model: a refusal marks it Failed
 // when used, with the plain reason; an answer takes back an earlier failure.

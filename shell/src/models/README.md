@@ -17,17 +17,16 @@ model is Ready when:
   `test-model.ts` `listOffer`, and "About this list" counts the ones left
   out);
 - nothing blocks it: the account's own list includes it, a router has the
-  user's price cap, it has a price, and the app can call it;
-- its latest real call on the current key did not fail (below); and
+  user's price cap, it has a price, and the app can call it; and
 - it is free, or the account has credit left.
 
-No test decides it, and its label is Ready, never Works: no call was made.
-Every other row is in exactly one other state: **Needs credit** (a paid
-model on an account with no credit left, with Add credits, OpenRouter's
-credits page), **Failed when used** (its latest call failed), or **Needs a
-step** (the account's settings leave it out, with a link to them and Check
-again; a router with Set price cap; no price yet; the app can't call it).
-Ready + Needs credit + Failed when used + Needs a step is the list's own
+No call decides it, a Test's or a task's, and its label is Ready, never
+Works: no call was made. Every other row is in exactly one other state:
+**Needs credit** (a paid model on an account with no credit left, with Add
+credits, OpenRouter's credits page), or **Needs a step** (the account's
+settings leave it out, with a link to them and Check again; a router with
+Set price cap; no price yet; the app can't call it). Ready + Needs credit +
+Needs a step is the list's own
 count, the strip's total and the count line's, from that one rule
 (`models-table.ts` `stripCounts`).
 
@@ -38,8 +37,8 @@ credit left when it has bought credit (`is_free_tier` false) and, where the
 key has its own limit, the limit is not used up. The app cannot read the
 balance itself (`GET /api/v1/credits` needs a management key), so an account
 whose bought credit ran out reads as having credit: its paid model's call is
-refused with no credit, the task falls to its fallback, and the model's row
-shows Failed when used, Needs credit, until a later call works. The figure
+refused with no credit and the task falls to its fallback; that refusal
+marks nothing, so the credit figure alone says Needs credit or Ready. The figure
 is kept on the connection (`has_credit`, migration 0014), so every reader
 takes the same one; a Connect with another key empties it, and the first
 reader that needs it reads it live again. Because it is read on every visit,
@@ -51,11 +50,13 @@ provider refuses goes to the task's fallback (`src/proxy/README.md`), and
 marks the main model's row "Failed when used · <its plain reason> · Try
 again" (`ready.ts` `recordUse`); a fallback that fails too is marked the
 same way. A refusal that says nothing about the model (busy, no reply, the
-key removed) marks nothing. A later call of the model that answers, a
-task's or a Test's, takes the mark back. Try again, in place of Test on that
-row, is the same one test call. A failed model leaves the task dropdowns,
-but a task that has it saved keeps it and tries it first on each call, so it
-answers again as soon as the provider takes it back, with no click. Each
+key removed, no credit) marks nothing. A later call of the model that
+answers, a task's or a Test's, takes the mark back. Try again, in place of
+Test on that row, is the same one test call. The mark is only a label: the
+model stays Ready and in the task dropdowns, and a task that has it saved
+tries it first on each call, so it answers again as soon as the provider
+takes it back, with no click. A failed Test marks its row "Failed when
+tested" the same way, and changes nothing else. Each
 model's latest call is one row of `model_latest_tests`
 (`latest-tests.ts`); one made on an earlier key (`onEarlierKey`, before the
 connection's `connected_at`) marks nothing, since that key's account may
@@ -82,11 +83,11 @@ settings on OpenRouter, then Check again.
 
 **One table**, nothing to type but the search. Search matches any part of a
 model's name, maker or ID. The Maker filter has its own find box and chips.
-The Ready / Needs credit / Failed when used / Needs a step strip filters the
+The Ready / Needs credit / Needs a step strip filters the
 table, over a bar of the true ratios; it counts the rows search, the Maker
 filter and a strength show (each row's `rowState`), its end label then
 reading "N shown". An address with `strength=<Smallest|Middle|Strongest>`
-(and `show=<ready|credit|failed|step>`) opens the table showing that
+(and `show=<ready|credit|step>`) opens the table showing that
 strength's models (in that state), as Model for each task links a strength
 with no Ready model; the count line names it, with Show all. None of these
 sends a request. Each row shows the model's name and maker, its input and
@@ -188,8 +189,8 @@ rows stay as they are, still to save.
   never forces the other, but a model of another strength is never newly
   chosen (`wrong_strength`);
 - a saved choice holds while the provider offers its main model to the user
-  (the model list has it and nothing blocks it). One that needs credit or
-  failed when used keeps its place, marked so with Add credits or See why:
+  (the model list has it and nothing blocks it). One that needs credit
+  keeps its place, marked so with Add credits:
   each call tries it first and falls to the fallback when it fails, so it
   answers again once credit is added or the provider takes it back, with no
   click. Once the provider no longer offers it, no proposal or one tap

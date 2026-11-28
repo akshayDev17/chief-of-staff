@@ -9,8 +9,8 @@
 //   callTask(db, plugins, call, now?) -> ProxyOutcome | NoModel
 //
 // Only the user's Ready models (models/ready.ts: on the account's own list,
-// with tool use, nothing blocking them, no failed call on the current key,
-// and free or the account has credit left; no test needed) are ever offered,
+// with tool use, nothing blocking them, and free or the account has credit
+// left; no test needed) are ever offered,
 // proposed or newly chosen (the owner, 2026-11-28: "why would i as a user
 // wanna waste my time and money searching for models i want to use followed
 // by hitting test? just so that they get added in the "Models for each

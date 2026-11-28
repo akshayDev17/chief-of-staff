@@ -15,7 +15,7 @@
 // One row per task: its suggested strength, and a dropdown for its main model
 // and one for its fallback. Each dropdown lists every one of the user's Ready
 // models (models/ready.ts: on the account's own list, with tool use, nothing
-// blocking it, no failed call, and free or the account has credit left; no
+// blocking it, and free or the account has credit left; no
 // test needed, the owner, 2026-11-28) whose strength chip is the task's (the
 // owner, 2026-11-27: "when suggested strenght == Smallest --> the dropdown
 // next to it should only contain all passing run models tagged with the
@@ -26,7 +26,7 @@
 //
 // A task's saved choice is always shown, even where its model is no longer in
 // the list: one of another strength saved before the rule says so and keeps
-// running; one that needs credit or failed when used says so and keeps its
+// running; one that needs credit says so and keeps its
 // place, its calls falling to the fallback when it fails; one the provider no
 // longer offers says why (it is no longer on the provider's list, the
 // account's settings leave it out, it needs a price cap, it lists no tool
@@ -186,17 +186,16 @@ function readyLink(tier: Tier, input: PickerPageInput, cls: string): string {
 }
 
 // Why a saved model that is offered but not Ready keeps its place: it needs
-// credit, or its last call failed. Its calls still try it first.
+// credit. Its calls still try it first.
 function notReadyNote(m: Offered | undefined, role: "main model" | "fallback", hasFallback: boolean): string {
-  if (m?.state !== "credit" && m?.state !== "failed") return "";
-  const what = m.state === "credit" ? "needs credit" : "failed when used";
-  return role === "main model" ? `Its main model ${what}. ${hasFallback ? "Calls fall to its fallback meanwhile." : "Add a fallback."}` : `Its fallback ${what}.`;
+  if (m?.state !== "credit") return "";
+  return role === "main model" ? `Its main model needs credit. ${hasFallback ? "Calls fall to its fallback meanwhile." : "Add a fallback."}` : `Its fallback needs credit.`;
 }
 
 // The action beside that note: Add credits, or the model's row on Providers
-// and models, where its reason and Try again are.
+// and models.
 function notReadyFix(m: Offered, input: PickerPageInput): (cls: string) => string {
-  const credits = m.state === "credit" ? input.credits?.(m.provider) : undefined;
+  const credits = input.credits?.(m.provider);
   return (cls) => (credits ? newTab(credits, `${cls} ext`) : `<a class="${cls}" href="${esc(`${PROVIDERS_PATH}?${viewQuery(m.provider, {})}#${rowAnchor(m.model)}`)}">See why</a>`);
 }
 
@@ -288,11 +287,9 @@ function dropdown(r: TaskRoute, role: "main" | "fallback", list: Offered[], show
       ? `<span class="pill bad">Not offered</span>`
       : state === "credit"
         ? `<span class="pill warn">Needs credit</span>`
-        : state === "failed"
-          ? `<span class="pill bad">Failed when used</span>`
-          : now.model?.tier ? `<span class="pill">${now.model.tier}</span>` : `<span class="pill">Other fees</span>`
+        : now.model?.tier ? `<span class="pill">${now.model.tier}</span>` : `<span class="pill">Other fees</span>`
     : "";
-  const keptNote = now && !inList ? (now.why ? `${WHY[now.why]}` : state === "credit" ? "needs credit" : state === "failed" ? "failed when used" : "kept from before") : "";
+  const keptNote = now && !inList ? (now.why ? `${WHY[now.why]}` : state === "credit" ? "needs credit" : "kept from before") : "";
   const label = role === "main" ? "Main model" : "Fallback";
   // Nothing to choose: the strength has no Ready model, and none is saved.
   const empty = !list.length && !now;
